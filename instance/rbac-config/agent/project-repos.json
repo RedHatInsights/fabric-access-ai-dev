@@ -1,0 +1,6 @@
+{
+  "insights-rbac": {
+    "url": "https://github.com/fabric-access-bot/insights-rbac.git",
+    "upstream": "https://github.com/RedHatInsights/insights-rbac.git"
+  }
+}
