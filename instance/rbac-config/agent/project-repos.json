@@ -1,10 +1,10 @@
 {
   "insights-rbac": {
-    "url": "https://github.com/RedHatInsights/insights-rbac.git",
+    "url": "https://github.com/platex-rehor-bot/insights-rbac.git",
     "upstream": "https://github.com/RedHatInsights/insights-rbac.git"
   },
   "rbac-config": {
-    "url": "https://github.com/RedHatInsights/rbac-config.git",
+    "url": "https://github.com/platex-rehor-bot/rbac-config.git",
     "upstream": "https://github.com/RedHatInsights/rbac-config.git"
   }
 }
