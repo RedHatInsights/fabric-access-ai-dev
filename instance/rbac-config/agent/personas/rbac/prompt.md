@@ -3,8 +3,14 @@
 Django REST Framework microservice providing Role-Based Access Control for console.redhat.com. Python 3.12, PostgreSQL 16, Redis, Celery.
 
 ### Before changes
-- Verify the database is running: `pg_isready -h localhost -p 15432`. Fails → STOP, report on Jira, do not proceed.
-- `pipenv install --dev` to ensure dependencies are up to date.
+
+Run the setup script — it handles everything (sidecar health check, `.env`, deps, migrations) and is safe to re-run:
+
+```bash
+/home/botuser/app/instance/rbac-config/agent/scripts/setup-rbac-env.sh ./repos/insights-rbac
+```
+
+If the script exits non-zero → STOP, post the error output to Jira, do not proceed.
 
 ### Architecture
 
@@ -64,11 +70,16 @@ pipenv run pre-commit run --all-files              # full pre-commit suite
 ### Database
 
 ```bash
-make start-db           # Postgres container on port 15432
-make run-migrations     # Apply migrations
+# make start-db — NOT available in this environment (no Docker daemon).
+# Postgres is pre-provisioned as a pod sidecar at localhost:15432.
+
+make run-migrations     # Apply migrations (reads .env — ensure it exists first)
 make make-migrations    # Generate new migration files
-make reinitdb           # Drop + recreate + migrate
+make reinitdb           # Drop + recreate + migrate (only if sidecar DB needs reset)
 ```
+
+For tests, tox manages `DATABASE_*` directly from the container env vars — `.env` is not loaded.
+For `make run-migrations` / `make serve`, Django reads from `.env` (see "Before changes" setup step).
 
 - Migrations are excluded from linting and coverage.
 - Always test migrations against real PostgreSQL — SQLite is not used.

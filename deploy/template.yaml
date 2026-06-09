@@ -148,6 +148,31 @@ objects:
             value: http://devbot-memory-server:8080/api/bot-status
           - name: COSTS_API_URL
             value: http://devbot-memory-server:8080/api/costs
+          # Redis sidecar — RBAC defaults (localhost:6379, no password) match automatically
+          - name: REDIS_HOST
+            value: localhost
+          - name: REDIS_PORT
+            value: "6379"
+          # PostgreSQL sidecar — env vars match RBAC docker-compose and .env.example defaults
+          # tox setenv picks these up via {env:DATABASE_NAME:postgres} fallback pattern
+          - name: DATABASE_SERVICE_NAME
+            value: POSTGRES_SQL
+          - name: DATABASE_ENGINE
+            value: postgresql
+          - name: DATABASE_NAME
+            value: postgres
+          - name: DATABASE_USER
+            value: postgres
+          - name: DATABASE_PASSWORD
+            value: postgres
+          - name: DATABASE_HOST
+            value: localhost
+          - name: DATABASE_PORT
+            value: "15432"
+          - name: POSTGRES_SQL_SERVICE_HOST
+            value: localhost
+          - name: POSTGRES_SQL_SERVICE_PORT
+            value: "15432"
           # Slack notifications
           - name: SLACK_WEBHOOK_URL
             value: ${SLACK_WEBHOOK_URL}
@@ -192,6 +217,75 @@ objects:
               cpu: "4"
               memory: 4Gi
               ephemeral-storage: 8Gi
+
+        # PostgreSQL sidecar — shares pod network so bot reaches it at localhost:15432.
+        # Uses the same image as insights-rbac Tekton CI (OpenShift-compatible arbitrary UID).
+        # Data is ephemeral (EmptyDir): starts clean on every pod restart, no PVC needed.
+        - name: postgres
+          image: quay.io/cloudservices/postgresql-rds:16
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
+          env:
+          # postgres/postgres matches RBAC docker-compose defaults and .env.example
+          # so make run-migrations works after copying .env.example → .env
+          - name: POSTGRESQL_DATABASE
+            value: postgres
+          - name: POSTGRESQL_USER
+            value: postgres
+          - name: POSTGRESQL_PASSWORD
+            value: postgres
+          # Tell postgres process itself to listen on 15432 to match RBAC Makefile (15432:5432 mapping)
+          - name: PGPORT
+            value: "15432"
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "rbac", "-d", "rbac"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 6
+          volumeMounts:
+          - name: pgdata
+            mountPath: /var/lib/pgsql/data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+        # Redis sidecar — shares pod network so bot reaches it at localhost:6379.
+        # No password, no persistence needed (Celery broker + Django cache for testing).
+        - name: redis
+          image: registry.access.redhat.com/ubi9/redis-7:latest
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+
+        volumes:
+        - name: pgdata
+          emptyDir: {}
 
 # --- NetworkPolicy: Bot can only reach proxy + memory-server + DNS ---
 - apiVersion: networking.k8s.io/v1
