@@ -222,7 +222,7 @@ objects:
         # Uses the same image as insights-rbac Tekton CI (OpenShift-compatible arbitrary UID).
         # Data is ephemeral (EmptyDir): starts clean on every pod restart, no PVC needed.
         - name: postgres
-          image: quay.io/cloudservices/postgresql-rds:16
+          image: registry.redhat.io/rhel9/postgresql-16:latest
           securityContext:
             runAsNonRoot: true
             allowPrivilegeEscalation: false
@@ -262,7 +262,7 @@ objects:
         # Redis sidecar — shares pod network so bot reaches it at localhost:6379.
         # No password, no persistence needed (Celery broker + Django cache for testing).
         - name: redis
-          image: registry.access.redhat.com/ubi9/redis-7:latest
+          image: registry.redhat.io/rhel9/redis-7:latest
           securityContext:
             runAsNonRoot: true
             allowPrivilegeEscalation: false
