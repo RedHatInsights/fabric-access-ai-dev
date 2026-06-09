@@ -143,11 +143,11 @@ else
     fail "Django check  $DJANGO_CHECK"
 fi
 
-# Redis — optional (ACCESS_CACHE_ENABLED=False so tests work without it)
+# Redis sidecar — required (Celery broker + Django cache)
 if python3 -c "import socket; s=socket.create_connection(('localhost',6379),1); s.close()" 2>/dev/null; then
-    ok "Redis         localhost:6379  (cache + Celery available)"
+    ok "Redis         localhost:6379"
 else
-    warn "Redis         localhost:6379  not reachable — cache/Celery disabled, tests still pass"
+    fail "Redis         localhost:6379  not reachable — Celery broker unavailable"
 fi
 
 # .env sanity — DATABASE_PORT must be 15432
@@ -170,7 +170,7 @@ if [ "$FAIL" -gt 0 ]; then
 fi
 
 if [ "$WARN" -gt 0 ]; then
-    echo "[rbac-setup] Ready (with warnings — Redis not running, cache/Celery disabled)."
+    echo "[rbac-setup] Ready (with warnings)."
 else
     echo "[rbac-setup] All checks passed. RBAC environment ready."
 fi

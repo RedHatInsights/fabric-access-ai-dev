@@ -148,6 +148,11 @@ objects:
             value: http://devbot-memory-server:8080/api/bot-status
           - name: COSTS_API_URL
             value: http://devbot-memory-server:8080/api/costs
+          # Redis sidecar — RBAC defaults (localhost:6379, no password) match automatically
+          - name: REDIS_HOST
+            value: localhost
+          - name: REDIS_PORT
+            value: "6379"
           # PostgreSQL sidecar — env vars match RBAC docker-compose and .env.example defaults
           # tox setenv picks these up via {env:DATABASE_NAME:postgres} fallback pattern
           - name: DATABASE_SERVICE_NAME
@@ -253,6 +258,30 @@ objects:
             limits:
               cpu: 500m
               memory: 512Mi
+
+        # Redis sidecar — shares pod network so bot reaches it at localhost:6379.
+        # No password, no persistence needed (Celery broker + Django cache for testing).
+        - name: redis
+          image: registry.access.redhat.com/ubi9/redis-7:latest
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
 
         volumes:
         - name: pgdata
