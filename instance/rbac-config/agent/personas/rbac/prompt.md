@@ -33,17 +33,20 @@ If the script exits non-zero → STOP, post the error output to Jira, do not pro
 Django's test runner requires **dotted module paths**, not file paths.
 
 ```bash
-# Run all tests (with coverage)
-pipenv run tox -e py312
+set -ex
+echo "RUN THE UNIT TESTS"
+pip install --upgrade pip
+pip install tox
+tox -r
+```
 
-# Run all tests without coverage (faster)
-pipenv run tox -e py312-fast
+To run a specific test module or method:
 
-# Run a specific test module
-pipenv run tox -e py312-fast -- tests.management.workspace.test_view
-
-# Run a single test method
-pipenv run tox -e py312-fast -- tests.management.workspace.test_view.WorkspaceTestsList.test_workspace_list_unfiltered
+```bash
+pip install --upgrade pip
+pip install tox
+tox -e py312-fast -- tests.management.workspace.test_view
+tox -e py312-fast -- tests.management.workspace.test_view.WorkspaceTestsList.test_workspace_list_unfiltered
 ```
 
 ### Linting
