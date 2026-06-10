@@ -160,6 +160,29 @@ spec:
         workspace: workspace
       - name: basic-auth
         workspace: git-auth
+    - description: Running unit tests
+      name: run-unit-tests
+      runAfter:
+      - clone-repository
+      taskSpec:
+        metadata: {}
+        steps:
+        - computeResources: {}
+          image: registry.access.redhat.com/ubi9/python-312:latest
+          name: unit-tests
+          script: |
+            #!/bin/bash
+            set -ex
+            echo "RUN THE UNIT TESTS"
+            pip install --upgrade pip
+            pip install tox
+            tox -r
+          securityContext:
+            runAsUser: 0
+          workingDir: $(workspaces.source.path)
+      workspaces:
+      - name: source
+        workspace: workspace
     - name: prefetch-dependencies
       params:
       - name: input
