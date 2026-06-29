@@ -287,6 +287,36 @@ objects:
         - name: pgdata
           emptyDir: {}
 
+# --- KEDA ScaledObject: Mon-Fri EU + US working hours ---
+- apiVersion: keda.sh/v1alpha1
+  kind: ScaledObject
+  metadata:
+    name: ${BOT_NAME}-cron
+    labels:
+      app.kubernetes.io/name: ${BOT_NAME}
+      app.kubernetes.io/component: bot
+      app.kubernetes.io/part-of: devbot
+  spec:
+    scaleTargetRef:
+      apiVersion: apps/v1
+      kind: Deployment
+      name: ${BOT_NAME}
+    minReplicaCount: 0
+    maxReplicaCount: 1
+    triggers:
+    - type: cron
+      metadata:
+        timezone: Europe/Prague
+        start: 0 9 * * 1-5
+        end: 0 23 * * 1-5
+        desiredReplicas: "1"
+    - type: cron
+      metadata:
+        timezone: America/New_York
+        start: 0 9 * * 1-5
+        end: 0 18 * * 1-5
+        desiredReplicas: "1"
+
 # --- NetworkPolicy: Bot can only reach proxy + memory-server + DNS ---
 - apiVersion: networking.k8s.io/v1
   kind: NetworkPolicy
