@@ -3,3 +3,5 @@ source: jira
 envs:
   - slack
   - container-scan
+claude_md:
+  strategy: append
