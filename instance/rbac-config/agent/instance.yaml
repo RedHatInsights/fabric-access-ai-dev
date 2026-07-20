@@ -5,3 +5,8 @@ envs:
   - container-scan
 claude_md:
   strategy: append
+
+workflow: ./workflows/bot-consolidation
+source: scheduled
+claude_md:
+  strategy: ignore

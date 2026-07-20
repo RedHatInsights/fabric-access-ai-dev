@@ -1,0 +1,19 @@
+name: bot-consolidation
+type: workflow
+description: Consolidate Bot prs into specific environments and projects for ease of review
+
+preflight:
+  - 01-check-bot-prs.py
+
+provides:
+  claude_md: CLAUDE.md
+
+requires:
+  tools:
+    - gh
+  optional_tools:
+    - go
+    - pipenv
+    - npm
+  env_vars:
+    - BOT_INSTANCE_ID
