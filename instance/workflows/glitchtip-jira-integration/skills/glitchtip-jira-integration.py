@@ -1,0 +1,559 @@
+"""Ingest unresolved errors from GlitchTip and create Jira tickets.
+
+Fetches issues via GlitchTip's Sentry-compatible REST API, enriches each
+with the latest event data, and creates a Jira ticket with all available
+error details. Skips issues flagged as duplicates by the preflight check.
+"""
+
+import json
+import os
+import re
+import sys
+import time
+import urllib.request
+import urllib.error
+
+
+for _var in ("GLITCHTIP_ORG", "GLITCHTIP_TOKEN"):
+    if not os.environ.get(_var):
+        sys.exit(f"ERROR: Required environment variable {_var} is not set")
+
+GLITCHTIP_URL = os.environ.get("GLITCHTIP_URL", "https://glitchtip.devshift.net").rstrip("/")
+GLITCHTIP_ORG = os.environ["GLITCHTIP_ORG"]
+GLITCHTIP_TOKEN = os.environ["GLITCHTIP_TOKEN"]
+JIRA_MCP_URL = os.environ.get("JIRA_MCP_URL", "")
+JIRA_PROJECT_KEY = os.environ.get("JIRA_PROJECT_KEY", "")
+if not JIRA_PROJECT_KEY and JIRA_MCP_URL:
+    sys.exit("ERROR: JIRA_PROJECT_KEY is required when JIRA_MCP_URL is set")
+DRY_RUN = os.environ.get("DRY_RUN", "").lower() in ("1", "true", "yes") or not JIRA_MCP_URL
+MAX_TICKETS = int(os.environ.get("MAX_TICKETS", "0")) or None
+
+GLITCHTIP_PROJECTS = set(
+    p.strip() for p in os.environ.get("GLITCHTIP_PROJECTS", "").split(",") if p.strip()
+)
+
+LEVEL_PRIORITY_MAP = {
+    "fatal": "Major",
+    "critical": "Major",
+    "error": "Major",
+    "warning": "Normal",
+    "info": "Minor",
+    "debug": "Minor",
+}
+
+
+def compute_priority(issue: dict, project_name: str) -> str:
+    level = issue.get("level", "error")
+    count = int(issue.get("count", 0))
+    is_prod = "prod" in project_name
+
+    if level in ("fatal", "critical"):
+        return "Major"
+    if not is_prod:
+        return "Minor"
+    if level == "error" and count >= 100:
+        return "Major"
+    return "Normal"
+
+MAX_PAGINATION_PAGES = 50
+MAX_RETRIES = 3
+RETRY_BACKOFF = 2
+MAX_DESCRIPTION_LENGTH = 28000
+
+
+def _request_with_retry(req: urllib.request.Request) -> bytes:
+    for attempt in range(MAX_RETRIES):
+        try:
+            with urllib.request.urlopen(req) as resp:
+                return resp.read(), resp
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 500, 502, 503) and attempt < MAX_RETRIES - 1:
+                wait = RETRY_BACKOFF ** (attempt + 1)
+                print(f"  Retrying after HTTP {e.code} (attempt {attempt + 1}/{MAX_RETRIES}, waiting {wait}s)...")
+                time.sleep(wait)
+                continue
+            raise
+
+
+def glitchtip_get(path: str) -> any:
+    url = f"{GLITCHTIP_URL}/api/0/{path}"
+    headers = {"Accept": "application/json"}
+    if GLITCHTIP_TOKEN:
+        headers["Authorization"] = f"Bearer {GLITCHTIP_TOKEN}"
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    body, _ = _request_with_retry(req)
+    return json.loads(body)
+
+
+def glitchtip_get_paginated(path: str) -> list:
+    results = []
+    url = f"{GLITCHTIP_URL}/api/0/{path}"
+    headers = {"Accept": "application/json"}
+    if GLITCHTIP_TOKEN:
+        headers["Authorization"] = f"Bearer {GLITCHTIP_TOKEN}"
+    seen_urls = set()
+    for _ in range(MAX_PAGINATION_PAGES):
+        if not url or url in seen_urls:
+            break
+        seen_urls.add(url)
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        body, resp = _request_with_retry(req)
+        page = json.loads(body)
+        if isinstance(page, list):
+            results.extend(page)
+        else:
+            results.append(page)
+            break
+        link_header = resp.getheader("Link", "")
+        url = _parse_next_link(link_header)
+    return results
+
+
+def _parse_next_link(link_header: str) -> str | None:
+    for part in link_header.split(","):
+        if 'rel="next"' in part and 'results="true"' in part:
+            start = part.index("<") + 1
+            end = part.index(">")
+            return part[start:end]
+    return None
+
+
+def call_jira_mcp(tool_name: str, arguments: dict) -> dict:
+    payload = json.dumps({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": tool_name, "arguments": arguments},
+    }).encode()
+    req = urllib.request.Request(
+        JIRA_MCP_URL,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    body, _ = _request_with_retry(req)
+    return json.loads(body)
+
+
+def extract_mcp_text(result: dict) -> str:
+    content = result.get("result", {}).get("content", [])
+    if content and isinstance(content, list):
+        return content[0].get("text", "")
+    return ""
+
+
+def fetch_project_slugs() -> dict:
+    """Return a mapping of project slug -> project name for target projects."""
+    projects = glitchtip_get_paginated(f"organizations/{GLITCHTIP_ORG}/projects/")
+    slug_map = {}
+    for p in projects:
+        name = p.get("name", "")
+        slug = p.get("slug", "")
+        if not GLITCHTIP_PROJECTS or name in GLITCHTIP_PROJECTS or slug in GLITCHTIP_PROJECTS:
+            slug_map[slug] = name
+    return slug_map
+
+
+def fetch_unresolved_issues(project_slug: str) -> list:
+    return glitchtip_get_paginated(
+        f"projects/{GLITCHTIP_ORG}/{project_slug}/issues/?query=is:unresolved"
+    )
+
+
+def fetch_latest_event(issue_id: str) -> dict:
+    try:
+        return glitchtip_get(f"issues/{issue_id}/events/latest/")
+    except urllib.error.HTTPError:
+        return {}
+
+
+def load_skip_ids() -> set:
+    skip_file = os.environ.get("GLITCHTIP_SKIP_FILE", ".glitchtip-skip-ids.json")
+    if os.path.isfile(skip_file):
+        with open(skip_file) as f:
+            return set(str(i) for i in json.load(f))
+    return set()
+
+
+def sanitize_label(value: str) -> str:
+    """Strip characters that Jira rejects in labels."""
+    return re.sub(r"[^a-zA-Z0-9._-]", "-", value).strip("-")
+
+
+def normalize_title(title: str) -> str:
+    """Strip dynamic values from an error title to produce a stable grouping key."""
+    s = title
+    # Kafka transport identifiers: [10.0.185.78:9096<-52446] -> [<transport>]
+    s = re.sub(r"\[[\d.]+:\d+<-\d+\]", "[<transport>]", s)
+    # IP:port pairs
+    s = re.sub(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?", "<ip>", s)
+    # UUIDs (8-4-4-4-12 hex, including truncated ones from GlitchTip)
+    s = re.sub(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{2,12}", "<uuid>", s, flags=re.IGNORECASE)
+    # Standalone hex strings (8+ chars)
+    s = re.sub(r"\b[0-9a-f]{8,}\b", "<hex>", s, flags=re.IGNORECASE)
+    # Hex-dash fragments left after partial UUID replacement (e.g. <hex>-f400-7d…)
+    s = re.sub(r"(<hex>|<uuid>)(-[0-9a-f]{2,4})+", r"\1-<id>", s, flags=re.IGNORECASE)
+    # Standalone numbers (port numbers, offsets, counts)
+    s = re.sub(r"\b\d{4,}\b", "<n>", s)
+    # BrokerConnection: normalize client_id, node_id, host to collapse broker variants
+    s = re.sub(r"client_id=[\w.-]+", "client_id=<client>", s)
+    s = re.sub(r"node_id=[\w-]+", "node_id=<node>", s)
+    s = re.sub(r"host=[\w.-]+", "host=<host>", s)
+    # Strip "for request id: ..." suffixes (DualWrite handler errors)
+    s = re.sub(r"for request id:\s*\S+", "for request id: <id>", s)
+    # Collapse trailing whitespace/ellipsis after truncation
+    s = re.sub(r"\s*…$", "…", s)
+    return s
+
+
+def group_issues(issues: list) -> list[dict]:
+    """Group issues by normalized title. Returns list of group dicts."""
+    groups = {}
+    for issue in issues:
+        title = issue.get("title", "unknown")
+        key = normalize_title(title)
+        if key not in groups:
+            groups[key] = {
+                "issues": [],
+                "total_count": 0,
+                "representative": issue,
+            }
+        groups[key]["issues"].append(issue)
+        count = int(issue.get("count", 0))
+        groups[key]["total_count"] += count
+        if count > int(groups[key]["representative"].get("count", 0)):
+            groups[key]["representative"] = issue
+    return list(groups.values())
+
+
+def format_stacktrace(event: dict) -> str:
+    entries = event.get("entries", [])
+    for entry in entries:
+        if entry.get("type") == "exception":
+            values = entry.get("data", {}).get("values", [])
+            lines = []
+            for exc in values:
+                exc_type = exc.get("type", "Exception")
+                exc_value = exc.get("value", "")
+                lines.append(f"*{exc_type}*: {exc_value}")
+                stacktrace = exc.get("stacktrace", {})
+                frames = stacktrace.get("frames", [])
+                for frame in frames:
+                    filename = frame.get("filename", "?")
+                    lineno = frame.get("lineNo", "?")
+                    function = frame.get("function", "?")
+                    context_line = frame.get("context_line", "").strip()
+                    lines.append(f"  {filename}:{lineno} in {function}")
+                    if context_line:
+                        lines.append(f"    {{code}}{context_line}{{code}}")
+            return "\n".join(lines)
+    return "_No stacktrace available_"
+
+
+def format_tags(event: dict) -> str:
+    tags = event.get("tags", [])
+    if not tags:
+        return "_No tags_"
+    lines = []
+    for tag in tags:
+        key = tag.get("key", "?")
+        value = tag.get("value", "?")
+        lines.append(f"* *{key}*: {value}")
+    return "\n".join(lines)
+
+
+def format_contexts(event: dict) -> str:
+    contexts = event.get("contexts", {})
+    if not contexts:
+        return "_No context data_"
+    lines = []
+    for ctx_name, ctx_data in contexts.items():
+        if isinstance(ctx_data, dict):
+            lines.append(f"*{ctx_name}*:")
+            for k, v in ctx_data.items():
+                if k != "type":
+                    lines.append(f"  * {k}: {v}")
+    return "\n".join(lines) if lines else "_No context data_"
+
+
+def format_breadcrumbs(event: dict) -> str:
+    entries = event.get("entries", [])
+    for entry in entries:
+        if entry.get("type") == "breadcrumbs":
+            crumbs = entry.get("data", {}).get("values", [])
+            if not crumbs:
+                continue
+            lines = []
+            for crumb in crumbs[-10:]:
+                ts = crumb.get("timestamp", "")
+                category = crumb.get("category", "")
+                message = crumb.get("message", "")
+                level = crumb.get("level", "")
+                lines.append(f"  [{ts}] {category} ({level}): {message}")
+            if len(crumbs) > 10:
+                lines.insert(0, f"  _Showing last 10 of {len(crumbs)} breadcrumbs_")
+            return "\n".join(lines)
+    return "_No breadcrumbs_"
+
+
+def glitchtip_issue_url(issue_id) -> str:
+    return f"{GLITCHTIP_URL}/{GLITCHTIP_ORG}/issues/{issue_id}"
+
+
+def build_ticket_description(issue: dict, event: dict, project_name: str, group: dict = None) -> str:
+    issue_id = issue.get("id", "?")
+    title = issue.get("title", "Unknown error")
+    culprit = issue.get("culprit", "")
+    level = issue.get("level", "error")
+    platform = issue.get("platform", "unknown")
+    first_seen = issue.get("firstSeen", "unknown")
+    last_seen = issue.get("lastSeen", "unknown")
+    count = issue.get("count", 0)
+    user_count = issue.get("userCount", 0)
+    issue_url = glitchtip_issue_url(issue_id)
+
+    event_id = event.get("eventID", "?")
+    release = event.get("release", {})
+    release_version = release.get("version", "unknown") if isinstance(release, dict) else str(release or "unknown")
+    environment = event.get("environment", "unknown")
+    sdk_info = event.get("sdk", {})
+    sdk_name = sdk_info.get("name", "unknown") if isinstance(sdk_info, dict) else "unknown"
+    sdk_version = sdk_info.get("version", "?") if isinstance(sdk_info, dict) else "?"
+
+    stacktrace = format_stacktrace(event)
+    tags = format_tags(event)
+    contexts = format_contexts(event)
+    breadcrumbs = format_breadcrumbs(event)
+
+    description = f"""h2. GlitchTip Error Report
+
+[View in GlitchTip|{issue_url}]
+
+||Field||Value||
+|GlitchTip Issue ID|{issue_id}|
+|Event ID|{event_id}|
+|Project|{project_name}|
+|Platform|{platform}|
+|Environment|{environment}|
+|Level|{level}|
+|Occurrences|{count}|
+|Affected Users|{user_count}|
+|First Seen|{first_seen}|
+|Last Seen|{last_seen}|
+|Release|{release_version}|
+|SDK|{sdk_name} {sdk_version}|
+|Culprit|{culprit}|
+"""
+
+    if group and len(group["issues"]) > 1:
+        grouped_ids = [str(i.get("id", "?")) for i in group["issues"]]
+        description += f"""
+h3. Grouped Issues
+This ticket represents *{len(group["issues"])} GlitchTip issues* with the same error pattern.
+* *Total occurrences across all issues:* {group["total_count"]}
+* *GlitchTip issue IDs:* {", ".join(grouped_ids[:20])}{"... and {} more".format(len(grouped_ids) - 20) if len(grouped_ids) > 20 else ""}
+"""
+
+    description += f"""
+h3. Stacktrace
+{{noformat}}
+{stacktrace}
+{{noformat}}
+
+h3. Tags
+{tags}
+
+h3. Context Data
+{contexts}
+
+h3. Breadcrumbs
+{{noformat}}
+{breadcrumbs}
+{{noformat}}
+
+----
+_Auto-generated by glitchtip-jira-integration workflow_
+"""
+
+    if len(description) > MAX_DESCRIPTION_LENGTH:
+        truncated = description[:MAX_DESCRIPTION_LENGTH]
+        truncated += f"\n\n{{noformat}}\n\n_Description truncated. [View full error details in GlitchTip|{issue_url}]_\n"
+        return truncated
+
+    return description
+
+
+def create_jira_ticket(issue: dict, event: dict, project_name: str, group: dict = None) -> str:
+    issue_id = str(issue.get("id", ""))
+    title = issue.get("title", "Unknown error")
+    level = issue.get("level", "error")
+    environment = event.get("environment", "unknown")
+
+    summary = f"[GlitchTip] [{project_name}] {title}"
+    if len(summary) > 255:
+        summary = summary[:252] + "..."
+
+    description = build_ticket_description(issue, event, project_name, group)
+    if group:
+        issue["count"] = group["total_count"]
+    priority = compute_priority(issue, project_name)
+
+    labels = [
+        sanitize_label("glitchtip"),
+        sanitize_label(project_name),
+    ]
+    if group:
+        for gi in group["issues"]:
+            labels.append(f"glitchtip-issue-{gi.get('id', '')}")
+    else:
+        labels.append(f"glitchtip-issue-{issue_id}")
+    if environment and environment != "unknown":
+        labels.append(sanitize_label(environment))
+
+    result = call_jira_mcp("jira_create_issue", {
+        "project_key": JIRA_PROJECT_KEY,
+        "issue_type": "Bug",
+        "summary": summary,
+        "description": description,
+        "priority": priority,
+        "labels": labels,
+    })
+    text = extract_mcp_text(result)
+    if text:
+        ticket = json.loads(text)
+        return ticket.get("key", "unknown")
+    return "unknown"
+
+
+def dry_run_ticket(issue: dict, event: dict, project_name: str, group: dict = None):
+    issue_id = str(issue.get("id", ""))
+    title = issue.get("title", "Unknown error")
+    level = issue.get("level", "error")
+    count = group["total_count"] if group else issue.get("count", 0)
+    first_seen = issue.get("firstSeen", "unknown")
+    last_seen = issue.get("lastSeen", "unknown")
+    environment = event.get("environment", "unknown")
+    if group:
+        issue["count"] = group["total_count"]
+    priority = compute_priority(issue, project_name)
+
+    summary = f"[GlitchTip] [{project_name}] {title}"
+    if len(summary) > 255:
+        summary = summary[:252] + "..."
+
+    labels = [
+        sanitize_label("glitchtip"),
+        sanitize_label(project_name),
+    ]
+    if group:
+        labels.append(f"glitchtip-issue-{issue_id} (+{len(group['issues']) - 1} more)")
+    else:
+        labels.append(f"glitchtip-issue-{issue_id}")
+    if environment and environment != "unknown":
+        labels.append(sanitize_label(environment))
+
+    print(f"    --- TICKET PREVIEW ---")
+    print(f"    Project:     {JIRA_PROJECT_KEY}")
+    print(f"    Type:        Bug")
+    print(f"    Summary:     {summary}")
+    print(f"    Priority:    {priority}")
+    print(f"    Labels:      {', '.join(labels)}")
+    print(f"    Level:       {level}")
+    if group and len(group["issues"]) > 1:
+        print(f"    Grouped:     {len(group['issues'])} GlitchTip issues with same error pattern")
+    print(f"    Occurrences: {count}")
+    print(f"    First seen:  {first_seen}")
+    print(f"    Last seen:   {last_seen}")
+    print(f"    Environment: {environment}")
+    print(f"    Stacktrace:  {format_stacktrace(event)[:200]}...")
+    print(f"    ----------------------")
+
+
+def main():
+    if DRY_RUN:
+        print("[DRY RUN] Jira ticket creation disabled (no JIRA_MCP_URL or DRY_RUN=1)")
+    if MAX_TICKETS:
+        print(f"Ticket limit: {MAX_TICKETS}")
+
+    skip_ids = load_skip_ids()
+
+    print("Fetching projects from GlitchTip...")
+    slug_map = fetch_project_slugs()
+    if not slug_map:
+        print("No matching projects found.")
+        return
+    print(f"Target projects: {', '.join(slug_map.values())}")
+
+    created = []
+    skipped = []
+    failed = []
+
+    for slug, project_name in slug_map.items():
+        if MAX_TICKETS and len(created) >= MAX_TICKETS:
+            break
+
+        print(f"\nFetching unresolved issues for {project_name}...")
+        issues = fetch_unresolved_issues(slug)
+        if not issues:
+            print(f"  No unresolved issues.")
+            continue
+
+        print(f"  Found {len(issues)} unresolved issue(s).")
+
+        # Filter out issues already in Jira
+        filtered = []
+        for issue in issues:
+            issue_id = str(issue.get("id", ""))
+            if issue_id in skip_ids:
+                skipped.append(issue_id)
+            else:
+                filtered.append(issue)
+
+        if skipped:
+            print(f"  Skipped {len(skipped)} issue(s) with existing Jira tickets.")
+
+        # Group by normalized title
+        groups = group_issues(filtered)
+        print(f"  Grouped into {len(groups)} unique error pattern(s).")
+
+        for group in groups:
+            if MAX_TICKETS and len(created) >= MAX_TICKETS:
+                print(f"  Reached ticket limit ({MAX_TICKETS}), stopping.")
+                break
+
+            issue = group["representative"]
+            issue_id = str(issue.get("id", ""))
+            title = issue.get("title", "unknown")
+            group_size = len(group["issues"])
+
+            if group_size > 1:
+                print(f"  Processing group ({group_size} issues): {title}")
+            else:
+                print(f"  Processing issue {issue_id}: {title}")
+
+            event = fetch_latest_event(issue_id)
+
+            if DRY_RUN:
+                dry_run_ticket(issue, event, project_name, group)
+                created.append({"issue_id": issue_id, "ticket": "DRY-RUN", "title": title,
+                                "group_size": group_size})
+            else:
+                try:
+                    ticket_key = create_jira_ticket(issue, event, project_name, group)
+                    print(f"    Created Jira ticket: {ticket_key}")
+                    created.append({"issue_id": issue_id, "ticket": ticket_key, "title": title,
+                                    "group_size": group_size})
+                except Exception as e:
+                    print(f"    FAILED to create ticket: {e}")
+                    failed.append({"issue_id": issue_id, "title": title, "error": str(e)})
+
+    print(f"\nSummary: {len(created)} ticket(s) {'would be created' if DRY_RUN else 'created'}, "
+          f"{len(skipped)} skipped (duplicates), {len(failed)} failed")
+    for item in created:
+        print(f"  {item['ticket']}: {item['title']} (GlitchTip #{item['issue_id']})")
+    for item in failed:
+        print(f"  FAILED: {item['title']} (GlitchTip #{item['issue_id']}): {item['error']}")
+
+
+if __name__ == "__main__":
+    main()

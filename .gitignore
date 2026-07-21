@@ -1,2 +1,4 @@
 *.log
 .claude/
+.env
+__pycache__

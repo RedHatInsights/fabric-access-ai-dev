@@ -1,0 +1,26 @@
+name: glitchtip-jira-integration
+type: workflow
+description: Ingest errors from GlitchTip and create Jira tickets with full error details
+
+preflight:
+  - 01-check-duplicate-tickets.py
+  - 02-preview-ticket-groups.py
+
+provides:
+  claude_md: CLAUDE.md
+
+requires:
+  tools:
+    - gh
+  env_vars:
+    - BOT_INSTANCE_ID
+    - GLITCHTIP_ORG
+    - GLITCHTIP_TOKEN
+    - JIRA_MCP_URL
+    - JIRA_PROJECT_KEY
+
+optional_env_vars:
+  - GLITCHTIP_URL
+  - GLITCHTIP_PROJECTS
+  - DRY_RUN
+  - MAX_TICKETS
