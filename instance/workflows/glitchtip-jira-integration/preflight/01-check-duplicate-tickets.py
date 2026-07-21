@@ -28,17 +28,25 @@ GLITCHTIP_PROJECTS = set(
 MAX_PAGINATION_PAGES = 50
 MAX_RETRIES = 3
 RETRY_BACKOFF = 2
+REQUEST_TIMEOUT = 30
 
 
 def _request_with_retry(req: urllib.request.Request) -> bytes:
     for attempt in range(MAX_RETRIES):
         try:
-            with urllib.request.urlopen(req) as resp:
+            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
                 return resp.read(), resp
         except urllib.error.HTTPError as e:
             if e.code in (429, 500, 502, 503) and attempt < MAX_RETRIES - 1:
                 wait = RETRY_BACKOFF ** (attempt + 1)
                 print(f"  Retrying after HTTP {e.code} (attempt {attempt + 1}/{MAX_RETRIES}, waiting {wait}s)...")
+                time.sleep(wait)
+                continue
+            raise
+        except (urllib.error.URLError, OSError) as e:
+            if attempt < MAX_RETRIES - 1:
+                wait = RETRY_BACKOFF ** (attempt + 1)
+                print(f"  Retrying after network error (attempt {attempt + 1}/{MAX_RETRIES}, waiting {wait}s): {e}")
                 time.sleep(wait)
                 continue
             raise
@@ -110,7 +118,9 @@ def search_jira_for_glitchtip_issues(issue_ids: list[str]) -> set:
     # JQL has a max clause length; batch into groups of 50
     batch_size = 50
     for i in range(0, len(issue_ids), batch_size):
-        batch = issue_ids[i:i + batch_size]
+        batch = [iid for iid in issue_ids[i:i + batch_size] if iid.isdigit()]
+        if not batch:
+            continue
         label_clauses = ", ".join(f'"glitchtip-issue-{iid}"' for iid in batch)
         jql = f'project = "{JIRA_PROJECT_KEY}" AND labels in ({label_clauses})'
         result = call_jira_mcp("jira_search", {"jql": jql, "limit": batch_size})

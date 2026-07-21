@@ -59,17 +59,25 @@ MAX_PAGINATION_PAGES = 50
 MAX_RETRIES = 3
 RETRY_BACKOFF = 2
 MAX_DESCRIPTION_LENGTH = 28000
+REQUEST_TIMEOUT = 30
 
 
 def _request_with_retry(req: urllib.request.Request) -> bytes:
     for attempt in range(MAX_RETRIES):
         try:
-            with urllib.request.urlopen(req) as resp:
+            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
                 return resp.read(), resp
         except urllib.error.HTTPError as e:
             if e.code in (429, 500, 502, 503) and attempt < MAX_RETRIES - 1:
                 wait = RETRY_BACKOFF ** (attempt + 1)
                 print(f"  Retrying after HTTP {e.code} (attempt {attempt + 1}/{MAX_RETRIES}, waiting {wait}s)...")
+                time.sleep(wait)
+                continue
+            raise
+        except (urllib.error.URLError, OSError) as e:
+            if attempt < MAX_RETRIES - 1:
+                wait = RETRY_BACKOFF ** (attempt + 1)
+                print(f"  Retrying after network error (attempt {attempt + 1}/{MAX_RETRIES}, waiting {wait}s): {e}")
                 time.sleep(wait)
                 continue
             raise
@@ -136,6 +144,9 @@ def call_jira_mcp(tool_name: str, arguments: dict) -> dict:
 
 
 def extract_mcp_text(result: dict) -> str:
+    error = result.get("error")
+    if error:
+        raise RuntimeError(f"MCP error: {error}")
     content = result.get("result", {}).get("content", [])
     if content and isinstance(content, list):
         return content[0].get("text", "")
@@ -165,6 +176,8 @@ def fetch_latest_event(issue_id: str) -> dict:
         return glitchtip_get(f"issues/{issue_id}/events/latest/")
     except urllib.error.HTTPError:
         return {}
+
+
 
 
 def load_skip_ids() -> set:
@@ -394,9 +407,10 @@ def create_jira_ticket(issue: dict, event: dict, project_name: str, group: dict 
         summary = summary[:252] + "..."
 
     description = build_ticket_description(issue, event, project_name, group)
+    priority_issue = issue
     if group:
-        issue["count"] = group["total_count"]
-    priority = compute_priority(issue, project_name)
+        priority_issue = dict(issue, count=group["total_count"])
+    priority = compute_priority(priority_issue, project_name)
 
     labels = [
         sanitize_label("glitchtip"),
@@ -420,7 +434,10 @@ def create_jira_ticket(issue: dict, event: dict, project_name: str, group: dict 
     })
     text = extract_mcp_text(result)
     if text:
-        ticket = json.loads(text)
+        try:
+            ticket = json.loads(text)
+        except json.JSONDecodeError:
+            raise RuntimeError(f"Unexpected Jira MCP response: {text[:500]}")
         return ticket.get("key", "unknown")
     return "unknown"
 
@@ -433,9 +450,10 @@ def dry_run_ticket(issue: dict, event: dict, project_name: str, group: dict = No
     first_seen = issue.get("firstSeen", "unknown")
     last_seen = issue.get("lastSeen", "unknown")
     environment = event.get("environment", "unknown")
+    priority_issue = issue
     if group:
-        issue["count"] = group["total_count"]
-    priority = compute_priority(issue, project_name)
+        priority_issue = dict(issue, count=group["total_count"])
+    priority = compute_priority(priority_issue, project_name)
 
     summary = f"[GlitchTip] [{project_name}] {title}"
     if len(summary) > 255:
@@ -485,7 +503,7 @@ def main():
     print(f"Target projects: {', '.join(slug_map.values())}")
 
     created = []
-    skipped = []
+    total_skipped = 0
     failed = []
 
     for slug, project_name in slug_map.items():
@@ -502,18 +520,36 @@ def main():
 
         # Filter out issues already in Jira
         filtered = []
+        project_skipped = 0
         for issue in issues:
             issue_id = str(issue.get("id", ""))
             if issue_id in skip_ids:
-                skipped.append(issue_id)
+                project_skipped += 1
             else:
                 filtered.append(issue)
 
-        if skipped:
-            print(f"  Skipped {len(skipped)} issue(s) with existing Jira tickets.")
+        if project_skipped:
+            print(f"  Skipped {project_skipped} issue(s) with existing Jira tickets.")
+        total_skipped += project_skipped
 
         # Group by normalized title
         groups = group_issues(filtered)
+
+        # Skip groups where ALL issues are already covered by skip_ids
+        # (handles partial overlap: if some issues in a group were skipped
+        # but the group still formed from remaining issues, check whether
+        # any issue in the FULL group pattern already has a Jira ticket)
+        deduped_groups = []
+        for group in groups:
+            all_ids = [str(i.get("id", "")) for i in group["issues"]]
+            if any(iid in skip_ids for iid in all_ids):
+                print(f"  Skipping group (related issues already have Jira tickets): "
+                      f"{group['representative'].get('title', 'unknown')}")
+                total_skipped += len(group["issues"])
+                continue
+            deduped_groups.append(group)
+        groups = deduped_groups
+
         print(f"  Grouped into {len(groups)} unique error pattern(s).")
 
         for group in groups:
@@ -543,12 +579,14 @@ def main():
                     print(f"    Created Jira ticket: {ticket_key}")
                     created.append({"issue_id": issue_id, "ticket": ticket_key, "title": title,
                                     "group_size": group_size})
+                    all_group_ids = [str(i.get("id", "")) for i in group["issues"]]
+                    skip_ids.update(all_group_ids)
                 except Exception as e:
                     print(f"    FAILED to create ticket: {e}")
                     failed.append({"issue_id": issue_id, "title": title, "error": str(e)})
 
     print(f"\nSummary: {len(created)} ticket(s) {'would be created' if DRY_RUN else 'created'}, "
-          f"{len(skipped)} skipped (duplicates), {len(failed)} failed")
+          f"{total_skipped} skipped (duplicates), {len(failed)} failed")
     for item in created:
         print(f"  {item['ticket']}: {item['title']} (GlitchTip #{item['issue_id']})")
     for item in failed:
