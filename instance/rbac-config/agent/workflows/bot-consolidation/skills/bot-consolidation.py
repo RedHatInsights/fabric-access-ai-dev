@@ -46,7 +46,7 @@ class DependencyConsolidator:
         upstream_repo: str = "",
         dry_run: bool = False,
         bot_author: str = "",
-        close_originals: bool = False,
+        close_originals: bool = True,
         regenerate_locks: bool = True,
     ):
         self.upstream_repo = upstream_repo
@@ -134,7 +134,6 @@ class DependencyConsolidator:
             if dep_type in groups:
                 groups[dep_type].append(pr)
             else:
-                # Default unknown to python (most common)
                 groups["python"].append(pr)
 
         # Remove empty groups
@@ -932,7 +931,7 @@ Examples:
   %(prog)s --repo owner/repo            # Specify upstream repo
   %(prog)s --bot dependabot[bot]        # Use different bot author
   %(prog)s --dry-run                    # Preview without creating PR
-  %(prog)s --close-originals            # Close original PRs after consolidation
+  %(prog)s --keep-originals              # Keep original PRs open (default: close them)
         """,
     )
 
@@ -959,7 +958,14 @@ Examples:
     parser.add_argument(
         "--close-originals",
         action="store_true",
-        help="Close original bot PRs after creating consolidated PR (default: leave open)",
+        default=True,
+        help="Close original bot PRs after creating consolidated PR (default: close)",
+    )
+
+    parser.add_argument(
+        "--keep-originals",
+        action="store_true",
+        help="Keep original bot PRs open after creating consolidated PR",
     )
 
     parser.add_argument(
@@ -975,7 +981,7 @@ Examples:
         upstream_repo=args.upstream_repo,
         dry_run=args.dry_run,
         bot_author=args.bot_author,
-        close_originals=args.close_originals,
+        close_originals=args.close_originals and not args.keep_originals,
         regenerate_locks=not args.no_regenerate_locks,
     )
 
