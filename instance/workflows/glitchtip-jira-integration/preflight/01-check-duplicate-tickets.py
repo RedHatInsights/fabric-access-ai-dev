@@ -89,6 +89,8 @@ def glitchtip_get_paginated(path: str) -> list:
 def _parse_next_link(link_header: str) -> str | None:
     for part in link_header.split(","):
         if 'rel="next"' in part and 'results="true"' in part:
+            if "<" not in part or ">" not in part:
+                continue
             start = part.index("<") + 1
             end = part.index(">")
             return part[start:end]
@@ -196,8 +198,13 @@ def main():
         print(f"\n{len(duplicate_ids)} duplicate(s) found. "
               "These issues will be skipped during ingestion.")
         skip_file = os.environ.get("GLITCHTIP_SKIP_FILE", ".glitchtip-skip-ids.json")
+        existing = set()
+        if os.path.isfile(skip_file):
+            with open(skip_file) as f:
+                existing = set(str(i) for i in json.load(f))
+        merged = existing | duplicate_ids
         with open(skip_file, "w") as f:
-            json.dump(list(duplicate_ids), f)
+            json.dump(sorted(merged), f)
     else:
         print("No duplicates found. All issues are clear for ticket creation.")
 

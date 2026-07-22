@@ -26,7 +26,7 @@ JIRA_PROJECT_KEY = os.environ.get("JIRA_PROJECT_KEY", "")
 if not JIRA_PROJECT_KEY and JIRA_MCP_URL:
     sys.exit("ERROR: JIRA_PROJECT_KEY is required when JIRA_MCP_URL is set")
 DRY_RUN = os.environ.get("DRY_RUN", "").lower() in ("1", "true", "yes") or not JIRA_MCP_URL
-MAX_TICKETS = int(os.environ.get("MAX_TICKETS", "0")) or None
+MAX_TICKETS = int(os.environ.get("MAX_TICKETS", "50")) or None
 
 GLITCHTIP_PROJECTS = set(
     p.strip() for p in os.environ.get("GLITCHTIP_PROJECTS", "").split(",") if p.strip()
@@ -120,6 +120,8 @@ def glitchtip_get_paginated(path: str) -> list:
 def _parse_next_link(link_header: str) -> str | None:
     for part in link_header.split(","):
         if 'rel="next"' in part and 'results="true"' in part:
+            if "<" not in part or ">" not in part:
+                continue
             start = part.index("<") + 1
             end = part.index(">")
             return part[start:end]
@@ -193,9 +195,46 @@ def sanitize_label(value: str) -> str:
     return re.sub(r"[^a-zA-Z0-9._-]", "-", value).strip("-")
 
 
+_EXCEPTION_CLASS_RE = re.compile(
+    r"^\*?_?[A-Z][a-zA-Z]*(?:\.[a-zA-Z]+)*(?:Error|Exception|Failure|Timeout|Warning):"
+    r"|^\*[a-z]+\.\w+Error:"
+    r"|^\*[a-z]+\.wrap\w+:"
+)
+
+_GENERIC_PREFIX_RE = re.compile(
+    r"^("
+    r"gRPC error[^:]*:"
+    r"|Consumer (?:failed|error):"
+    r"|CONSUMER STOPPING:"
+    r"|Fetch to node [^ ]+ failed:"
+    r"|Error (?:sending|processing|encountered|initializing|calling) \w+"
+    r"|Failed to \w+"
+    r"|Initialization of \w+"
+    r"|Max (?:operation )?retries"
+    r"|Heartbeat thread for"
+    r"|Metadata refresh: failed"
+    r"|Unable to (?:get|fetch|connect|connect for URL)\b"
+    r"|Replication event failed for"
+    r"|.+? connectivity error:"
+    r"|LeaveGroup request for"
+    r"|BOP error during \w+:"
+    r"|Control server error:"
+    r"|Reconnect failed"
+    r"|CRITICAL:"
+    r")"
+)
+
+
 def normalize_title(title: str) -> str:
     """Strip dynamic values from an error title to produce a stable grouping key."""
     s = title
+
+    # DB CONTEXT/DETAIL suffixes that leak into truncated titles (real newlines and literal \n)
+    s = re.sub(r"[\n\r]CONTEXT:.*", "", s, flags=re.DOTALL)
+    s = re.sub(r"[\n\r]DETAIL:.*", "", s, flags=re.DOTALL)
+    s = re.sub(r"\\nCONTEXT:.*", "", s, flags=re.DOTALL)
+    s = re.sub(r"\\nDETAIL:.*", "", s, flags=re.DOTALL)
+
     # Kafka transport identifiers: [10.0.185.78:9096<-52446] -> [<transport>]
     s = re.sub(r"\[[\d.]+:\d+<-\d+\]", "[<transport>]", s)
     # IP:port pairs
@@ -208,12 +247,68 @@ def normalize_title(title: str) -> str:
     s = re.sub(r"(<hex>|<uuid>)(-[0-9a-f]{2,4})+", r"\1-<id>", s, flags=re.IGNORECASE)
     # Standalone numbers (port numbers, offsets, counts)
     s = re.sub(r"\b\d{4,}\b", "<n>", s)
-    # BrokerConnection: normalize client_id, node_id, host to collapse broker variants
-    s = re.sub(r"client_id=[\w.-]+", "client_id=<client>", s)
-    s = re.sub(r"node_id=[\w-]+", "node_id=<node>", s)
-    s = re.sub(r"host=[\w.-]+", "host=<host>", s)
-    # Strip "for request id: ..." suffixes (DualWrite handler errors)
+
+    # Node/partition/offset/coordinator numbers (small digits missed by \d{4,})
+    s = re.sub(r"(?<=node[_ -])\d+", "<n>", s)
+    s = re.sub(r"(?<=coordinator-)\d+", "<n>", s)
+    s = re.sub(r"(?<=partition[: ])\d+", "<n>", s)
+    s = re.sub(r"(?<=offset[: ])\d+", "<n>", s)
+    s = re.sub(r"(?<=Process )\d+", "<n>", s)
+
+    # key=value pairs (client_id, node_id, host, etc.)
+    s = re.sub(r"(\w+_id)=[\w.-]+", r"\1=<val>", s)
+    s = re.sub(r"(?<=host=)[\w.-]+", "<host>", s)
+
+    # Double-bracketed socket error details: [[Errno 32] Broken pipe] -> [<socket-error>]
+    s = re.sub(r"\[\[.*?\]\]", "[<socket-error>]", s)
+
+    # URLs: normalize hostnames (collapse stage/prod variants) and strip query strings
+    s = re.sub(r"https?://[^\s\"'>]+", "<url>", s)
+
+    # Go read tcp / dial tcp with IP already normalized
+    s = re.sub(r"read tcp <ip>-><ip>", "read tcp <transport>", s)
+    s = re.sub(r"dial tcp <ip>", "dial tcp <addr>", s)
+
+    # Quoted identifiers that vary (role names, constraint names, table names, etc.)
+    s = re.sub(r'"[^"]{20,}"', '"<name>"', s)
+
+    # Named entity patterns: "for role X, UUID", "for group X", "for member X"
+    s = re.sub(r"for (?:role|group|member|user|account) .+?,\s*(?=UUID|id|ID)", "for <entity>, ", s)
+
+    # "system role: X with error:" / "system policy: X with error:" etc.
+    s = re.sub(r"(?:system \w+|resource): .+ with error:", "<resource>: <name> with error:", s)
+
+    # Message bus event wrappers — collapse varying inner messages
+    s = re.sub(r"^(\w+(?:_\w+)*: (?:Error processing|Failed processing) \w+ (?:message|event)\s*:\s*).*",
+               r"\1<detail>", s, flags=re.DOTALL)
+
+    # Class+suffix variants: FooBarHandler, FooBarManager, FooBarService, etc.
+    s = re.sub(r"([A-Z][a-z]+(?:[A-Z][a-z]+)+)\w*(?:Handler|Manager|Service|Processor|Consumer|Producer|Connector)",
+               lambda m: m.group(1) + "*", s)
+
+    # Kafka member/group IDs
+    s = re.sub(r"kafka-python-[\w.-]+", "kafka-python-<id>", s)
+    s = re.sub(r"(?<=member )\S+", "<member>", s)
+
+    # XML/angle-bracket-wrapped objects: <BrokerConnection ...>, <KafkaSSLTransport ...>
+    s = re.sub(r"^(<[A-Z]\w+ .+?>).*", r"\1: <detail>", s)
+
+    # MCP tool call timeouts — normalize tool name
+    s = re.sub(r"tools/call tool='[^']+'", "tools/call tool='<tool>'", s)
+
+    # Strip "for request id: ..." suffixes
     s = re.sub(r"for request id:\s*\S+", "for request id: <id>", s)
+
+    # Truncate after PascalCase exception class names (FooError:, BarException:, etc.)
+    m = _EXCEPTION_CLASS_RE.match(s)
+    if m:
+        s = m.group(0) + " <detail>"
+
+    # Truncate after generic action prefixes (Error sending..., Failed to..., etc.)
+    m = _GENERIC_PREFIX_RE.match(s)
+    if m:
+        s = m.group(1) + " <detail>"
+
     # Collapse trailing whitespace/ellipsis after truncation
     s = re.sub(r"\s*…$", "…", s)
     return s
@@ -572,25 +667,41 @@ def main():
             if DRY_RUN:
                 dry_run_ticket(issue, event, project_name, group)
                 created.append({"issue_id": issue_id, "ticket": "DRY-RUN", "title": title,
-                                "group_size": group_size})
+                                "group_size": group_size, "project": project_name})
             else:
                 try:
                     ticket_key = create_jira_ticket(issue, event, project_name, group)
                     print(f"    Created Jira ticket: {ticket_key}")
                     created.append({"issue_id": issue_id, "ticket": ticket_key, "title": title,
-                                    "group_size": group_size})
+                                    "group_size": group_size, "project": project_name})
                     all_group_ids = [str(i.get("id", "")) for i in group["issues"]]
                     skip_ids.update(all_group_ids)
                 except Exception as e:
                     print(f"    FAILED to create ticket: {e}")
-                    failed.append({"issue_id": issue_id, "title": title, "error": str(e)})
+                    failed.append({"issue_id": issue_id, "title": title, "error": str(e),
+                                   "project": project_name})
 
-    print(f"\nSummary: {len(created)} ticket(s) {'would be created' if DRY_RUN else 'created'}, "
+    # Persist skip IDs so re-runs don't create duplicates for already-processed issues
+    if not DRY_RUN and created:
+        skip_file = os.environ.get("GLITCHTIP_SKIP_FILE", ".glitchtip-skip-ids.json")
+        with open(skip_file, "w") as f:
+            json.dump(sorted(skip_ids), f)
+
+    action = "would be created" if DRY_RUN else "created"
+    print(f"\nSummary: {len(created)} ticket(s) {action}, "
           f"{total_skipped} skipped (duplicates), {len(failed)} failed")
-    for item in created:
-        print(f"  {item['ticket']}: {item['title']} (GlitchTip #{item['issue_id']})")
-    for item in failed:
-        print(f"  FAILED: {item['title']} (GlitchTip #{item['issue_id']}): {item['error']}")
+
+    projects_seen = dict.fromkeys(
+        item["project"] for item in created + failed
+    )
+    for proj in projects_seen:
+        proj_items = [item for item in created if item["project"] == proj]
+        proj_failures = [item for item in failed if item["project"] == proj]
+        print(f"\n  [{proj}] {len(proj_items)} ticket(s) {action}, {len(proj_failures)} failed")
+        for item in proj_items:
+            print(f"    {item['ticket']}: {item['title']} (GlitchTip #{item['issue_id']})")
+        for item in proj_failures:
+            print(f"    FAILED: {item['title']} (GlitchTip #{item['issue_id']}): {item['error']}")
 
 
 if __name__ == "__main__":
