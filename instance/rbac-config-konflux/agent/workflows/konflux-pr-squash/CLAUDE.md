@@ -19,7 +19,7 @@ If preflight passes, all prerequisites are met. Do not re-check them.
 Run the consolidation script from the target repository's root:
 
 ```bash
-python skills/bot-consolidation.py
+python skills/konflux-pr-squash.py
 ```
 
 ### Common Options
@@ -124,50 +124,69 @@ When the script skips a PR due to a conflict or apply failure, **do not accept t
 When running this workflow:
 
 1. `cd` into the target repository before running the script
-2. **Always run with `--keep-originals`**. Original PRs are only closed after CI passes (see CI Monitoring below). Never use `--close-originals`.
+2. **Always run with `--keep-originals`**. Original PRs are only closed after CI passes via task tracking. Never use `--close-originals`.
 3. Run with `--dry-run` first if the user wants to preview
 4. After the script completes, **check for any skipped PRs**. If any PRs were skipped due to conflicts or apply failures, follow the **Conflict Resolution** steps above to resolve them before pushing.
 5. **Verify that the actual code changes match the bot PR titles**. For each consolidated PR, confirm the dependency name and version in the diff correspond to what the original bot PR title described. Flag any mismatches.
 6. If an ecosystem group contains only 1 PR after grouping, **skip that group** — there is nothing to consolidate. Mention it in the report.
-7. Report:
+7. **Create a memory server task** for each consolidated PR (see Task Tracking above). This hands CI monitoring to `gh_pr_status.py` — do not poll `gh pr checks` in-session.
+8. Report:
    - How many PRs were consolidated per ecosystem
    - How many PRs required manual conflict resolution (and what was done)
    - The URL(s) of the created PR(s)
    - Any PRs that could not be resolved despite best efforts, and why
    - Any single-PR ecosystem groups that were skipped
-8. Do not modify the script itself — it handles all consolidation logic internally
+9. Do not modify the script itself — it handles all consolidation logic internally
 
-## CI Monitoring (Konflux Pipeline)
+## Task Tracking
 
-After the consolidated PR is created, monitor its Konflux CI pipeline status. **Always run the script with `--keep-originals`** so that original PRs are only closed after CI passes.
+This workflow uses the memory server task system. The preflight script checks tasks before starting — do not duplicate these checks.
 
-1. Wait ~30 seconds for checks to register, then poll with:
-   ```bash
-   gh pr checks <pr_url> --repo <owner/repo>
-   ```
-2. Re-check every 60 seconds until all checks complete or 10 minutes have elapsed
-3. Once complete, report the full CI status table with each task's name, status, and duration. Example format:
-   ```
-   🟢 Succeeded  4s    init
-   🟢 Succeeded  11s   clone-repository
-   🟢 Succeeded  3m    run-unit-tests
-   🟢 Succeeded  3m    build-container
-   🔴 Failed     45s   sast-snyk-check
-   ```
-4. If **all checks pass**:
-   - Confirm CI is green and the PR is ready for review
-   - Close the original bot PRs with a comment linking to the consolidated PR:
-     ```bash
-     gh pr comment <pr_number> --repo <owner/repo> --body "Consolidated into <consolidated_pr_url>"
-     gh pr close <pr_number> --repo <owner/repo>
-     ```
-5. If **any check fails**:
-   - Highlight the failed step(s) clearly
-   - Run `gh pr checks <pr_url> --repo <owner/repo> --json name,state,description` to get additional detail on the failure
-   - Report the failure description to the user and suggest they investigate
-   - Do **not** close the original bot PRs — leave them open as fallbacks
-   - **Delete the remote branch** for the failed consolidated PR:
-     ```bash
-     git push origin --delete <branch_name>
-     ```
-6. If checks are still pending after 10 minutes, report the current state and let the user know they can re-check manually with `gh pr checks <pr_url>`. Do not close original PRs.
+### Creating a task after PR creation
+
+After pushing the consolidated PR, create a memory server task so `gh_pr_status.py` monitors CI automatically:
+
+```bash
+curl -X POST "$BOT_MEMORY_URL/api/tasks" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "external_key": "konflux-pr-squash:<org/repo>",
+    "repo": "<repo_name>",
+    "title": "Consolidate <N> <ecosystem> dependency updates",
+    "status": "pr_open",
+    "pr_number": <pr_number>,
+    "metadata": {
+      "prs": [{"repo": "<org/repo>", "number": <pr_number>, "host": "github"}],
+      "original_prs": [<list of original bot PR numbers>],
+      "ecosystem": "<go|python|npm>"
+    }
+  }'
+```
+
+The `external_key` must be `konflux-pr-squash:<org/repo>` — this is what the preflight checks to avoid duplicate consolidation runs.
+
+### Why this matters
+
+- **No in-session CI polling.** The built-in `gh_pr_status.py` preflight monitors `pr_open` tasks for free — no AI tokens spent waiting for CI.
+- **Duplicate prevention.** The preflight skips if a task with this key is already `in_progress` or `pr_open`.
+- **Capacity management.** The preflight respects the task capacity cap (default 10) to avoid overloading the agent.
+
+### CI result handling
+
+When `gh_pr_status.py` detects the CI outcome, it updates the task. On the next cycle:
+
+- **CI passes** → task status becomes actionable. The agent should:
+  - Close the original bot PRs with a comment linking to the consolidated PR
+  - Update the task status to `done`
+- **CI fails** → task includes failure details. The agent should:
+  - Report the failure and suggest investigation
+  - Do **not** close original bot PRs — leave them open as fallbacks
+  - Delete the remote branch for the failed consolidated PR
+  - Update the task status to reflect the failure
+
+### Multiple ecosystems
+
+If the script creates multiple consolidated PRs (one per ecosystem), create a separate task for each with a distinct external key:
+- `konflux-pr-squash:<org/repo>:go`
+- `konflux-pr-squash:<org/repo>:python`
+- `konflux-pr-squash:<org/repo>:npm`

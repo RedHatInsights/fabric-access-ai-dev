@@ -1,4 +1,4 @@
-name: bot-consolidation
+name: konflux-pr-consolidation
 type: workflow
 description: Consolidate Bot prs into specific environments and projects for ease of review
 
