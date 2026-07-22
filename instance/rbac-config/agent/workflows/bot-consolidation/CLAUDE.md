@@ -51,14 +51,71 @@ python skills/bot-consolidation.py
 
 The script detects which subdirectory each dependency file lives in (e.g., `./Pipfile` vs `./typespec/package.json`) and runs lock commands in the correct directory. Monorepos with multiple package managers are handled natively.
 
-## WSL Fallback
+## Conflict Resolution
 
-On Windows, `pipenv lock` and `npm install` prefer WSL when available for consistent dependency resolution. If WSL is unavailable or fails, they fall back to native executables.
+When the script skips a PR due to a conflict or apply failure, **do not accept the skip**. Instead, attempt to resolve the conflict manually before moving on:
+
+1. **Identify the failed PR(s)** from the script output (look for "Warning: ... skipping" messages)
+2. **For each skipped PR**, try the following resolution steps in order:
+   a. **Fetch and merge the PR branch**:
+      ```bash
+      git fetch origin <pr_branch>
+      git merge --no-commit FETCH_HEAD
+      ```
+   b. **If merge conflicts occur**, resolve them:
+      - **Lock files** (`go.sum`, `Pipfile.lock`, `package-lock.json`, `yarn.lock`): Accept ours with `git checkout --ours <file>` — they get regenerated anyway
+      - **Manifest files** (`go.mod`, `Pipfile`, `package.json`): Accept theirs with `git checkout --theirs <file>` — the bot's version bump is what we want
+      - **Other files**: Accept theirs with `git checkout --theirs <file>` — bot PRs are single-purpose dep bumps
+      - Stage all resolved files: `git add <resolved_files>`
+   c. **If the merge still fails**, try cherry-picking individual commits from the PR branch:
+      ```bash
+      git merge --abort
+      git cherry-pick --no-commit <commit_sha>
+      ```
+      Resolve conflicts the same way as above.
+   d. **If all else fails**, apply the dependency change manually:
+      - Read the PR diff to identify the package name and target version
+      - Edit the manifest file directly to bump the version
+      - Stage the change
+3. **After resolving all skipped PRs**, regenerate lock files for the affected ecosystem:
+   - Go: `go mod tidy`
+   - Python: `pipenv lock`
+   - npm: `npm install`
+4. **Amend the consolidation commit** to include the newly resolved changes:
+   ```bash
+   git add -A
+   git commit --amend --no-edit
+   ```
+5. If a PR truly cannot be resolved (e.g., the dependency is incompatible or removed), note it in the PR description as a skipped item with the reason.
+
+### When to re-run vs. manually fix
+
+- If the script skips **1-2 PRs**: resolve them manually as described above
+- If the script skips **most PRs**: investigate root cause (stale main branch, network issues) and re-run after fixing
+- If conflicts are between two bot PRs updating the same package to different versions: keep the higher version
 
 ## Failure Handling
 
-- PRs that fail to apply are skipped individually; the workflow continues with remaining PRs
-- If `pipenv lock` or `npm install` fails, a warning is printed but the commit still proceeds
+### Lock file regeneration failures
+- **npm**: If `npm install` fails, retry with `--legacy-peer-deps`. If that also fails, check the error for version constraint conflicts between the consolidated dependencies — you may need to drop the lower version.
+- **pipenv**: If `pipenv lock` fails, check for Python version constraints or conflicting package versions in the error output. Try removing `Pipfile.lock` and re-running `pipenv lock` from scratch.
+- **go mod tidy**: If it fails, check for incompatible module versions. Try `go mod tidy -e` to proceed past errors, then inspect `go.mod` for issues.
+
+### Branch and PR cleanup
+- If the consolidated PR fails CI or cannot be created, **delete the remote branch**:
+  ```bash
+  git push origin --delete <branch_name>
+  ```
+- If the local branch is no longer needed, clean it up:
+  ```bash
+  git checkout main
+  git branch -D <branch_name>
+  ```
+
+### Commit signing
+- If `git push` fails with a signing error, the repo may require signed commits. Check with `git config commit.gpgsign`. If signing is required, ensure GPG is configured before retrying.
+
+### Other failures
 - If no PRs can be applied for an ecosystem, that ecosystem's branch is cleaned up
 - If no consolidated PRs are created at all, the workflow exits with an error
 
@@ -67,14 +124,18 @@ On Windows, `pipenv lock` and `npm install` prefer WSL when available for consis
 When running this workflow:
 
 1. `cd` into the target repository before running the script
-2. Run with `--dry-run` first if the user wants to preview
-3. After the script completes, **verify that the actual code changes match the bot PR titles**. For each consolidated PR, confirm the dependency name and version in the diff correspond to what the original bot PR title described. Flag any mismatches.
-4. Report:
+2. **Always run with `--keep-originals`**. Original PRs are only closed after CI passes (see CI Monitoring below). Never use `--close-originals`.
+3. Run with `--dry-run` first if the user wants to preview
+4. After the script completes, **check for any skipped PRs**. If any PRs were skipped due to conflicts or apply failures, follow the **Conflict Resolution** steps above to resolve them before pushing.
+5. **Verify that the actual code changes match the bot PR titles**. For each consolidated PR, confirm the dependency name and version in the diff correspond to what the original bot PR title described. Flag any mismatches.
+6. If an ecosystem group contains only 1 PR after grouping, **skip that group** — there is nothing to consolidate. Mention it in the report.
+7. Report:
    - How many PRs were consolidated per ecosystem
+   - How many PRs required manual conflict resolution (and what was done)
    - The URL(s) of the created PR(s)
-   - Any PRs that were skipped and why
-5. If `--close-originals` was used, confirm which original PRs were closed
-6. Do not modify the script itself — it handles all consolidation logic internally
+   - Any PRs that could not be resolved despite best efforts, and why
+   - Any single-PR ecosystem groups that were skipped
+8. Do not modify the script itself — it handles all consolidation logic internally
 
 ## CI Monitoring (Konflux Pipeline)
 
@@ -105,4 +166,8 @@ After the consolidated PR is created, monitor its Konflux CI pipeline status. **
    - Run `gh pr checks <pr_url> --repo <owner/repo> --json name,state,description` to get additional detail on the failure
    - Report the failure description to the user and suggest they investigate
    - Do **not** close the original bot PRs — leave them open as fallbacks
+   - **Delete the remote branch** for the failed consolidated PR:
+     ```bash
+     git push origin --delete <branch_name>
+     ```
 6. If checks are still pending after 10 minutes, report the current state and let the user know they can re-check manually with `gh pr checks <pr_url>`. Do not close original PRs.

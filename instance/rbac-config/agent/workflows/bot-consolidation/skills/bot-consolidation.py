@@ -184,57 +184,7 @@ class DependencyConsolidator:
         )
 
     def _run_pipenv_lock(self, cwd: Optional[str] = None) -> subprocess.CompletedProcess:
-        """Run pipenv lock, preferring WSL if available for consistent resolution."""
-        import os
-        import shutil
-
-        # Get absolute path for the working directory
-        if cwd:
-            abs_cwd = os.path.abspath(cwd)
-        else:
-            abs_cwd = os.getcwd()
-
-        # Find wsl.exe - try shutil.which first, then common paths
-        wsl_exe = shutil.which("wsl") or shutil.which("wsl.exe")
-        if not wsl_exe:
-            for candidate in [
-                r"C:\Windows\System32\wsl.exe",
-                r"C:\WINDOWS\system32\wsl.exe",
-                os.path.expandvars(r"%SYSTEMROOT%\System32\wsl.exe"),
-            ]:
-                if os.path.exists(candidate):
-                    wsl_exe = candidate
-                    break
-
-        # Try WSL first (matches typical dev environment)
-        if wsl_exe:
-            try:
-                wsl_check = subprocess.run(
-                    [wsl_exe, "--status"],
-                    capture_output=True,
-                    timeout=5,
-                )
-                if wsl_check.returncode == 0:
-                    # Convert Windows path to WSL path
-                    wsl_cwd = abs_cwd
-                    if len(abs_cwd) >= 2 and abs_cwd[1] == ":":
-                        drive = abs_cwd[0].lower()
-                        wsl_cwd = f"/mnt/{drive}" + abs_cwd[2:].replace("\\", "/")
-
-                    cmd = [wsl_exe, "bash", "-lc", f"cd '{wsl_cwd}' && pipenv lock"]
-                    print(f"    Using WSL pipenv in {wsl_cwd}...")
-                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-                    if result.returncode == 0:
-                        return result
-                    print(f"    WSL pipenv failed: {result.stderr[:100]}")
-                    print(f"    Falling back to native...")
-            except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
-                print(f"    WSL error: {e}")
-        else:
-            print(f"    WSL not found in PATH")
-
-        # Fall back to native pipenv
-        print(f"    Using native pipenv...")
+        """Run pipenv lock to regenerate the lock file."""
         return subprocess.run(
             ["pipenv", "lock"],
             capture_output=True,
@@ -244,70 +194,7 @@ class DependencyConsolidator:
         )
 
     def _run_npm_install(self, cwd: Optional[str] = None) -> subprocess.CompletedProcess:
-        """Run npm install, preferring WSL if available."""
-        import os
-        import shutil
-
-        # Get absolute path for the working directory
-        if cwd:
-            abs_cwd = os.path.abspath(cwd)
-        else:
-            abs_cwd = os.getcwd()
-
-        # Delete node_modules first to avoid ENOTEMPTY errors on Windows
-        node_modules = os.path.join(abs_cwd, "node_modules")
-        if os.path.exists(node_modules):
-            print(f"    Removing node_modules to avoid conflicts...")
-            shutil.rmtree(node_modules, ignore_errors=True)
-
-        # Find wsl.exe
-        wsl_exe = shutil.which("wsl") or shutil.which("wsl.exe")
-        if not wsl_exe:
-            for candidate in [
-                r"C:\Windows\System32\wsl.exe",
-                r"C:\WINDOWS\system32\wsl.exe",
-                os.path.expandvars(r"%SYSTEMROOT%\System32\wsl.exe"),
-            ]:
-                if os.path.exists(candidate):
-                    wsl_exe = candidate
-                    break
-
-        # Try WSL first
-        if wsl_exe:
-            try:
-                wsl_check = subprocess.run(
-                    [wsl_exe, "--status"],
-                    capture_output=True,
-                    timeout=5,
-                )
-                if wsl_check.returncode == 0:
-                    # Convert Windows path to WSL path
-                    wsl_cwd = abs_cwd
-                    if len(abs_cwd) >= 2 and abs_cwd[1] == ":":
-                        drive = abs_cwd[0].lower()
-                        wsl_cwd = f"/mnt/{drive}" + abs_cwd[2:].replace("\\", "/")
-
-                    # Try npm install, then with --legacy-peer-deps if that fails
-                    cmd = [wsl_exe, "bash", "-lc", f"cd '{wsl_cwd}' && npm install"]
-                    print(f"    Using WSL npm in {wsl_cwd}...")
-                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-                    if result.returncode == 0:
-                        return result
-                    # Try with legacy peer deps
-                    cmd = [wsl_exe, "bash", "-lc", f"cd '{wsl_cwd}' && npm install --legacy-peer-deps"]
-                    print(f"    Retrying with --legacy-peer-deps...")
-                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-                    if result.returncode == 0:
-                        return result
-                    print(f"    WSL npm failed: {result.stderr[:100]}")
-                    print(f"    Falling back to native...")
-            except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
-                print(f"    WSL error: {e}")
-        else:
-            print(f"    WSL not found in PATH")
-
-        # Fall back to native npm
-        print(f"    Using native npm...")
+        """Run npm install to regenerate the lock file."""
         result = subprocess.run(
             ["npm", "install"],
             capture_output=True,
