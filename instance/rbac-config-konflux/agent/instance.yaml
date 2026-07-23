@@ -1,0 +1,4 @@
+workflow: ./workflows/konflux-pr-squash
+source: scheduled
+claude_md:
+  strategy: append
