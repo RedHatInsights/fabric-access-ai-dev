@@ -14,11 +14,11 @@ BOT_AUTHOR = "red-hat-konflux[bot]"
 TASK_KEY_PREFIX = "konflux-pr-squash:"
 
 
-def find_bot_prs(upstream_repo: str, bot_author: str) -> list[dict]:
+def find_bot_prs(repo_nwo: str, bot_author: str) -> list[dict]:
     try:
         result = subprocess.run(
             ["gh", "pr", "list",
-             "--repo", upstream_repo,
+             "--repo", repo_nwo,
              "--author", bot_author,
              "--state", "open",
              "--json", "number,title,headRefName,url,labels"],
@@ -63,13 +63,8 @@ def main():
     repos_with_prs = []
 
     for repo_name, repo_config in project_repos.items():
-        # Skip non-GitHub repos (e.g. gitlab)
-        host = repo_config.get("host", "github")
-        if host != "github":
-            continue
-
-        repo_nwo = upstream_repo(repo_config)
-        if not repo_nwo:
+        repo_nwo, host = upstream_repo(repo_name)
+        if not repo_nwo or host != "github":
             continue
 
         task_key = f"{TASK_KEY_PREFIX}{repo_nwo}"
