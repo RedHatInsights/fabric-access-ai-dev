@@ -35,6 +35,8 @@ parameters:
   required: true
 - name: SLACK_WEBHOOK_URL
   value: ""
+- name: MAX_TICKETS
+  value: "50"
 objects:
 
 # ============================================================================
@@ -194,6 +196,22 @@ objects:
           # Jira — proxied through proxy container (mcp-atlassian on port 8444)
           - name: JIRA_MCP_URL
             value: http://devbot-proxy:8444/mcp
+          # GlitchTip — error tracking REST API
+          - name: GLITCHTIP_URL
+            value: https://glitchtip.devshift.net
+          - name: GLITCHTIP_ORG
+            value: insights
+          - name: GLITCHTIP_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: devbot-secrets
+                key: glitchtip-token
+          - name: GLITCHTIP_PROJECTS
+            value: insights-rbac-prod,insights-rbac-stage,insights-entitlements-prod,insights-entitlements-stage
+          - name: JIRA_PROJECT_KEY
+            value: RHCLOUD
+          - name: MAX_TICKETS
+            value: "${MAX_TICKETS}"
           # GH release upload — proxied through proxy container (port 8446)
           - name: GH_RELEASE_UPLOAD_URL
             value: http://devbot-proxy:8446/upload
