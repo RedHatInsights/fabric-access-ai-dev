@@ -24,10 +24,11 @@ fail() { echo "  [FAIL] $*"; FAIL=$((FAIL+1)); }
 
 echo ""
 echo "[entitlements-setup] Switching to Go $GO_VERSION..."
-if command -v use-go >/dev/null 2>&1; then
-    eval "$(use-go "$GO_VERSION")"
+if command -v goenv >/dev/null 2>&1; then
+    eval "$(goenv init -)"
+    goenv shell "$GO_VERSION"
 else
-    echo "[entitlements-setup] WARN: use-go not found, assuming Go $GO_VERSION is already on PATH"
+    echo "[entitlements-setup] WARN: goenv not found, assuming Go $GO_VERSION is already on PATH"
 fi
 
 # ─── 2. Generate code (oapi-codegen) ─────────────────────────────────────────
