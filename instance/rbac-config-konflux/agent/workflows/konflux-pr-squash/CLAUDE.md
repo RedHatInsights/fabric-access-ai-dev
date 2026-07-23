@@ -7,7 +7,6 @@ Consolidate multiple dependency update PRs from bot authors (e.g., `red-hat-konf
 ## Preflight
 
 The preflight script `01-check-bot-prs.py` runs before this workflow and validates:
-- `gh` CLI is installed and authenticated
 - Agent is not at task capacity
 - At least one repo in `project-repos.json` has 2+ open bot PRs to consolidate
 - No existing consolidation task is already in progress for that repo
@@ -18,17 +17,17 @@ If preflight passes, all prerequisites are met. Do not re-check them.
 
 ## How to Run
 
-Run the consolidation script from the target repository's root:
+For each repo in the preflight's `repos` array, `cd` into that repo's checkout and run:
 
 ```bash
-python skills/konflux-pr-squash.py
+python skills/konflux-pr-squash.py --repo <owner/repo>
 ```
 
 ### Common Options
 
 | Flag | Description |
 |------|-------------|
-| `--repo owner/repo` | Specify upstream repo (auto-detected by default) |
+| `--repo owner/repo` | Upstream repo — always pass this explicitly using the `repo` value from the preflight output |
 | `--bot "dependabot[bot]"` | Use a different bot author (default: `red-hat-konflux[bot]`) |
 | `--dry-run` | Preview what would be consolidated without creating PRs |
 | `--close-originals` | Close the original bot PRs after consolidation (default: enabled) |
@@ -169,7 +168,7 @@ The `external_key` must be `konflux-pr-squash:<org/repo>` — this is what the p
 ### Why this matters
 
 - **No in-session CI polling.** The built-in `gh_pr_status.py` preflight monitors `pr_open` tasks for free — no AI tokens spent waiting for CI.
-- **Duplicate prevention.** The preflight skips if a task with this key is already `in_progress` or `pr_open`.
+- **Duplicate prevention.** The preflight skips a repo if a task with its key is already `in_progress`, `pr_open`, or `pr_changes`.
 - **Capacity management.** The preflight respects the task capacity cap (default 10) to avoid overloading the agent.
 
 ### CI result handling
