@@ -8,9 +8,11 @@ Consolidate multiple dependency update PRs from bot authors (e.g., `red-hat-konf
 
 The preflight script `01-check-bot-prs.py` runs before this workflow and validates:
 - `gh` CLI is installed and authenticated
-- Current directory is a git repository
-- Upstream repo is detectable
-- At least 2 open bot PRs exist to consolidate
+- Agent is not at task capacity
+- At least one repo in `project-repos.json` has 2+ open bot PRs to consolidate
+- No existing consolidation task is already in progress for that repo
+
+The preflight reads repos from `project-repos.json` (in the agent directory) and checks each GitHub repo for open bot PRs. Non-GitHub repos (e.g. GitLab) are skipped. The output contains a `repos` array — each entry has `repo` (owner/repo), `bot_url`, `pr_count`, `prs`, and `task_key`. Process each repo entry by passing `--repo <owner/repo>` to the consolidation script.
 
 If preflight passes, all prerequisites are met. Do not re-check them.
 
@@ -123,7 +125,7 @@ When the script skips a PR due to a conflict or apply failure, **do not accept t
 
 When running this workflow:
 
-1. `cd` into the target repository before running the script
+1. For each repo in the preflight output, `cd` into the target repository (clone it first if needed using the `bot_url` from the preflight data) and run the script with `--repo <owner/repo>`
 2. **Always run with `--keep-originals`**. Original PRs are only closed after CI passes via task tracking. Never use `--close-originals`.
 3. Run with `--dry-run` first if the user wants to preview
 4. After the script completes, **check for any skipped PRs**. If any PRs were skipped due to conflicts or apply failures, follow the **Conflict Resolution** steps above to resolve them before pushing.
@@ -144,26 +146,25 @@ This workflow uses the memory server task system. The preflight script checks ta
 
 ### Creating a task after PR creation
 
-After pushing the consolidated PR, create a memory server task so `gh_pr_status.py` monitors CI automatically:
+After pushing the consolidated PR, call the `task_add` MCP tool (from `bot-memory`) so `gh_pr_status.py` monitors CI automatically:
 
-```bash
-curl -X POST "$BOT_MEMORY_URL/api/tasks" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "external_key": "konflux-pr-squash:<org/repo>",
-    "repo": "<repo_name>",
-    "title": "Consolidate <N> <ecosystem> dependency updates",
-    "status": "pr_open",
-    "pr_number": <pr_number>,
-    "metadata": {
-      "prs": [{"repo": "<org/repo>", "number": <pr_number>, "host": "github"}],
-      "original_prs": [<list of original bot PR numbers>],
-      "ecosystem": "<go|python|npm>"
+```
+task_add(
+    external_key="konflux-pr-squash:<org/repo>",
+    repo="<org/repo>",
+    branch="<consolidation_branch_name>",
+    status="pr_open",
+    source_type="github",
+    title="Consolidate <N> <ecosystem> dependency updates",
+    metadata={
+        "prs": [{"repo": "<org/repo>", "number": <pr_number>, "host": "github"}],
+        "original_prs": [<list of original bot PR numbers>],
+        "ecosystem": "<go|python|npm>"
     }
-  }'
+)
 ```
 
-The `external_key` must be `konflux-pr-squash:<org/repo>` — this is what the preflight checks to avoid duplicate consolidation runs.
+The `external_key` must be `konflux-pr-squash:<org/repo>` — this is what the preflight checks to avoid duplicate consolidation runs. `task_add` fails if 10+ active tasks already exist for this instance — the preflight's capacity check should have already ruled this out.
 
 ### Why this matters
 
