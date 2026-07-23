@@ -12,6 +12,8 @@ provides:
 requires:
   tools:
     - gh
+  mcp_servers:
+    - bot-memory
   env_vars:
     - BOT_INSTANCE_ID
     - GLITCHTIP_ORG

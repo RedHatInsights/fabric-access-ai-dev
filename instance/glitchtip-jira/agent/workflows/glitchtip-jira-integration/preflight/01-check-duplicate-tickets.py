@@ -13,6 +13,8 @@ import time
 import urllib.request
 import urllib.error
 
+from common import get_capacity, output_result
+
 
 GLITCHTIP_URL = os.environ.get("GLITCHTIP_URL", "https://glitchtip.devshift.net").rstrip("/")
 GLITCHTIP_ORG = os.environ.get("GLITCHTIP_ORG", "")
@@ -156,10 +158,15 @@ def fetch_unresolved_issues(project_slug: str) -> list:
 
 
 def main():
+    active_n, max_n = get_capacity()
+    if active_n >= max_n:
+        output_result("skip", f"At capacity ({active_n}/{max_n})")
+        return
+
     print("Fetching projects from GlitchTip...")
     slug_map = fetch_project_slugs()
     if not slug_map:
-        print("No matching projects found.")
+        output_result("skip", "No matching GlitchTip projects found.")
         return
 
     all_issues = []
@@ -170,7 +177,7 @@ def main():
         all_issues.extend(issues)
 
     if not all_issues:
-        print("No unresolved GlitchTip issues to check.")
+        output_result("skip", "No unresolved GlitchTip issues to check.")
         return
 
     if DRY_RUN:
@@ -182,6 +189,7 @@ def main():
             project = issue.get("_project_name", "unknown")
             print(f"  [{project}] #{issue_id} ({count} occurrences): {title}")
         print("\n[DRY RUN] Skipping Jira duplicate check.")
+        output_result("start", json.dumps({"dry_run": True, "issue_count": len(all_issues)}))
         return
 
     issue_ids = [str(issue.get("id", "")) for issue in all_issues if issue.get("id")]
@@ -207,6 +215,12 @@ def main():
             json.dump(sorted(merged), f)
     else:
         print("No duplicates found. All issues are clear for ticket creation.")
+
+    output_result("start", json.dumps({
+        "issue_count": len(all_issues),
+        "duplicate_count": len(duplicate_ids),
+        "new_count": len(all_issues) - len(duplicate_ids),
+    }))
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ Optional:
   MAX_TICKETS                     (default: 50 — simulates the ticket cap)
 """
 
+import json
 import os
 import sys
 
@@ -29,6 +30,8 @@ spec = importlib.util.spec_from_file_location(
 )
 gt = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gt)
+
+from common import output_result
 
 JIRA_PROJECT_KEY = os.environ.get("JIRA_PROJECT_KEY", "")
 MAX_TICKETS = int(os.environ.get("MAX_TICKETS", "50")) or 50
@@ -81,7 +84,7 @@ def main():
         all_groups.extend(groups)
 
     if not all_groups:
-        print("\nNo issues to process.")
+        output_result("skip", "No issues to process.")
         return
 
     all_groups.sort(key=lambda g: g["total_count"], reverse=True)
@@ -126,6 +129,13 @@ def main():
         if len(title) > 100:
             title = title[:97] + "..."
         print(f"  {i}. {group['total_count']:,} occurrences ({len(group['issues'])} issues): {title}")
+
+    output_result("start", json.dumps({
+        "total_issues": total_issues,
+        "total_groups": total_groups,
+        "would_create": would_create,
+        "max_tickets": MAX_TICKETS,
+    }))
 
 
 if __name__ == "__main__":
