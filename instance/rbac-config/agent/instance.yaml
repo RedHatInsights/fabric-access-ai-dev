@@ -5,8 +5,3 @@ envs:
   - container-scan
 claude_md:
   strategy: append
-
-workflow: ./workflows/glitchtip-jira-integration
-source: scheduled
-claude_md:
-  strategy: ignore
