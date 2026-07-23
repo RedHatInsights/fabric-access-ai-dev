@@ -22,7 +22,8 @@ entitlements-api-go/
 
 ### Build and Test
 
-- **Go version**: This repo requires Go 1.26.5. Switch with: `eval "$(use-go 1.26.5)"` before building or testing.
+- **Go version**: This repo requires Go 1.26.5. Switch with: `eval "$(use-go 1.26.5)"` before building or testing. Go is installed at runtime via `use-go`, not baked into the Dockerfile.
+- **Setup script**: Run `bash scripts/setup-entitlements-env.sh <repo-path>` for automated environment setup (Go version switch, code generation, build validation).
 - **`make generate`** — Regenerates `api/types.gen.go` and `api/server.gen.go`. MUST run after cloning and after any change to `apispec/api.spec.json`.
 - **`make build`** — Builds both `entitlements-api-go` and `bundle-sync` binaries.
 - **`make test`** — Runs `make generate` then `go test -v ./...`.
