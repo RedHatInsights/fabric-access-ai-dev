@@ -15,5 +15,9 @@
   "entitlements-api-go": {
     "url": "https://github.com/platex-rehor-bot/entitlements-api-go.git",
     "upstream": "https://github.com/RedHatInsights/entitlements-api-go.git"
+  },
+  "uhc-auth-proxy": {
+    "url": "https://github.com/platex-rehor-bot/uhc-auth-proxy.git",
+    "upstream": "https://github.com/RedHatInsights/uhc-auth-proxy.git"
   }
 }
