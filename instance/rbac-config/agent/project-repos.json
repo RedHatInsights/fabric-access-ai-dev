@@ -19,5 +19,9 @@
   "uhc-auth-proxy": {
     "url": "https://github.com/platex-rehor-bot/uhc-auth-proxy.git",
     "upstream": "https://github.com/RedHatInsights/uhc-auth-proxy.git"
+  },
+  "turnpike": {
+    "url": "https://github.com/platex-rehor-bot/turnpike.git",
+    "upstream": "https://github.com/RedHatInsights/turnpike.git"
   }
 }
