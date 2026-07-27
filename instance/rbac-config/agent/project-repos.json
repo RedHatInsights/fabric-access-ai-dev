@@ -23,5 +23,9 @@
   "turnpike": {
     "url": "https://github.com/platex-rehor-bot/turnpike.git",
     "upstream": "https://github.com/RedHatInsights/turnpike.git"
+  },
+  "cloudwatch-aggregator": {
+    "url": "https://github.com/platex-rehor-bot/cloudwatch-aggregator.git",
+    "upstream": "https://github.com/RedHatInsights/cloudwatch-aggregator.git"
   }
 }
