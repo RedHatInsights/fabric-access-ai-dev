@@ -141,7 +141,8 @@ class DependencyConsolidator:
 
     def _process_ecosystem(self, ecosystem: str) -> ConsolidationResult:
         """Process a single ecosystem's PRs."""
-        if len(self.bot_prs) < 1:
+        if len(self.bot_prs) < 2:
+            print(f"  Only {len(self.bot_prs)} PR(s) for {ecosystem} — nothing to consolidate, skipping")
             return ConsolidationResult(success=True, consolidated_count=0)
 
         print(f"\n[Step 1] Creating {ecosystem} consolidation branch...")

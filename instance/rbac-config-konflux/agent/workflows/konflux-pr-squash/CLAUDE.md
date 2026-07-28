@@ -68,6 +68,13 @@ When the script skips a PR due to a conflict or apply failure, **do not accept t
       - **Manifest files** (`go.mod`, `Pipfile`, `package.json`): Accept theirs with `git checkout --theirs <file>` — the bot's version bump is what we want
       - **Other files**: Accept theirs with `git checkout --theirs <file>` — bot PRs are single-purpose dep bumps
       - Stage all resolved files: `git add <resolved_files>`
+   b1. **If the PR branch touches only infra/pipeline paths** (e.g. `.tekton/`, `.github/`, CI config) rather than manifest/lock files, prefer a targeted checkout of just those paths over a full merge:
+      ```bash
+      git fetch origin <pr_branch>
+      git checkout FETCH_HEAD -- <touched_path>/
+      git add <touched_path>/
+      ```
+      A full `git merge`/cherry-pick against a heavily diverged bot branch can pull in large amounts of unrelated churn (e.g. renovated lockfiles, unrelated manifest edits) — if `git diff --cached --stat` after a merge attempt shows changes far outside the PR's actual diff (`gh pr diff <pr_number> --name-only`), abort (`git merge --abort`) and use the targeted checkout instead.
    c. **If the merge still fails**, try cherry-picking individual commits from the PR branch:
       ```bash
       git merge --abort
@@ -100,6 +107,10 @@ When the script skips a PR due to a conflict or apply failure, **do not accept t
 ### Lock file regeneration failures
 - **npm**: If `npm install` fails, retry with `--legacy-peer-deps`. If that also fails, check the error for version constraint conflicts between the consolidated dependencies — you may need to drop the lower version.
 - **pipenv**: If `pipenv lock` fails, check for Python version constraints or conflicting package versions in the error output. Try removing `Pipfile.lock` and re-running `pipenv lock` from scratch.
+  - **Before doing anything else, check whether the conflict is pre-existing**: run the same `pipenv lock` attempt against `origin/master`'s `Pipfile`/`Pipfile.lock` (e.g. in a scratch worktree or after `git stash`). If it fails the same way there, the conflict is unrelated to this consolidation and cannot be fixed by relocking.
+  - In that case, do **not** hand-reconstruct `Pipfile.lock` entries from other PRs' diffs or by querying PyPI — this is fragile (easy to get hashes/transitive deps subtly wrong) and time-consuming. Instead: leave `Pipfile.lock` unregenerated, note in the consolidated PR body that the lock file needs manual regeneration due to a pre-existing constraint conflict (name the conflicting packages), and proceed with just the `Pipfile` manifest changes.
+  - **Do not run `pipenv upgrade <package>` as a recovery step.** It rewrites the `Pipfile` itself, not just the lock — observed behavior is that it can replace a pinned version with a wildcard (`"*"`) and append the entry as a new line at the bottom instead of updating it in place, silently corrupting the manifest and requiring manual line-by-line repair. If you need to bump a version in `Pipfile`, edit the existing line directly; never let a package manager's own "fix it for me" command touch the manifest.
+  - **Always diff `Pipfile` against `origin/master` after any lock-recovery attempt** (`git diff origin/master -- Pipfile`) before amending — confirm every changed package shows its intended pinned version in its original position, with no new wildcard or duplicate entries introduced.
 - **go mod tidy**: If it fails, check for incompatible module versions. Try `go mod tidy -e` to proceed past errors, then inspect `go.mod` for issues.
 
 ### Branch and PR cleanup
@@ -116,6 +127,23 @@ When the script skips a PR due to a conflict or apply failure, **do not accept t
 ### Commit signing
 - If `git push` fails with a signing error, the repo may require signed commits. Check with `git config commit.gpgsign`. If signing is required, ensure GPG is configured before retrying.
 
+### No outbound web access
+- `WebFetch` and similar internet-lookup tools are not available in this execution environment — do not use them to check package versions or changelogs. Use `gh pr diff`/`gh api` against the source bot PRs, or `pip index versions <package>` / `npm view <package> versions` (registry CLIs, not raw HTTP fetch) instead.
+
+### `gh pr create` fails with "can't find git"
+- If `gh pr create` errors that it can't find a git repository (seen intermittently in this environment even when run from inside a valid checkout), fall back to creating the PR via the API directly:
+  ```bash
+  gh api repos/<owner>/<repo>/pulls -X POST \
+    -f title="<title>" \
+    -f head="<branch_name>" \
+    -f base="<default_branch>" \
+    -f body="<body>"
+  ```
+  This bypasses `gh`'s local git-context detection entirely.
+
+### Single-PR ecosystem groups
+- The consolidation script does **not** internally skip ecosystems with only 1 PR — it will still create a branch and attempt the lock/tidy step, which can crash (e.g. if the relevant package manager binary, such as `npm`, isn't installed in this environment) and leave an orphaned local branch. Before invoking the script, check the preflight's per-ecosystem PR counts; if you can determine a given ecosystem has only 1 PR ahead of time, skip invoking consolidation for it entirely rather than letting the script attempt and fail. If it does crash, verify the branch was actually pushed (`git ls-remote --heads origin <branch>`) before attempting `git push origin --delete` — deleting a never-pushed branch is a harmless no-op but indicates the check was skipped.
+
 ### Other failures
 - If no PRs can be applied for an ecosystem, that ecosystem's branch is cleaned up
 - If no consolidated PRs are created at all, the workflow exits with an error
@@ -128,7 +156,7 @@ When running this workflow:
 2. **Always run with `--keep-originals`**. Original PRs are only closed after CI passes via task tracking. Never use `--close-originals`.
 3. Run with `--dry-run` first if the user wants to preview
 4. After the script completes, **check for any skipped PRs**. If any PRs were skipped due to conflicts or apply failures, follow the **Conflict Resolution** steps above to resolve them before pushing.
-5. **Verify that the actual code changes match the bot PR titles**. For each consolidated PR, confirm the dependency name and version in the diff correspond to what the original bot PR title described. Flag any mismatches.
+5. **Verify that the actual code changes match the bot PR titles**. For each consolidated PR, confirm the dependency name and version in the diff correspond to what the original bot PR title described. Flag any mismatches. The script's own "Applied successfully" message is not sufficient proof — it only confirms the file content changed, not that it changed to the *correct* version. Re-check the manifest (`Pipfile`/`package.json`/`go.mod`) against each source PR's intended version before trusting the count of consolidated PRs. Any PR whose version doesn't match must be treated as unresolved, not consolidated — do not let it be closed as if it were successfully merged.
 6. If an ecosystem group contains only 1 PR after grouping, **skip that group** — there is nothing to consolidate. Mention it in the report.
 7. **Create a memory server task** for each consolidated PR (see Task Tracking above). This hands CI monitoring to `gh_pr_status.py` — do not poll `gh pr checks` in-session.
 8. Report:
