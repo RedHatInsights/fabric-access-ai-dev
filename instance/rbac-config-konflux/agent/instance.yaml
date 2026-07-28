@@ -1,4 +1,7 @@
 workflow: ./workflows/konflux-pr-squash
 source: scheduled
+envs:
+  - node          # nvm + Node.js
+  - go            # goenv + Go
 claude_md:
   strategy: append
