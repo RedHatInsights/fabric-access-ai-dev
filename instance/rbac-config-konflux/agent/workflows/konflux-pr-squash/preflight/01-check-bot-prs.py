@@ -6,6 +6,7 @@ Reads repos from project-repos.json and checks each for open bot PRs.
 
 import json
 import subprocess
+import sys
 
 from common import get_capacity, get_tasks, load_project_repos, output_result, upstream_repo
 
@@ -73,7 +74,7 @@ def main():
             for t in active
         )
         if already_active:
-            print(f"  Skipping {repo_nwo}: consolidation already in progress")
+            print(f"  Skipping {repo_nwo}: consolidation already in progress", file=sys.stderr)
             continue
 
         prs = find_bot_prs(repo_nwo, BOT_AUTHOR)
