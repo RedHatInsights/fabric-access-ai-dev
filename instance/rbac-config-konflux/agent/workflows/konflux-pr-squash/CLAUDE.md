@@ -6,7 +6,11 @@ Consolidate multiple dependency update PRs from bot authors (e.g., `red-hat-konf
 
 ## Preflight
 
-The preflight script `01-check-bot-prs.py` runs before this workflow and validates:
+Two preflight scripts run in order:
+1. `01-gh-pr-status.py` — monitors CI status on existing `pr_open` tasks and updates them (passed/failed/conflicts)
+2. `02-check-bot-prs.py` — finds repos with consolidatable bot PRs
+
+The `02-check-bot-prs.py` script validates:
 - Agent is not at task capacity
 - At least one repo in `project-repos.json` has 2+ open bot PRs to consolidate
 - No existing consolidation task is already in progress for that repo
