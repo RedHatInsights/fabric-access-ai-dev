@@ -44,6 +44,47 @@ def find_bot_prs(repo_nwo: str, bot_author: str) -> list[dict]:
         return []
 
 
+def has_open_consolidation_pr(repo_nwo: str) -> bool:
+    """Check GitHub directly for an already-open consolidation PR/branch.
+
+    This is a defense-in-depth check independent of the task system: the task
+    that de-dupes runs is only recorded *after* a consolidated PR is pushed
+    (see CLAUDE.md), so a crash or a failed task_add between "PR pushed" and
+    "task recorded" leaves no trace in the task store. Without this check,
+    the next preflight run sees the same still-open original bot PRs
+    (originals are kept open via --keep-originals) and consolidates them
+    again, producing a duplicate PR.
+    """
+    try:
+        result = subprocess.run(
+            ["gh", "pr", "list",
+             "--repo", repo_nwo,
+             "--state", "open",
+             "--search", "chore(deps): consolidate in:title",
+             "--json", "number,title,headRefName"],
+            capture_output=True, text=True, timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        # Fail closed: if we can't verify, don't risk creating a duplicate.
+        return True
+
+    if result.returncode != 0:
+        return True
+
+    try:
+        prs = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return True
+
+    for pr in prs:
+        title = pr.get("title", "")
+        branch = pr.get("headRefName", "")
+        if title.startswith("chore(deps): consolidate") or branch.startswith("chore/consolidate-"):
+            return True
+
+    return False
+
+
 def main():
     # Phase 1: Check task system — avoid duplicate work and respect capacity
     tasks = get_tasks()
@@ -75,6 +116,10 @@ def main():
         )
         if already_active:
             print(f"  Skipping {repo_nwo}: consolidation already in progress", file=sys.stderr)
+            continue
+
+        if has_open_consolidation_pr(repo_nwo):
+            print(f"  Skipping {repo_nwo}: an open consolidation PR already exists", file=sys.stderr)
             continue
 
         prs = find_bot_prs(repo_nwo, BOT_AUTHOR)

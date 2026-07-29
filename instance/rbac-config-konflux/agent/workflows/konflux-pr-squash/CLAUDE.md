@@ -14,6 +14,7 @@ The `02-check-bot-prs.py` script validates:
 - Agent is not at task capacity
 - At least one repo in `project-repos.json` has 2+ open bot PRs to consolidate
 - No existing consolidation task is already in progress for that repo
+- No open PR already exists in the repo with a `chore(deps): consolidate` title or `chore/consolidate-*` branch (checked directly against GitHub — a backstop for when a prior run's `task_add` never landed, since the task store is otherwise the only de-dup signal and originals are kept open via `--keep-originals`)
 
 The preflight reads repos from `project-repos.json` (in the agent directory) and checks each GitHub repo for open bot PRs. Non-GitHub repos (e.g. GitLab) are skipped. The output contains a `repos` array — each entry has `repo` (owner/repo), `bot_url`, `pr_count`, `prs`, and `task_key`. Process each repo entry by passing `--repo <owner/repo>` to the consolidation script.
 
