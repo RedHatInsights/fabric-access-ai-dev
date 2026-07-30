@@ -213,11 +213,6 @@ objects:
             value: https://glitchtip.devshift.net
           - name: GLITCHTIP_ORG
             value: insights
-          - name: GLITCHTIP_TOKEN
-            valueFrom:
-              secretKeyRef:
-                name: devbot-secrets
-                key: glitchtip-token
           - name: GLITCHTIP_PROJECTS
             value: insights-rbac-prod,insights-rbac-stage,insights-entitlements-prod,insights-entitlements-stage
           - name: JIRA_PROJECT_KEY
