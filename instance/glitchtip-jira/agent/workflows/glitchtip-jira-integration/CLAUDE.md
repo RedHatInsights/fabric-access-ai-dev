@@ -23,6 +23,15 @@ GlitchTip often creates separate issues for errors that differ only by dynamic v
 
 Each Jira ticket is labeled `glitchtip-issue-{id}` for every issue in the group. The preflight script queries Jira with JQL to find existing tickets with those labels before the main script runs.
 
+The skip file (`GLITCHTIP_SKIP_FILE`, default `.glitchtip-skip-ids.json`) stores `{glitchtip_issue_id: jira_ticket_key}`, not just a list of IDs — the ticket key is needed to comment on recurrences (see below). Older skip files that only contain a plain list of IDs are still loaded fine; those entries just have no known ticket key.
+
+### Recurrence handling
+
+Grouping happens on *all* fetched issues, including ones already in the skip file, so a brand-new GlitchTip issue can be matched against an already-ticketed error pattern. When that happens:
+- If the existing ticket's key is known (tracked in the skip file), the main script adds a comment to that ticket noting the new occurrence(s) instead of creating a duplicate ticket.
+- If the pattern is fully covered by already-ticketed issues with no new occurrences, it's skipped entirely.
+- If the ticket key isn't known (e.g. a legacy list-format skip entry), the recurrence is skipped with a log line but no comment is posted — there's no way to attach it to the right ticket.
+
 ## DRY_RUN mode
 
 Both scripts support dry-run mode for testing without Jira connectivity:
@@ -72,8 +81,6 @@ GLITCHTIP_PROJECTS=my-app-prod,my-app-stage
 - **Labels**: `glitchtip-issue-{id}` (one per grouped issue), `glitchtip`, project name, environment
 - **Description**: Full error report with stacktrace, tags, context data, breadcrumbs, occurrence counts, and timestamps
 
-## Test scripts
+## Shared implementation
 
-For local testing without MCP, use the REST API test scripts:
-- `skills/test-create-ticket.py` — creates tickets via Jira REST API (requires `ATLASSIAN_SITE_URL`, `ATLASSIAN_USER_EMAIL`, `ATLASSIAN_API_TOKEN`)
-- `preflight/test-check-duplicates.py` — checks duplicates via Jira REST API
+`01-check-duplicate-tickets.py` and `02-preview-ticket-groups.py` both import their GlitchTip/Jira helper functions directly from `skills/glitchtip-jira-integration.py` (via `importlib`, since the filename isn't a valid module name), so there's a single implementation of the HTTP/pagination/retry logic shared by all three scripts.

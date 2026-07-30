@@ -19,15 +19,7 @@ import json
 import os
 import sys
 import importlib.util
-
-try:
-    from common import output_result
-except ImportError:
-    # Fallback for standalone/local runs outside the dev-bot runtime, where
-    # the `common` module (provided on PYTHONPATH by the bot container) isn't
-    # available.
-    def output_result(status, content):
-        print(json.dumps({"status": status, "content": content}), file=sys.stderr)
+from common import output_result
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "skills"))
 
