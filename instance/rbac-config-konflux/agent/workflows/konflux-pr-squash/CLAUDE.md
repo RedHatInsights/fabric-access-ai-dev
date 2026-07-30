@@ -155,22 +155,25 @@ When the script skips a PR due to a conflict or apply failure, **do not accept t
 
 ## Agent Responsibilities
 
+**CRITICAL — stop after creating the task. Do NOT close original PRs. Do NOT set task status to `done`. The `gh_pr_status.py` preflight handles CI monitoring, original PR closure, and task completion on subsequent cycles — not this cycle.**
+
 When running this workflow:
 
 1. For each repo in the preflight output, `cd` into the target repository (clone it first if needed using the `bot_url` from the preflight data) and run the script with `--repo <owner/repo>`
-2. **Always run with `--keep-originals`**. Original PRs are only closed after CI passes via task tracking. Never use `--close-originals`.
+2. Never use `--close-originals`. The script defaults to keeping originals open. Original PRs are only closed on a later cycle after CI passes via task tracking.
 3. Run with `--dry-run` first if the user wants to preview
 4. After the script completes, **check for any skipped PRs**. If any PRs were skipped due to conflicts or apply failures, follow the **Conflict Resolution** steps above to resolve them before pushing.
 5. **Verify that the actual code changes match the bot PR titles**. For each consolidated PR, confirm the dependency name and version in the diff correspond to what the original bot PR title described. Flag any mismatches. The script's own "Applied successfully" message is not sufficient proof — it only confirms the file content changed, not that it changed to the *correct* version. Re-check the manifest (`Pipfile`/`package.json`/`go.mod`) against each source PR's intended version before trusting the count of consolidated PRs. Any PR whose version doesn't match must be treated as unresolved, not consolidated — do not let it be closed as if it were successfully merged.
 6. If an ecosystem group contains only 1 PR after grouping, **skip that group** — there is nothing to consolidate. Mention it in the report.
-7. **Create a memory server task** for each consolidated PR (see Task Tracking above). This hands CI monitoring to `gh_pr_status.py` — do not poll `gh pr checks` in-session.
-8. Report:
+7. **Create a memory server task** with `status="pr_open"` for each consolidated PR (see Task Tracking below). This hands CI monitoring to `gh_pr_status.py` — do not poll `gh pr checks` in-session.
+8. **STOP.** The cycle ends here. Do not close originals, do not set task to `done`. The next cycle's preflight detects CI results and triggers follow-up.
+9. Report:
    - How many PRs were consolidated per ecosystem
    - How many PRs required manual conflict resolution (and what was done)
    - The URL(s) of the created PR(s)
    - Any PRs that could not be resolved despite best efforts, and why
    - Any single-PR ecosystem groups that were skipped
-9. Do not modify the script itself — it handles all consolidation logic internally
+10. Do not modify the script itself — it handles all consolidation logic internally
 
 ## Task Tracking
 
@@ -204,18 +207,17 @@ The `external_key` must be `konflux-pr-squash:<org/repo>` — this is what the p
 - **Duplicate prevention.** The preflight skips a repo if a task with its key is already `in_progress`, `pr_open`, or `pr_changes`.
 - **Capacity management.** The preflight respects the task capacity cap (default 10) to avoid overloading the agent.
 
-### CI result handling
+### CI result handling (happens on a LATER cycle, not the creation cycle)
 
-When `gh_pr_status.py` detects the CI outcome, it updates the task. On the next cycle:
+`gh_pr_status.py` monitors `pr_open` tasks automatically. When it detects CI results, it wakes the agent on a subsequent cycle:
 
-- **CI passes** → task status becomes actionable. The agent should:
+- **CI passes** → the agent should:
   - Close the original bot PRs with a comment linking to the consolidated PR
   - Update the task status to `done`
-- **CI fails** → task includes failure details. The agent should:
-  - Report the failure and suggest investigation
+- **CI fails** → the agent should:
+  - Investigate and fix the failure (rebase, resolve conflicts, re-push)
   - Do **not** close original bot PRs — leave them open as fallbacks
-  - Delete the remote branch for the failed consolidated PR
-  - Update the task status to reflect the failure
+  - If unfixable, delete the remote branch and update the task status to reflect the failure
 
 ### Multiple ecosystems
 

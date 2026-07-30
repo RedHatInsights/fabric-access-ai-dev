@@ -846,14 +846,14 @@ Examples:
     parser.add_argument(
         "--close-originals",
         action="store_true",
-        default=True,
-        help="Close original bot PRs after creating consolidated PR (default: close)",
+        default=False,
+        help="Close original bot PRs after creating consolidated PR (default: keep open)",
     )
 
     parser.add_argument(
         "--keep-originals",
         action="store_true",
-        help="Keep original bot PRs open after creating consolidated PR",
+        help="Keep original bot PRs open after creating consolidated PR (default: enabled)",
     )
 
     parser.add_argument(
