@@ -1,0 +1,20 @@
+name: konflux-pr-consolidation
+type: workflow
+description: Consolidate Bot prs into specific environments and projects for ease of review
+
+preflight:
+  - 01-check-bot-prs.py
+
+shared_skills:
+  - push-and-pr        # Git push + PR creation
+
+provides:
+  claude_md: CLAUDE.md
+  skills:
+    - konflux-pr-squash
+
+requires:
+  mcp_servers:
+    - bot-memory 
+  env_vars:
+    - BOT_INSTANCE_ID

@@ -37,6 +37,18 @@ parameters:
   value: ""
 - name: MAX_TICKETS
   value: "50"
+- name: KEDA_CRON_EU_TZ
+  value: "Europe/Prague"
+- name: KEDA_CRON_EU_START
+  value: "0 9 * * 1-5"
+- name: KEDA_CRON_EU_END
+  value: "0 23 * * 1-5"
+- name: KEDA_CRON_US_TZ
+  value: "America/New_York"
+- name: KEDA_CRON_US_START
+  value: "0 9 * * 1-5"
+- name: KEDA_CRON_US_END
+  value: "0 18 * * 1-5"
 objects:
 
 # ============================================================================
@@ -324,15 +336,15 @@ objects:
     triggers:
     - type: cron
       metadata:
-        timezone: Europe/Prague
-        start: 0 9 * * 1-5
-        end: 0 23 * * 1-5
+        timezone: ${KEDA_CRON_EU_TZ}
+        start: ${KEDA_CRON_EU_START}
+        end: ${KEDA_CRON_EU_END}
         desiredReplicas: "1"
     - type: cron
       metadata:
-        timezone: America/New_York
-        start: 0 9 * * 1-5
-        end: 0 18 * * 1-5
+        timezone: ${KEDA_CRON_US_TZ}
+        start: ${KEDA_CRON_US_START}
+        end: ${KEDA_CRON_US_END}
         desiredReplicas: "1"
 
 # --- NetworkPolicy: Bot can only reach proxy + memory-server + DNS ---
