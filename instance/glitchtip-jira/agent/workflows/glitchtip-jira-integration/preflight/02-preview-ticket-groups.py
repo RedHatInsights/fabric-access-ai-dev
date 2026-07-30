@@ -18,20 +18,27 @@ Optional:
 import json
 import os
 import sys
+import importlib.util
+
+try:
+    from common import output_result
+except ImportError:
+    # Fallback for standalone/local runs outside the dev-bot runtime, where
+    # the `common` module (provided on PYTHONPATH by the bot container) isn't
+    # available.
+    def output_result(status, content):
+        print(json.dumps({"status": status, "content": content}), file=sys.stderr)
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "skills"))
 
 os.environ.setdefault("JIRA_MCP_URL", "")
 
-import importlib.util
 spec = importlib.util.spec_from_file_location(
     "glitchtip",
     os.path.join(os.path.dirname(__file__), "..", "skills", "glitchtip-jira-integration.py"),
 )
 gt = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gt)
-
-from common import output_result
 
 JIRA_PROJECT_KEY = os.environ.get("JIRA_PROJECT_KEY", "")
 MAX_TICKETS = int(os.environ.get("MAX_TICKETS", "50")) or 50
