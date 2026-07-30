@@ -19,7 +19,7 @@ for _var in ("GLITCHTIP_ORG", "GLITCHTIP_TOKEN"):
     if not os.environ.get(_var):
         sys.exit(f"ERROR: Required environment variable {_var} is not set")
 
-GLITCHTIP_URL = os.environ.get("GLITCHTIP_URL", "https://glitchtip.devshift.net").rstrip("/")
+GLITCHTIP_URL = os.environ.get("GLITCHTIP_URL", "").rstrip("/")
 GLITCHTIP_ORG = os.environ["GLITCHTIP_ORG"]
 GLITCHTIP_TOKEN = os.environ["GLITCHTIP_TOKEN"]
 JIRA_MCP_URL = os.environ.get("JIRA_MCP_URL", "")

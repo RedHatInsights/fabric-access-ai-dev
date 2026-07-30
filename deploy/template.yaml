@@ -36,7 +36,7 @@ parameters:
 - name: SLACK_WEBHOOK_URL
   value: ""
 - name: MAX_TICKETS
-  value: "50"
+  value: "2"
 - name: KEDA_CRON_EU_TZ
   value: "Europe/Prague"
 - name: KEDA_CRON_EU_START
