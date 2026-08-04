@@ -41,7 +41,7 @@ python skills/konflux-pr-squash.py --repo <owner/repo>
 
 ## What the Script Does
 
-1. Finds all open PRs from the bot author, skipping any with "DO NOT MERGE" or "do-not-merge" labels
+1. Finds all open PRs from the bot author, skipping any with "DO NOT MERGE" or "do-not-merge" labels, or with "abandoned" in the title
 2. Groups PRs by ecosystem (Go, Python/Pipfile, npm) using PR diff analysis with title-pattern fallback
 3. For each ecosystem group, creates a separate consolidation branch from `main`/`master`
 4. Applies each PR's dependency update natively:
@@ -174,7 +174,6 @@ When running this workflow:
    - Any PRs that could not be resolved despite best efforts, and why
    - Any single-PR ecosystem groups that were skipped
 10. Do not modify the script itself — it handles all consolidation logic internally
-11. If you find a PR or multiple PRs with the label `DO NOT MERGE` make sure these are filtered out or skipped and not included in the final consolidated PR
 
 ## Task Tracking
 

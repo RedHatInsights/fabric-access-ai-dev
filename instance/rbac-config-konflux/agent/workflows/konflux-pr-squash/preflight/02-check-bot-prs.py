@@ -38,6 +38,8 @@ def find_bot_prs(repo_nwo: str, bot_author: str) -> list[dict]:
             labels = [lbl.get("name", "").lower() for lbl in pr.get("labels", [])]
             if any("do not merge" in lbl or "do-not-merge" in lbl for lbl in labels):
                 continue
+            if "abandoned" in pr.get("title", "").lower():
+                continue
             filtered.append(pr)
         return filtered
     except (json.JSONDecodeError, KeyError):
