@@ -258,6 +258,10 @@ class DependencyConsolidator:
                 if any("do not merge" in lbl or "do-not-merge" in lbl for lbl in labels):
                     print(f"    Skipping #{pr['number']}: has DO NOT MERGE label")
                     continue
+                # Skip PRs whose title indicates the underlying change was abandoned
+                if "abandoned" in pr.get("title", "").lower():
+                    print(f"    Skipping #{pr['number']}: title indicates abandoned")
+                    continue
                 bot_prs.append(BotPR(
                     number=pr["number"],
                     title=pr["title"],
