@@ -174,6 +174,7 @@ When running this workflow:
    - Any PRs that could not be resolved despite best efforts, and why
    - Any single-PR ecosystem groups that were skipped
 10. Do not modify the script itself — it handles all consolidation logic internally
+11. If you find a PR or multiple PRs with the label `DO NOT MERGE` make sure these are filtered out or skipped and not included in the final consolidated PR
 
 ## Task Tracking
 
