@@ -71,6 +71,8 @@ Before running the consolidation script, or while reviewing its `[Step 2] Groupi
 
 Extract the "current" version from the manifest in the checked-out repo (`go.mod`, `Pipfile`, `package.json`) before applying the PR, not from the PR title alone — titles are sometimes imprecise about the starting version.
 
+Also treat a PR as a major bump regardless of version numbers if it carries an explicit breaking-change signal: a `!` after the type/scope in a conventional-commit-style title (e.g. `feat!:`, `fix(deps)!:`), or a label containing "breaking" (e.g. `breaking-change`). Some bots flag breaking changes this way even for what looks like a minor/patch version bump.
+
 ### Handling a detected major bump
 
 1. **Do not include it in the same automatic consolidation batch as minor/patch bumps for that ecosystem.** Run the consolidation script with `--dry-run` first if a major bump is mixed into a group, note which PR it is, and either:
@@ -249,9 +251,14 @@ The `external_key` must be `konflux-pr-squash:<org/repo>` — this is what the p
 - **CI passes**, task's `is_major_bump` is not `true` → the agent should:
   - Close the original bot PRs with a comment linking to the consolidated PR
   - Update the task status to `done`
-- **CI passes**, task's `is_major_bump` is `true` → the agent should **not** auto-close originals. Green CI does not confirm the absence of breaking changes for a major bump (see **Major Version Bumps** above). Instead:
+- **CI passes**, task's `is_major_bump` is `true` → the agent should **not** auto-close originals on this wake. Green CI does not confirm the absence of breaking changes for a major bump (see **Major Version Bumps** above). Instead, on the *first* wake after CI passes:
   - Post a comment on the consolidated PR summarizing the breaking-change research already done, tagging it as ready for human review
-  - Leave the task status as `pr_open` and leave the original bot PR(s) open until a human explicitly approves/merges the major-bump PR
+  - Update the task status to `pr_changes` (not `pr_open`) with a `metadata.awaiting_human_review: true` marker — this distinguishes "waiting on a human" from "waiting on CI" so it's identifiable on later wakes, though it still counts against capacity like any other active task (see caveat below)
+- **On a later wake for a task with `awaiting_human_review: true`**, check whether a human has resolved it instead of re-running consolidation logic: `gh pr view <consolidated_pr_number> --repo <owner/repo> --json state,mergedAt`
+  - If merged → close the original bot PR(s) with a comment, set task status to `done`
+  - If closed without merging (a human rejected it) → delete the remote branch if it still exists, set task status to reflect rejection (e.g. `failed`), and leave the original bot PR(s) open so the change can be revisited later
+  - If still open → leave everything as-is, do nothing further this cycle
+  - **Capacity caveat**: a major-bump task sitting in `pr_changes` awaiting human review counts toward the capacity cap and blocks new consolidation runs for that same repo (its `external_key` stays "active") for as long as it's pending. This is intentional — the workflow should not run further consolidations against a repo with an unresolved breaking change — but if a task ever seems stuck for an unreasonable time, surface it in the report rather than silently absorbing a permanent capacity slot.
 - **CI fails** → the agent should:
   - Investigate and fix the failure (rebase, resolve conflicts, re-push)
   - Do **not** close original bot PRs — leave them open as fallbacks
