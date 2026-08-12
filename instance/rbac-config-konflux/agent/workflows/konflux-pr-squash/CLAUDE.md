@@ -57,36 +57,60 @@ python skills/konflux-pr-squash.py --repo <owner/repo>
 
 The script detects which subdirectory each dependency file lives in (e.g., `./Pipfile` vs `./typespec/package.json`) and runs lock commands in the correct directory. Monorepos with multiple package managers are handled natively.
 
-## Major Version Bumps
+## Major and Minor Version Bumps
 
-The script does **not** distinguish major version bumps from minor/patch bumps — it applies and lumps them into the same ecosystem consolidation as everything else. Since a major bump can carry breaking API changes that CI alone won't always catch, the agent must identify major bumps itself and route them differently.
+The script does **not** distinguish major, minor, or patch version bumps — it applies and lumps them all into the same ecosystem consolidation. This isn't just a major-bump problem: a minor bump can also carry behavior changes that break CI (e.g. a library changing validation error paths or default behavior in a way that requires test-assertion updates). Bundling that minor bump with unrelated patch-level bumps in one PR means a single failure blocks the whole batch and a reviewer can't tell which dependency caused it. The agent must classify every PR into **major / minor / patch** and route each tier into its own consolidation batch — never mix tiers in one branch/PR.
 
-### Detecting a major bump
+### Detecting the bump tier
 
 Before running the consolidation script, or while reviewing its `[Step 2] Grouping PRs by ecosystem...` output, compare each PR's current vs. target version:
 
-- **Go**: a major bump is either the leading version number changing (`v1.x` → `v2.x`) **or** the module path itself changing (e.g. `github.com/foo/bar` → `github.com/foo/bar/v2`, `.../v2` → `.../v3`). The latter is easy to miss because `go get module/v2@version` succeeds even though every import of that module in the codebase still points at the old path and needs updating — `go mod tidy` will not catch this, it only fixes the dependency graph.
-- **Python**: leading segment of the version changes (e.g. `4.x` → `5.x`). Watch for packages that don't follow strict semver (year-based versions, 0.x packages where a "minor" bump is treated as breaking by convention) — treat any 0.x → 0.(x+1) bump as a possible major bump too.
-- **npm**: leading segment of the version changes, same as Python. Also check for range operators in the original `package.json` entry (`^1.2.3`) — if the *new pinned version* violates the existing caret/tilde range, that's a signal the update itself already crosses a semver-major boundary even if PR title says "minor".
+- **Go**: major = the leading version number changing (`v1.x` → `v2.x`) **or** the module path itself changing (e.g. `github.com/foo/bar` → `github.com/foo/bar/v2`, `.../v2` → `.../v3`). Minor = the second segment changing with the leading segment unchanged (`v1.2.x` → `v1.3.x`). Patch = only the third segment changes. The module-path case is easy to miss because `go get module/v2@version` succeeds even though every import of that module in the codebase still points at the old path and needs updating — `go mod tidy` will not catch this, it only fixes the dependency graph.
+- **Python**: major = leading segment changes (e.g. `4.x` → `5.x`). Minor = second segment changes, leading segment unchanged (e.g. `3.17.x` → `3.18.x`). Patch = only the third segment changes (e.g. `2.66.1` → `2.66.2`). Watch for packages that don't follow strict semver (year-based versions, 0.x packages where a "minor" bump is treated as breaking by convention) — treat any 0.x → 0.(x+1) bump as a possible major bump, not minor.
+- **npm**: same segment logic as Python for major/minor/patch. Also check for range operators in the original `package.json` entry (`^1.2.3`) — if the *new pinned version* violates the existing caret/tilde range, treat the update as at least one tier more severe than the raw numbers indicate, since the maintainer's own range already assumed that boundary wouldn't be crossed.
 
 Extract the "current" version from the manifest in the checked-out repo (`go.mod`, `Pipfile`, `package.json`) before applying the PR, not from the PR title alone — titles are sometimes imprecise about the starting version.
 
-Also treat a PR as a major bump regardless of version numbers if it carries an explicit breaking-change signal: a `!` after the type/scope in a conventional-commit-style title (e.g. `feat!:`, `fix(deps)!:`), or a label containing "breaking" (e.g. `breaking-change`). Some bots flag breaking changes this way even for what looks like a minor/patch version bump.
+Also treat a PR as major (regardless of version numbers) if it carries an explicit breaking-change signal: a `!` after the type/scope in a conventional-commit-style title (e.g. `feat!:`, `fix(deps)!:`), or a label containing "breaking" (e.g. `breaking-change`). Some bots flag breaking changes this way even for what looks like a minor/patch version bump — the explicit signal always overrides the version-number heuristic.
+
+### Grouping by tier
+
+For each ecosystem, split candidate PRs into up to three sub-groups — major, minor, patch — and run the consolidation script (or manual handling) once per non-empty sub-group, never combining tiers in one invocation:
+
+- **Patch batch**: consolidate normally via the script, on its own branch.
+- **Minor batch**: consolidate via the script too (minor bumps are still low-risk enough to automate), but as its **own** branch/PR, separate from the patch batch. This isolates a minor bump's CI failure so it doesn't block unrelated patch updates, and gives a reviewer a single suspect if something breaks.
+- **Major batch**: also run through the script, on its own branch/PR, separate from minor/patch — the script can mechanically apply the version bump and regenerate lock files the same as any other tier. What makes major different is not "don't automate the bump," it's that the agent must follow up with the code-change investigation in **Handling a detected major bump** below before treating the batch as done; the script only bumps the manifest/lock, it does not know whether the codebase calls any of the APIs that changed.
+
+If a tier ends up with only one PR for an ecosystem, the **Single-PR ecosystem groups** rule still applies — skip the script for that tier and note it in the report rather than letting it crash on a 1-PR group.
+
+### Handling a detected minor bump
+
+Minor bumps get their own consolidated PR, separate from patch bumps, but the treatment is lighter than a major bump:
+
+1. **Run the consolidation script for the minor batch on its own branch**, e.g. `chore/consolidate-python-deps-minor-<date>`, distinct from the patch batch's branch.
+2. **Skim for breaking-change signals** (same sources as step 2 of the major-bump flow — PR body, upstream release notes) but this is a lighter pass, not mandatory deep research. If you find explicit breaking-change language despite the version being "minor," re-classify the PR as major and route it through the major-bump flow instead.
+3. **Fix CI failures caused by the minor bump directly** (e.g. update test assertions to match new library behavior) rather than treating them as blockers requiring human sign-off — this is expected maintenance for a minor bump, unlike a major bump where a passing-but-silently-wrong test is the concern.
+4. **Green CI is not sufficient to close the original bot PR** — same rule as every other tier now (see **CI result handling** below): originals are only closed once the consolidated PR is actually merged, not merely once CI passes.
 
 ### Handling a detected major bump
 
-1. **Do not include it in the same automatic consolidation batch as minor/patch bumps for that ecosystem.** Run the consolidation script with `--dry-run` first if a major bump is mixed into a group, note which PR it is, and either:
-   - Exclude it from that run and consolidate the remaining minor/patch PRs normally, then handle the major-bump PR separately (its own branch/PR), or
-   - If it's the only PR for that ecosystem, skip the script entirely and apply/investigate it manually.
-2. **Research the breaking changes before applying:**
+1. **Do not include it in the same script invocation as minor/patch bumps for that ecosystem.** Run the consolidation script for the major-bump PR(s) on their own branch, separate from the minor and patch batches, the same way you would for minor — the script applies the manifest/lock bump; it does not know whether the codebase uses anything that changed.
+2. **Research the breaking changes before or immediately after applying:**
    - Read the bot's own PR body first — `gh pr view <number> --repo <owner/repo> --json body -q .body`. Konflux/mintmaker-style bots frequently embed release notes or a changelog excerpt directly in the PR description; check for a "Breaking Changes" / "BREAKING CHANGE" section.
    - Check for GitHub releases between the two versions: `gh api repos/<owner>/<repo>/releases` (substitute the *dependency's* repo, not the consuming repo) and scan release bodies for breaking-change notes.
    - Use registry CLIs (not raw web fetch — unavailable in this environment) to confirm what versions exist in between and sanity-check the jump: `npm view <pkg> versions`, `pip index versions <pkg>`, `go list -m -versions <module>`.
+3. **Investigate whether the codebase actually needs code changes as a result of the bump — do not rely on CI alone to surface this.** A major bump can leave code that still compiles/passes tests while relying on now-deprecated or subtly-changed behavior, so treat this as active investigation, not a wait-and-see:
+   - For each breaking change or removed/renamed API called out in step 2's research, `grep -rn` the codebase for usages of that symbol, method, config key, or import path.
    - For a Go module path bump (`/v2`, `/v3`, ...), grep the repo for the old import path (`grep -rl "old/module/path"`) and update every import to the new path as part of the same change — this is mandatory, not optional, or the build will silently keep using the old major version.
-3. **Create a separate consolidated PR for major bumps** (even if it's just one PR) with its title/body clearly marked, e.g. `chore(deps)!: <package> major version bump to vX`, and include in the PR body:
+   - For Python/npm, check for usages of any function/class/parameter the release notes list as removed, renamed, or behavior-changed (e.g. a default value flip, a signature change, a removed argument) and update call sites accordingly.
+   - If research turned up no explicit breaking-change list (changelog silent or unavailable), still skim the diff between the old and new major version's changelog/release notes for the words "removed", "renamed", "deprecated", "default", "behavior" as a fallback signal, and note in the PR body that this fallback skim was done.
+   - Apply whatever code changes are needed directly in the major-bump branch, alongside the dependency bump, before pushing — do not leave them as a follow-up.
+   - If the required code changes are large, ambiguous, or you're not confident they're complete, say so explicitly in the PR body rather than guessing — this is exactly the case the human-review gate in step 5 exists for.
+4. **Create a separate consolidated PR for major bumps** (even if it's just one PR) with its title/body clearly marked, e.g. `chore(deps)!: <package> major version bump to vX`, and include in the PR body:
    - A "⚠️ Breaking Changes" section summarizing what you found in step 2 (or explicitly stating "no breaking changes found in release notes" if research turned up nothing)
+   - A "Code changes made" section listing what you changed in step 3 as a result of the bump (or explicitly stating "no code changes were required" if the investigation found none)
    - A checklist item for a human reviewer to confirm behavior, not just that CI is green
-4. **Never auto-close the original bot PR for a major bump on green CI alone.** Passing CI does not prove the absence of breaking changes (e.g. behavioral changes not covered by tests, deprecated-but-still-compiling APIs). Leave the original open and flag it in the report for human sign-off; only close it once a human has explicitly approved the major-bump PR.
+5. **Never auto-close the original bot PR for a major bump on green CI alone.** Passing CI does not prove the absence of breaking changes (e.g. behavioral changes not covered by tests, deprecated-but-still-compiling APIs) — this is precisely why step 3's proactive investigation matters even when CI is green. Leave the original open and flag it in the report for human sign-off; only close it once a human has explicitly approved the major-bump PR **and** it has been merged (see **CI result handling** below).
 
 ## Conflict Resolution
 
@@ -190,15 +214,15 @@ When the script skips a PR due to a conflict or apply failure, **do not accept t
 
 When running this workflow:
 
-1. For each repo in the preflight output, `cd` into the target repository (clone it first if needed using the `bot_url` from the preflight data). Before running the script, check each PR's current-vs-target version per the **Major Version Bumps** section above and set aside any major bumps — do not let them enter the same script invocation as minor/patch PRs for that ecosystem.
-2. Run the script with `--repo <owner/repo>` for the remaining minor/patch PRs.
-3. Never use `--close-originals`. The script defaults to keeping originals open. Original PRs are only closed on a later cycle after CI passes via task tracking.
+1. For each repo in the preflight output, `cd` into the target repository (clone it first if needed using the `bot_url` from the preflight data). Before running the script, classify each PR's current-vs-target version into major/minor/patch per the **Major and Minor Version Bumps** section above and split them into separate tier groups — do not let major, minor, and patch PRs for the same ecosystem enter the same script invocation.
+2. Run the script once per tier group with `--repo <owner/repo>` — once for the patch batch, once for the minor batch, and once for the major batch, each on its own branch/PR. The major batch additionally requires the code-change investigation in **Handling a detected major bump** below after the script applies the bump — the script itself does not do that investigation.
+3. Never use `--close-originals`. The script defaults to keeping originals open. Original PRs are only closed on a later cycle **after the consolidated PR is merged** via task tracking — CI passing is never sufficient on its own, for any tier.
 4. Run with `--dry-run` first if the user wants to preview
 5. After the script completes, **check for any skipped PRs**. If any PRs were skipped due to conflicts or apply failures, follow the **Conflict Resolution** steps above to resolve them before pushing.
 6. **Verify that the actual code changes match the bot PR titles**. For each consolidated PR, confirm the dependency name and version in the diff correspond to what the original bot PR title described. Flag any mismatches. The script's own "Applied successfully" message is not sufficient proof — it only confirms the file content changed, not that it changed to the *correct* version. Re-check the manifest (`Pipfile`/`package.json`/`go.mod`) against each source PR's intended version before trusting the count of consolidated PRs. Any PR whose version doesn't match must be treated as unresolved, not consolidated — do not let it be closed as if it were successfully merged.
-7. If an ecosystem group contains only 1 PR after grouping (major bumps excluded), **skip that group** — there is nothing to consolidate. Mention it in the report.
-8. For each major bump set aside in step 1, follow **Major Version Bumps** above to research breaking changes and produce its own separate PR.
-9. **Create a memory server task** with `status="pr_open"` for each consolidated PR, including major-bump PRs (see Task Tracking below). This hands CI monitoring to `gh_pr_status.py` — do not poll `gh pr checks` in-session.
+7. If a tier group contains only 1 PR after grouping, **skip that group** — there is nothing to consolidate. Mention it in the report.
+8. For each major bump set aside in step 1, follow **Major and Minor Version Bumps** above to research breaking changes and produce its own separate PR. For each minor bump, follow the lighter **Handling a detected minor bump** flow above.
+9. **Create a memory server task** with `status="pr_open"` for each consolidated PR — patch, minor, and major alike (see Task Tracking below). This hands CI monitoring to `gh_pr_status.py` — do not poll `gh pr checks` in-session.
 10. **STOP.** The cycle ends here. Do not close originals, do not set task to `done`. The next cycle's preflight detects CI results and triggers follow-up.
 11. Report:
    - How many PRs were consolidated per ecosystem
@@ -229,12 +253,13 @@ task_add(
         "prs": [{"repo": "<org/repo>", "number": <pr_number>, "host": "github"}],
         "original_prs": [<list of original bot PR numbers>],
         "ecosystem": "<go|python|npm>",
-        "is_major_bump": <true|false>
+        "is_major_bump": <true|false>,
+        "is_minor_bump": <true|false>
     }
 )
 ```
 
-Set `is_major_bump: true` for any task created from a major-version-bump PR (see **Major Version Bumps** above). This is read back during CI result handling to decide whether green CI alone is enough to close the originals.
+Set `is_major_bump: true` for any task created from a major-version-bump PR, and `is_minor_bump: true` for a minor-version-bump PR (see **Major and Minor Version Bumps** above). Neither flag changes *whether* the originals get closed — that always waits for the consolidated PR to be merged (see **CI result handling** below) — but `is_major_bump` still gates the extra human-review step before merge is even sought.
 
 The `external_key` must be `konflux-pr-squash:<org/repo>` — this is what the preflight checks to avoid duplicate consolidation runs. `task_add` fails if 10+ active tasks already exist for this instance — the preflight's capacity check should have already ruled this out.
 
@@ -246,27 +271,33 @@ The `external_key` must be `konflux-pr-squash:<org/repo>` — this is what the p
 
 ### CI result handling (happens on a LATER cycle, not the creation cycle)
 
-`gh_pr_status.py` monitors `pr_open` tasks automatically. When it detects CI results, it wakes the agent on a subsequent cycle:
+`gh_pr_status.py` monitors `pr_open` tasks automatically. When it detects CI results, it wakes the agent on a subsequent cycle. **Across every tier — patch, minor, and major — CI passing is never sufficient by itself to close the original bot PRs. The originals are only closed once the consolidated PR is actually merged.** This matters even for low-risk patch/minor batches: a green consolidated PR can still sit un-merged for days (awaiting a human reviewer, a merge freeze, etc.), and closing the originals early would strand the repo with no working fallback if the consolidated PR is later abandoned or force-pushed over.
 
-- **CI passes**, task's `is_major_bump` is not `true` → the agent should:
-  - Close the original bot PRs with a comment linking to the consolidated PR
-  - Update the task status to `done`
-- **CI passes**, task's `is_major_bump` is `true` → the agent should **not** auto-close originals on this wake. Green CI does not confirm the absence of breaking changes for a major bump (see **Major Version Bumps** above). Instead, on the *first* wake after CI passes:
+- **CI passes**, task's `is_major_bump` is not `true` (patch or minor tier) → the agent should:
+  - Leave the original bot PRs open
+  - Update the task status to `pr_changes` (not `pr_open`) with a `metadata.awaiting_merge: true` marker, so subsequent wakes know CI already passed and this task just needs merge-status polling, not re-triage
+- **CI passes**, task's `is_major_bump` is `true` → the agent should **not** move straight to awaiting-merge. Green CI does not confirm the absence of breaking changes for a major bump (see **Major and Minor Version Bumps** above). Instead, on the *first* wake after CI passes:
   - Post a comment on the consolidated PR summarizing the breaking-change research already done, tagging it as ready for human review
-  - Update the task status to `pr_changes` (not `pr_open`) with a `metadata.awaiting_human_review: true` marker — this distinguishes "waiting on a human" from "waiting on CI" so it's identifiable on later wakes, though it still counts against capacity like any other active task (see caveat below)
-- **On a later wake for a task with `awaiting_human_review: true`**, check whether a human has resolved it instead of re-running consolidation logic: `gh pr view <consolidated_pr_number> --repo <owner/repo> --json state,mergedAt`
-  - If merged → close the original bot PR(s) with a comment, set task status to `done`
+  - Update the task status to `pr_changes` with a `metadata.awaiting_human_review: true` marker — this distinguishes "waiting on a human sign-off before merge" from "waiting on merge alone" so it's identifiable on later wakes, though it still counts against capacity like any other active task (see caveat below)
+- **On a later wake for a task with `awaiting_merge: true` or `awaiting_human_review: true`**, check merge status instead of re-running consolidation logic: `gh pr view <consolidated_pr_number> --repo <owner/repo> --json state,mergedAt`
+  - If merged → close the original bot PR(s) with a comment linking to the merged consolidated PR, set task status to `done`
   - If closed without merging (a human rejected it) → delete the remote branch if it still exists, set task status to reflect rejection (e.g. `failed`), and leave the original bot PR(s) open so the change can be revisited later
   - If still open → leave everything as-is, do nothing further this cycle
-  - **Capacity caveat**: a major-bump task sitting in `pr_changes` awaiting human review counts toward the capacity cap and blocks new consolidation runs for that same repo (its `external_key` stays "active") for as long as it's pending. This is intentional — the workflow should not run further consolidations against a repo with an unresolved breaking change — but if a task ever seems stuck for an unreasonable time, surface it in the report rather than silently absorbing a permanent capacity slot.
+  - **Capacity caveat**: a task sitting in `pr_changes` awaiting merge or human review counts toward the capacity cap and blocks new consolidation runs for that same repo/tier (its `external_key` stays "active") for as long as it's pending. This is intentional — the workflow should not run further consolidations against a repo with an unmerged consolidated PR — but if a task ever seems stuck for an unreasonable time, surface it in the report rather than silently absorbing a permanent capacity slot.
 - **CI fails** → the agent should:
   - Investigate and fix the failure (rebase, resolve conflicts, re-push)
   - Do **not** close original bot PRs — leave them open as fallbacks
   - If unfixable, delete the remote branch and update the task status to reflect the failure
 
-### Multiple ecosystems
+### Multiple ecosystems and tiers
 
-If the script creates multiple consolidated PRs (one per ecosystem), create a separate task for each with a distinct external key:
-- `konflux-pr-squash:<org/repo>:go`
+If the workflow creates multiple consolidated PRs (one per ecosystem, and now potentially one per tier within an ecosystem), create a separate task for each with a distinct external key. Append the tier only when it's not the default patch batch, to avoid colliding keys when a repo has both a patch and a minor consolidation active for the same ecosystem:
+- `konflux-pr-squash:<org/repo>:go` (patch tier, or untiered)
+- `konflux-pr-squash:<org/repo>:go:minor`
+- `konflux-pr-squash:<org/repo>:go:major`
 - `konflux-pr-squash:<org/repo>:python`
+- `konflux-pr-squash:<org/repo>:python:minor`
+- `konflux-pr-squash:<org/repo>:python:major`
 - `konflux-pr-squash:<org/repo>:npm`
+- `konflux-pr-squash:<org/repo>:npm:minor`
+- `konflux-pr-squash:<org/repo>:npm:major`
