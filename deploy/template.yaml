@@ -33,8 +33,6 @@ parameters:
   required: true
 - name: VERTEX_ALLOWED_MODELS
   required: true
-- name: SLACK_WEBHOOK_URL
-  value: ""
 - name: KEDA_CRON_EU_TZ
   value: "Europe/Prague"
 - name: KEDA_CRON_EU_START
@@ -187,7 +185,11 @@ objects:
             value: "15432"
           # Slack notifications
           - name: SLACK_WEBHOOK_URL
-            value: ${SLACK_WEBHOOK_URL}
+            valueFrom:
+              secretKeyRef:
+                name: ai-dev-bot-config
+                key: slack-webhook-url
+                optional: true
           # Proxy — shared pod deployed by platform-frontend-ai-dev
           - name: PROXY_HOST
             value: devbot-proxy
