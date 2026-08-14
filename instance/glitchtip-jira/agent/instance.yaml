@@ -1,0 +1,4 @@
+workflow: ./workflows/glitchtip-jira-integration
+source: scheduled
+claude_md:
+  strategy: append
