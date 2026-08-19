@@ -45,7 +45,7 @@ python skills/konflux-pr-squash.py --repo <owner/repo>
 2. Groups PRs by ecosystem (Go, Python/Pipfile, npm) using PR diff analysis with title-pattern fallback
 3. For each ecosystem group, creates a separate consolidation branch from `main`/`master`
 4. Applies each PR's dependency update natively:
-   - **Go**: `go get <module>@<version>`, then `go mod tidy` (preserves the original `go` version directive)
+   - **Go**: `go get <module>@<version>`, then `go mod tidy` (preserves the original `go` version directive). If the bot PR instead bumps the `go` directive itself (a Go toolchain version bump, not a module dependency), the script updates go.mod's `go` line to the new version *and* syncs the hummingbird builder image tag (`registry.access.redhat.com/hi/go:<version>...`) to match, across any `Dockerfile*` and `.tekton/*.yaml` files in the repo. The version is swapped in place regardless of variant suffix — `-fips-builder`, `-builder`, `-fips`, or no suffix at all — so the build image never drifts out of sync with the toolchain version declared in go.mod
    - **Python**: Updates version in `Pipfile`, then `pipenv lock`
    - **npm**: Updates version in `package.json`, then `npm install`
    - **Unknown**: Falls back to `git apply --3way` patch application

@@ -409,28 +409,40 @@ class DependencyConsolidator:
             go_mod_path = os.path.join(dep_dir, "go.mod")
 
             if dep_type == "go" and os.path.exists(go_mod_path):
-                dep_spec = self._extract_go_dep_from_title(pr.title)
-                if not dep_spec:
-                    print(f"    Title parsing failed, checking PR content...")
-                    dep_spec = self._extract_go_dep_from_pr_content(pr.number)
-                    if not dep_spec:
-                        print(f"    Warning: Could not extract dep from title or PR content, skipping")
-                        continue
+                go_version_bump = self._extract_go_version_bump(pr.number) if dep_dir == "." else ""
 
-                print(f"    Running go get {dep_spec} in {dep_dir}...")
-                get_result = subprocess.run(
-                    ["go", "get", dep_spec],
-                    capture_output=True,
-                    text=True,
-                    cwd=dep_dir if dep_dir != "." else None,
-                )
-                if get_result.returncode != 0:
-                    print(f"    Warning: go get failed: {get_result.stderr.strip()}")
-                    continue
-                if original_go_version and dep_dir == ".":
-                    self._restore_go_version(original_go_version)
-                applied = True
-                go_dirs.add(dep_dir)
+                if go_version_bump:
+                    print(f"    Detected Go version bump to {go_version_bump}")
+                    self._restore_go_version(go_version_bump)
+                    # Reflect the new version in `original_go_version` so the later
+                    # `go mod tidy` restore step (below) doesn't revert this bump.
+                    original_go_version = go_version_bump
+                    self._bump_hummingbird_image(go_version_bump)
+                    applied = True
+                    go_dirs.add(dep_dir)
+                else:
+                    dep_spec = self._extract_go_dep_from_title(pr.title)
+                    if not dep_spec:
+                        print(f"    Title parsing failed, checking PR content...")
+                        dep_spec = self._extract_go_dep_from_pr_content(pr.number)
+                        if not dep_spec:
+                            print(f"    Warning: Could not extract dep from title or PR content, skipping")
+                            continue
+
+                    print(f"    Running go get {dep_spec} in {dep_dir}...")
+                    get_result = subprocess.run(
+                        ["go", "get", dep_spec],
+                        capture_output=True,
+                        text=True,
+                        cwd=dep_dir if dep_dir != "." else None,
+                    )
+                    if get_result.returncode != 0:
+                        print(f"    Warning: go get failed: {get_result.stderr.strip()}")
+                        continue
+                    if original_go_version and dep_dir == ".":
+                        self._restore_go_version(original_go_version)
+                    applied = True
+                    go_dirs.add(dep_dir)
 
             elif dep_type == "python" and os.path.exists(pipfile_path):
                 package, version = self._extract_python_dep_from_title(pr.title)
@@ -552,6 +564,76 @@ class DependencyConsolidator:
                 print(f"  Restored go version to {version}")
         except (FileNotFoundError, IOError) as e:
             print(f"  Warning: Could not restore go version: {e}")
+
+    def _extract_go_version_bump(self, pr_number: int) -> str:
+        """Return the new version if this PR bumps go.mod's `go` directive itself.
+
+        This is distinct from a regular Go module dependency bump: a `go get`
+        of a dependency never touches this line, so a diff that changes it
+        means the bot PR is bumping the Go toolchain version, not a module.
+        """
+        import re
+
+        try:
+            diff_result = self._run_gh("pr", "diff", str(pr_number), "--repo", self.upstream_repo)
+        except subprocess.TimeoutExpired:
+            return ""
+        if diff_result.returncode != 0:
+            return ""
+
+        in_go_mod = False
+        for line in diff_result.stdout.split("\n"):
+            if line.startswith("+++"):
+                in_go_mod = line.rstrip().endswith("go.mod")
+                continue
+            if in_go_mod and line.startswith("+"):
+                match = re.match(r"^\+go\s+(\d+\.\d+(?:\.\d+)?)\s*$", line)
+                if match:
+                    return match.group(1)
+        return ""
+
+    def _bump_hummingbird_image(self, new_version: str) -> list[str]:
+        """Sync the hummingbird Go builder image tag to a bumped go.mod version.
+
+        Konflux Dockerfiles/manifests pin the builder image under
+        `registry.access.redhat.com/hi/go`, tagged with the Go version plus an
+        arbitrary variant suffix — e.g. `1.26.6-fips-builder`, `1.26.6-builder`,
+        `1.26.6-fips`, or just `1.26.6` with no variant at all. The variant
+        isn't fixed, so the version number is matched and replaced wherever it
+        appears in the tag rather than assuming any particular suffix, and
+        whatever comes before/after it (including a "neither" case) is
+        preserved untouched. When a bot PR bumps go.mod's `go` directive, that
+        image tag would otherwise silently drift out of sync with the
+        toolchain actually used to build go.mod, so update it in lockstep.
+        """
+        import glob
+        import re
+
+        pattern = re.compile(r"(registry\.access\.redhat\.com/hi/go:)(\d+\.\d+(?:\.\d+)?)([\w.-]*)")
+
+        candidates = set()
+        for globpat in ("**/Dockerfile*", "**/.tekton/*.yaml", "**/.tekton/*.yml"):
+            candidates.update(glob.glob(globpat, recursive=True))
+
+        updated = []
+        for path in sorted(candidates):
+            try:
+                with open(path) as f:
+                    content = f.read()
+            except (FileNotFoundError, IOError):
+                continue
+
+            new_content = pattern.sub(rf"\g<1>{new_version}\g<3>", content)
+            if new_content != content:
+                with open(path, "w") as f:
+                    f.write(new_content)
+                updated.append(path)
+
+        if updated:
+            print(f"    Updated hummingbird image tag to {new_version} in: {', '.join(updated)}")
+        else:
+            print(f"    No hummingbird image references found to update")
+        return updated
 
     def _extract_go_dep_from_title(self, title: str) -> str:
         """Extract Go dependency spec (module@version) from PR title."""
