@@ -30,14 +30,17 @@ fabric-access-ai-dev/
 
 One instance = one workflow. `rbac-config` still starts from Jira. `rbac-config-pr-label` watches open GitHub PRs labeled `dev-bot`, creates a memory-server task, and pushes commits / review suggestions onto that same PR.
 
-To run the PR-label instance, deploy a second bot with the same image and:
+To run the PR-label instance, deploy a **second** bot with the same image. Do not copy the Jira bot's `BOT_LABEL` or `BOT_INSTANCE_ID`.
 
-| Parameter | Example |
-|-----------|---------|
-| `BOT_CONFIG_PATH` | `instance/rbac-config-pr-label` |
-| `BOT_NAME` | a name distinct from the Jira bot |
-| `BOT_LABEL` | `dev-bot` (the GitHub PR label) |
-| `BOT_INSTANCE_ID` | a distinct id from the Jira instance |
+| Parameter | Required | Example |
+|-----------|----------|---------|
+| `BOT_CONFIG_PATH` | yes | `instance/rbac-config-pr-label` |
+| `BOT_NAME` | yes | a name distinct from the Jira bot (e.g. `devbot-fabric-access-pr-label`) |
+| `BOT_INSTANCE_ID` | yes, **must differ** from the Jira and Konflux bots | e.g. `fabric-access-pr-label` |
+| `BOT_PR_LABEL` | no (defaults to `dev-bot`) | GitHub PR label to watch |
+| `BOT_LABEL` | ignored by this workflow | leave as-is; it is the Jira ticket label |
+
+The GitHub label is `BOT_PR_LABEL`, not `BOT_LABEL`, so a copied Jira deploy target cannot accidentally search for the Jira label on GitHub.
 
 No Dockerfile in this repo — Konflux points at `dev-bot/Dockerfile.runner`.
 

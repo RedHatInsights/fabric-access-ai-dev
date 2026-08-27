@@ -19,8 +19,10 @@ sys.path.insert(0, str(SHARED_DIR))
 from labeled_prs import (  # noqa: E402
     TASK_KEY_PREFIX,
     github_repos,
+    is_foreign_pr,
     is_tracked,
     main,
+    own_tasks,
     task_key,
 )
 
@@ -66,7 +68,8 @@ def test_github_repos_skips_gitlab():
 @pytest.fixture
 def env(monkeypatch):
     monkeypatch.setattr("labeled_prs.save_state", lambda x: None)
-    monkeypatch.setattr("labeled_prs.BOT_LABEL", "dev-bot")
+    monkeypatch.setattr("labeled_prs.PR_LABEL", "dev-bot")
+    monkeypatch.setenv("GH_USER_NAME", "platex-rehor-bot")
 
 
 def _run_main(monkeypatch, *, tasks=None, capacity=(0, 10), repos=None, labeled=None):
@@ -89,8 +92,10 @@ def test_main_skip_no_repos(env, monkeypatch, capsys):
 
 
 def test_main_skip_at_capacity(env, monkeypatch, capsys):
+    tasks = [{"external_key": f"pr-label:org/repo#{i}", "status": "pr_open"} for i in range(10)]
     _run_main(
         monkeypatch,
+        tasks=tasks,
         capacity=(10, 10),
         repos={"insights-rbac": {"upstream": "https://github.com/project-kessel/insights-rbac.git"}},
     )
@@ -165,3 +170,76 @@ def test_main_start_with_new_labeled_pr(env, monkeypatch, capsys):
 
 def test_task_key_prefix_constant():
     assert TASK_KEY_PREFIX == "pr-label:"
+
+
+def test_own_tasks_keeps_only_pr_label_keys():
+    tasks = [
+        {"external_key": "RHCLOUD-1", "status": "pr_open"},
+        {"external_key": "pr-label:org/repo#1", "status": "pr_open"},
+        {"external_key": "konflux-pr-squash:org/repo", "status": "pr_open"},
+    ]
+    assert own_tasks(tasks) == [{"external_key": "pr-label:org/repo#1", "status": "pr_open"}]
+
+
+def test_is_foreign_pr_skips_jira_bot_branch():
+    assert is_foreign_pr({"headRefName": "bot/RHCLOUD-123", "author": {"login": "alice"}}) is True
+
+
+def test_is_foreign_pr_skips_konflux_consolidate_branch():
+    assert is_foreign_pr({"headRefName": "chore/consolidate-go-deps", "author": {"login": "alice"}}) is True
+
+
+def test_is_foreign_pr_skips_bot_author(monkeypatch):
+    monkeypatch.setenv("GH_USER_NAME", "platex-rehor-bot")
+    assert is_foreign_pr({"headRefName": "fix/ci", "author": {"login": "platex-rehor-bot"}}) is True
+
+
+def test_is_foreign_pr_keeps_human_pr():
+    assert is_foreign_pr({"headRefName": "alice/feature", "author": {"login": "alice"}}) is False
+
+
+def test_main_skips_jira_bot_pr(env, monkeypatch, capsys):
+    _run_main(
+        monkeypatch,
+        repos={"insights-rbac": {"upstream": "https://github.com/project-kessel/insights-rbac.git"}},
+        labeled=[
+            {
+                "number": 5,
+                "title": "RHCLOUD-1 fix",
+                "url": "https://github.com/project-kessel/insights-rbac/pull/5",
+                "headRefName": "bot/RHCLOUD-1",
+                "author": {"login": "platex-rehor-bot"},
+                "isCrossRepository": True,
+                "maintainerCanModify": True,
+            }
+        ],
+    )
+    main()
+    out = json.loads(capsys.readouterr().out.strip())
+    assert out["status"] == "skip"
+    assert "No open PRs" in out["content"] or "already tracked" in out["content"] or "other-bot" in out["content"]
+
+
+def test_main_ignores_jira_bot_label_env(env, monkeypatch, capsys):
+    monkeypatch.setenv("BOT_LABEL", "hcc-ai-platform-accessmanagement")
+    monkeypatch.setattr("labeled_prs.PR_LABEL", "dev-bot")
+    _run_main(
+        monkeypatch,
+        repos={"insights-rbac": {"upstream": "https://github.com/project-kessel/insights-rbac.git"}},
+        labeled=[
+            {
+                "number": 99,
+                "title": "Add feature",
+                "url": "https://github.com/project-kessel/insights-rbac/pull/99",
+                "headRefName": "alice/feature",
+                "author": {"login": "alice"},
+                "isCrossRepository": False,
+                "maintainerCanModify": True,
+            }
+        ],
+    )
+    main()
+    out = json.loads(capsys.readouterr().out.strip())
+    assert out["status"] == "start"
+    payload = json.loads(out["content"])
+    assert payload["label"] == "dev-bot"
