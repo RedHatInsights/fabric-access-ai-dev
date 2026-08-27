@@ -1,0 +1,22 @@
+name: pr-label
+type: workflow
+description: Pick up GitHub PRs labeled for the bot, push commits onto them, and address review comments
+
+preflight:
+  - 01-gh-pr-status.py
+  - 02-labeled-prs.py
+
+shared_skills:
+  - push-and-pr
+
+provides:
+  claude_md: CLAUDE.md
+
+requires:
+  mcp_servers:
+    - bot-memory
+  env_vars:
+    - BOT_INSTANCE_ID
+  optional_env_vars:
+    - BOT_LABEL
+    - SLACK_WEBHOOK_URL

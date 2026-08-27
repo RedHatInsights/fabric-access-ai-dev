@@ -13,15 +13,31 @@ fabric-access-ai-dev/
 ├── dev-bot/        # Git submodule (don't modify)
 ├── setup.sh        # Custom build steps (dnf install, pip install, etc.)
 ├── instance/       # Extra files COPYed into the image
-│   └── rbac-config/
+│   ├── rbac-config/              # Jira-sprint instance
+│   │   └── agent/
+│   │       ├── instance.yaml        # workflow: jira-sprint
+│   │       ├── project-repos.json
+│   │       ├── mcp.json
+│   │       └── personas/
+│   ├── rbac-config-konflux/      # Konflux PR-squash instance
+│   └── rbac-config-pr-label/     # GitHub PR-label instance (label: dev-bot)
 │       └── agent/
-│           ├── project-repos.json   # Repos the bot works on
-│           ├── mcp.json             # MCP server config
-│           └── personas/
-│               └── rbac/
-│                   └── prompt.md    # RBAC coding standards
+│           ├── instance.yaml        # workflow: ./workflows/pr-label
+│           ├── project-repos.json
+│           └── workflows/pr-label/
 └── README.md
 ```
+
+One instance = one workflow. `rbac-config` still starts from Jira. `rbac-config-pr-label` watches open GitHub PRs labeled `dev-bot`, creates a memory-server task, and pushes commits / review suggestions onto that same PR.
+
+To run the PR-label instance, deploy a second bot with the same image and:
+
+| Parameter | Example |
+|-----------|---------|
+| `BOT_CONFIG_PATH` | `instance/rbac-config-pr-label` |
+| `BOT_NAME` | a name distinct from the Jira bot |
+| `BOT_LABEL` | `dev-bot` (the GitHub PR label) |
+| `BOT_INSTANCE_ID` | a distinct id from the Jira instance |
 
 No Dockerfile in this repo — Konflux points at `dev-bot/Dockerfile.runner`.
 
