@@ -1,0 +1,8 @@
+workflow: ./workflows/pr-label
+source: scheduled
+envs:
+  - slack
+  - container-scan
+  - go
+claude_md:
+  strategy: ignore

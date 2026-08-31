@@ -13,15 +13,34 @@ fabric-access-ai-dev/
 ├── dev-bot/        # Git submodule (don't modify)
 ├── setup.sh        # Custom build steps (dnf install, pip install, etc.)
 ├── instance/       # Extra files COPYed into the image
-│   └── rbac-config/
+│   ├── rbac-config/              # Jira-sprint instance
+│   │   └── agent/
+│   │       ├── instance.yaml        # workflow: jira-sprint
+│   │       ├── project-repos.json
+│   │       ├── mcp.json
+│   │       └── personas/
+│   ├── rbac-config-konflux/      # Konflux PR-squash instance
+│   └── rbac-config-pr-label/     # GitHub PR-label instance (label: dev-bot)
 │       └── agent/
-│           ├── project-repos.json   # Repos the bot works on
-│           ├── mcp.json             # MCP server config
-│           └── personas/
-│               └── rbac/
-│                   └── prompt.md    # RBAC coding standards
+│           ├── instance.yaml        # workflow: ./workflows/pr-label
+│           ├── project-repos.json
+│           └── workflows/pr-label/
 └── README.md
 ```
+
+One instance = one workflow. `rbac-config` still starts from Jira. `rbac-config-pr-label` watches open GitHub PRs labeled `dev-bot`, creates a memory-server task, and pushes commits / review suggestions onto that same PR.
+
+To run the PR-label instance, deploy a **second** bot with the same image. Do not copy the Jira bot's `BOT_LABEL` or `BOT_INSTANCE_ID`.
+
+| Parameter | Required | Example |
+|-----------|----------|---------|
+| `BOT_CONFIG_PATH` | yes | `instance/rbac-config-pr-label` |
+| `BOT_NAME` | yes | a name distinct from the Jira bot (e.g. `devbot-fabric-access-pr-label`) |
+| `BOT_INSTANCE_ID` | yes, **must differ** from the Jira and Konflux bots | e.g. `fabric-access-pr-label` |
+| `BOT_PR_LABEL` | no (defaults to `dev-bot`) | GitHub PR label to watch |
+| `BOT_LABEL` | ignored by this workflow | leave as-is; it is the Jira ticket label |
+
+The GitHub label is `BOT_PR_LABEL`, not `BOT_LABEL`, so a copied Jira deploy target cannot accidentally search for the Jira label on GitHub.
 
 No Dockerfile in this repo — Konflux points at `dev-bot/Dockerfile.runner`.
 
