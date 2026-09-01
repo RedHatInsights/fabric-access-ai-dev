@@ -20,7 +20,8 @@ fabric-access-ai-dev/
 │   │       ├── mcp.json
 │   │       └── personas/
 │   ├── rbac-config-konflux/      # Konflux PR-squash instance
-│   └── rbac-config-pr-label/     # GitHub PR-label instance (label: dev-bot)
+│   ├── rbac-config-pr-label/     # GitHub PR-label instance (label: dev-bot)
+│   └── jira-cve-backlog/              # CVE backlog patching instance
 │       └── agent/
 │           ├── instance.yaml        # workflow: ./workflows/pr-label
 │           ├── project-repos.json
@@ -28,9 +29,9 @@ fabric-access-ai-dev/
 └── README.md
 ```
 
-One instance = one workflow. `rbac-config` still starts from Jira. `rbac-config-pr-label` watches open GitHub PRs labeled `dev-bot`, creates a memory-server task, and pushes commits / review suggestions onto that same PR.
+One instance = one workflow. `rbac-config` still starts from Jira. `rbac-config-pr-label` watches open GitHub PRs labeled `dev-bot`, creates a memory-server task, and pushes commits / review suggestions onto that same PR. `jira-cve-backlog` scans a JIRA backlog for CVE tickets, deduplicates them, and patches affected repos by upgrading vulnerable dependencies (Go, Python, npm) and container base images (UBI9/Red Hat).
 
-To run the PR-label instance, deploy a **second** bot with the same image. Do not copy the Jira bot's `BOT_LABEL` or `BOT_INSTANCE_ID`.
+To run the PR-label or CVE-backlog instance, deploy a separate bot with the same image. Do not copy another bot's `BOT_LABEL` or `BOT_INSTANCE_ID`.
 
 | Parameter | Required | Example |
 |-----------|----------|---------|
@@ -41,6 +42,18 @@ To run the PR-label instance, deploy a **second** bot with the same image. Do no
 | `BOT_LABEL` | ignored by this workflow | leave as-is; it is the Jira ticket label |
 
 The GitHub label is `BOT_PR_LABEL`, not `BOT_LABEL`, so a copied Jira deploy target cannot accidentally search for the Jira label on GitHub.
+
+### CVE Backlog instance
+
+| Parameter | Required | Example |
+|-----------|----------|---------|
+| `BOT_CONFIG_PATH` | yes | `instance/jira-cve-backlog` |
+| `BOT_NAME` | yes | a name distinct from other bots (e.g. `devbot-fabric-access-jira-cve-backlog`) |
+| `BOT_INSTANCE_ID` | yes, **must differ** from other bots | e.g. `fabric-access-jira-cve-backlog` |
+| `JIRA_URL` | yes | base URL of the JIRA instance |
+| `JIRA_TOKEN` | yes | JIRA personal access token or API token |
+
+JIRA project, JQL filter, board ID, and repo mappings are configured in `instance/jira-cve-backlog/agent/jira-config.json`. Target repos are listed in `instance/jira-cve-backlog/agent/project-repos.json`.
 
 No Dockerfile in this repo — Konflux points at `dev-bot/Dockerfile.runner`.
 
