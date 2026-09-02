@@ -1,0 +1,39 @@
+{
+  "repos": [
+    {
+      "repo": "project-kessel/insights-rbac",
+      "bot_url": "https://github.example/automation/insights-rbac.git",
+      "prs": [
+        {
+          "number": 3341,
+          "title": "chore(deps): update dependency app-common-python to v0.3.0",
+          "headRefName": "konflux/mintmaker/master/app-common-python-0.x"
+        },
+        {
+          "number": 3282,
+          "title": "chore(deps): update dependency django to v6.1",
+          "headRefName": "konflux/mintmaker/master/django-6.x"
+        }
+      ]
+    },
+    {
+      "repo": "RedHatInsights/entitlements-api-go",
+      "bot_url": "https://github.example/automation/entitlements-api-go.git",
+      "prs": [
+        {
+          "number": 1075,
+          "title": "chore(deps): update github.com/google/pprof digest to 4d45320",
+          "headRefName": "konflux/mintmaker/main/github.com-google-pprof-digest"
+        },
+        {
+          "number": 984,
+          "title": "chore(deps): update module github.com/cenkalti/backoff/v4 to v7",
+          "headRefName": "konflux/mintmaker/main/github.com-cenkalti-backoff-v4-7.x"
+        }
+      ]
+    }
+  ],
+  "expected": {
+    "status": "skip"
+  }
+}
