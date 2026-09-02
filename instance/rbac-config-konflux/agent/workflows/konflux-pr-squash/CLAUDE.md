@@ -12,13 +12,15 @@ Two preflight scripts run in order:
 
 The `02-check-bot-prs.py` script validates:
 - Agent is not at task capacity
-- At least one repo in `project-repos.json` has 2+ open bot PRs to consolidate
+- At least one repo in `project-repos.json` has 2+ open bot PRs in the same ecosystem and bump tier to consolidate
 - No existing consolidation task is already in progress for that repo
 - No open PR already exists in the repo with a `chore(deps): consolidate` title or `chore/consolidate-*` branch (checked directly against GitHub — a backstop for when a prior run's `task_add` never landed, since the task store is otherwise the only de-dup signal and originals are kept open via `--keep-originals`)
 
-The preflight reads repos from `project-repos.json` (in the agent directory) and checks each GitHub repo for open bot PRs. Non-GitHub repos (e.g. GitLab) are skipped. The output contains a `repos` array — each entry has `repo` (owner/repo), `bot_url`, `pr_count`, `prs`, and `task_key`. Process each repo entry by passing `--repo <owner/repo>` to the consolidation script.
+The preflight reads repos from `project-repos.json` (in the agent directory) and checks each GitHub repo for open bot PRs. Non-GitHub repos (e.g. GitLab) are skipped. It groups PRs by ecosystem and bump tier, and emits only groups with at least two PRs. The output contains a `repos` array — each entry has `repo` (owner/repo), `bot_url`, eligible `pr_count`, eligible `prs`, `groups` (ecosystem/tier/count), and `task_key`. Process each repo entry by passing `--repo <owner/repo>` to the consolidation script.
 
 If preflight passes, all prerequisites are met. Do not re-check them.
+
+If preflight reports no same-ecosystem/tier groups, output `skip` is expected even when a repo has two or more total bot PRs. Do not start a session for cross-tier or unknown-tier-only PRs.
 
 ## How to Run
 
