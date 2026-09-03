@@ -9,7 +9,7 @@ import pytest
 
 WORKFLOW_DIR = Path(__file__).resolve().parent.parent.parent
 REPO_ROOT = Path(__file__).resolve()
-while not (REPO_ROOT / "dev-bot").is_dir() and REPO_ROOT != REPO_ROOT.parent:
+while not (REPO_ROOT / "dev-bot").is_dir() and REPO_ROOT.parent != REPO_ROOT:
     REPO_ROOT = REPO_ROOT.parent
 SHARED_DIR = REPO_ROOT / "dev-bot" / "presets" / "shared" / "preflight"
 sys.path.insert(0, str(WORKFLOW_DIR))
