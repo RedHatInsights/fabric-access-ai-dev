@@ -51,7 +51,7 @@ The GitHub label is `BOT_PR_LABEL`, not `BOT_LABEL`, so a copied Jira deploy tar
 | `BOT_NAME` | yes | a name distinct from other bots (e.g. `devbot-fabric-access-jira-cve-backlog`) |
 | `BOT_INSTANCE_ID` | yes, **must differ** from other bots | e.g. `fabric-access-jira-cve-backlog` |
 | `JIRA_URL` | yes | base URL of the JIRA instance |
-| `JIRA_TOKEN` | yes | JIRA personal access token or API token |
+| `JIRA_API_TOKEN` | yes | JIRA personal access token or API token |
 
 JIRA project, JQL filter, board ID, and repo mappings are configured in `instance/jira-cve-backlog/agent/jira-config.json`. Target repos are listed in `instance/jira-cve-backlog/agent/project-repos.json`.
 
