@@ -30,7 +30,7 @@ def find_bot_prs(repo_nwo: str, bot_author: str) -> list[dict]:
                 "--state",
                 "open",
                 "--json",
-                "number,title,headRefName,url,labels",
+                "number,title,headRefName,url,labels,body",
             ],
             capture_output=True,
             text=True,
@@ -126,8 +126,53 @@ def _version(value: str) -> tuple[int, int, int] | None:
     return major, minor, patch
 
 
-def _tier(title: str) -> str:
-    """Classify bump tier conservatively from title-only preflight data."""
+_VERSION_TOKEN = r"v?\d+(?:\.\d+){1,2}(?:[-+][\w.-]+)?"
+
+# Renovate/Mintmaker PR bodies embed the current->target version in a table
+# cell, typically as backtick-quoted values joined by an arrow (`1.2.3` ->
+# `1.4.0`), but bare arrows and "from X to Y" phrasing also show up. Try each
+# in order and take the first match.
+_BODY_VERSION_PATTERNS = [
+    re.compile(rf"`({_VERSION_TOKEN})`\s*(?:->|→)\s*`({_VERSION_TOKEN})`", re.IGNORECASE),
+    re.compile(rf"({_VERSION_TOKEN})\s*(?:->|→)\s*({_VERSION_TOKEN})", re.IGNORECASE),
+    re.compile(rf"\bfrom\s+({_VERSION_TOKEN})\s+to\s+({_VERSION_TOKEN})\b", re.IGNORECASE),
+]
+
+
+def _body_versions(body: str) -> tuple[str, str] | None:
+    """Extract the (old, new) version pair from a bot PR body, if present.
+
+    Title-only classification can't tell major/minor/patch apart when the
+    title only states the target version (e.g. "Update dependency X to
+    v2.69.1") — this is the common Renovate/Mintmaker title format. The PR
+    body's changelog table almost always states both the current and target
+    version, so fall back to it before giving up and calling the tier
+    "unknown".
+    """
+    if not body:
+        return None
+    for pattern in _BODY_VERSION_PATTERNS:
+        match = pattern.search(body)
+        if match:
+            return match.group(1), match.group(2)
+    return None
+
+
+def _tier_from_versions(old: str, new: str) -> str | None:
+    old_version, new_version = _version(old), _version(new)
+    if not old_version or not new_version:
+        return None
+    if old_version[0] != new_version[0] or (old_version[0] == 0 and old_version[1] != new_version[1]):
+        return "major"
+    if old_version[1] != new_version[1]:
+        return "minor"
+    if old_version[2] != new_version[2]:
+        return "patch"
+    return None
+
+
+def _tier(title: str, body: str = "") -> str:
+    """Classify bump tier, preferring title data and falling back to the PR body."""
     title_lower = title.lower()
     if re.search(r"(?:^|[\s(:])[^\s:]+!:", title_lower) or "breaking" in title_lower:
         return "major"
@@ -138,19 +183,21 @@ def _tier(title: str) -> str:
     if path_bump and path_bump.group(1) != path_bump.group(2):
         return "major"
 
-    versions = re.findall(r"v?\d+(?:\.\d+){1,2}(?:[-+][\w.-]+)?", title_lower)
+    versions = re.findall(_VERSION_TOKEN, title_lower)
     if len(versions) >= 2:
-        old, new = (_version(value) for value in versions[-2:])
-        if old and new:
-            if old[0] != new[0] or (old[0] == 0 and old[1] != new[1]):
-                return "major"
-            if old[1] != new[1]:
-                return "minor"
-            if old[2] != new[2]:
-                return "patch"
+        tier = _tier_from_versions(*versions[-2:])
+        if tier:
+            return tier
+
+    body_versions = _body_versions(body)
+    if body_versions:
+        tier = _tier_from_versions(*body_versions)
+        if tier:
+            return tier
 
     # 0.x target bumps are breaking by project policy. Other target-only
-    # versions are unknown because source version is unavailable preflight.
+    # versions are unknown because no source version could be determined
+    # from the title or body.
     target_versions = [_version(value) for value in versions]
     if target_versions and target_versions[-1] and target_versions[-1][0] == 0:
         return "major"
@@ -161,7 +208,7 @@ def _consolidatable_groups(prs: list[dict]) -> list[dict]:
     """Return only ecosystem/tier groups containing at least two PRs."""
     groups: defaultdict[tuple[str, str], list[dict]] = defaultdict(list)
     for pr in prs:
-        group = (_ecosystem(pr.get("title", "")), _tier(pr.get("title", "")))
+        group = (_ecosystem(pr.get("title", "")), _tier(pr.get("title", ""), pr.get("body", "")))
         if group[1] != "unknown":
             groups[group].append(pr)
 

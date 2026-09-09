@@ -44,6 +44,37 @@ def test_same_tier_prs_are_consolidatable():
     assert groups == [{"ecosystem": "python", "tier": "patch", "prs": prs}]
 
 
+def test_single_version_titles_use_body_for_tier():
+    """Renovate-style titles ("Update dependency X to vY") only state the
+    target version, so title-only classification stalls at "unknown" (see
+    cycle-39829). The PR body's changelog table states old -> new, which is
+    enough to classify these as the same tier and consolidate them.
+    """
+    prs = [
+        {
+            "title": "Update dependency sentry-sdk to v2.69.1",
+            "body": "| datasource | package | change |\n|---|---|---|\n| pypi | sentry-sdk | `2.69.0` -> `2.69.1` |",
+        },
+        {
+            "title": "Update dependency djangorestframework to v3.18.1",
+            "body": "| datasource | package | change |\n|---|---|---|\n| pypi | djangorestframework | `3.18.0` -> `3.18.1` |",
+        },
+    ]
+
+    groups = check_bot_prs._consolidatable_groups(prs)
+
+    assert groups == [{"ecosystem": "python", "tier": "patch", "prs": prs}]
+
+
+def test_single_version_title_without_body_data_stays_unknown():
+    prs = [
+        {"title": "Update dependency uuid-utils to v1"},
+        {"title": "Update dependency mcp to v2.2.0"},
+    ]
+
+    assert check_bot_prs._consolidatable_groups(prs) == []
+
+
 def test_cycle_39829_emits_skip(cycle_39829, monkeypatch, capsys):
     repo_by_name = {repo["repo"]: repo for repo in cycle_39829["repos"]}
     repos = {name: {"url": data["bot_url"], "upstream": data["repo"]} for name, data in repo_by_name.items()}
