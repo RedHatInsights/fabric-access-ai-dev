@@ -172,6 +172,63 @@ def _body_versions(body: str) -> tuple[str, str] | None:
     return None
 
 
+_MANIFEST_FILES = {
+    "python": ("Pipfile",),
+    "npm": ("package.json",),
+    "go": ("go.mod",),
+}
+
+
+def _diff_versions(repo_nwo: str, pr_number: int, ecosystem: str) -> tuple[str, str] | None:
+    """Extract the real (old, new) version by diffing the PR's manifest file.
+
+    Titles like "Update dependency X to vY" only state the target version, and
+    body changelog tables are inconsistently formatted or missing entirely
+    (see _body_versions). The PR diff's hunk for the actual dependency
+    manifest always contains the true before/after version strings, so this
+    is tried before falling back to parsing prose in title/body.
+    """
+    manifest_names = _MANIFEST_FILES.get(ecosystem)
+    if not manifest_names:
+        return None
+
+    try:
+        result = subprocess.run(
+            ["gh", "pr", "diff", str(pr_number), "--repo", repo_nwo],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    in_manifest = False
+    old_version = new_version = None
+    for line in result.stdout.split("\n"):
+        if line.startswith("+++") or line.startswith("---"):
+            in_manifest = any(line.rstrip().endswith(name) for name in manifest_names)
+            continue
+        if not in_manifest:
+            continue
+        if old_version is None and line.startswith("-") and not line.startswith("---"):
+            match = re.search(_VERSION_TOKEN, line)
+            if match:
+                old_version = match.group(0)
+        elif new_version is None and line.startswith("+") and not line.startswith("+++"):
+            match = re.search(_VERSION_TOKEN, line)
+            if match:
+                new_version = match.group(0)
+        if old_version and new_version:
+            break
+
+    if old_version and new_version:
+        return old_version, new_version
+    return None
+
+
 def _tier_from_versions(old: str, new: str) -> str | None:
     old_version, new_version = _version(old), _version(new)
     if not old_version or not new_version:
@@ -185,8 +242,15 @@ def _tier_from_versions(old: str, new: str) -> str | None:
     return None
 
 
-def _tier(title: str, body: str = "") -> str:
-    """Classify bump tier, preferring title data and falling back to the PR body."""
+def _tier(title: str, body: str = "", diff_versions: tuple[str, str] | None = None) -> str:
+    """Classify bump tier, preferring the real diff versions over title/body prose.
+
+    `diff_versions` (when available) is the actual old/new version pulled
+    straight from the PR's manifest diff (see `_diff_versions`) and takes
+    priority over title/body text parsing, which only ever sees what the bot
+    chose to write in prose and can't tell tiers apart when the title states
+    just the target version.
+    """
     title_lower = title.lower()
     if re.search(r"(?:^|[\s(:])[^\s:]+!:", title_lower) or "breaking" in title_lower:
         return "major"
@@ -196,6 +260,11 @@ def _tier(title: str, body: str = "") -> str:
     path_bump = re.search(r"/v(\d+)\b.*?\bto\s+v?(\d+)", title_lower)
     if path_bump and path_bump.group(1) != path_bump.group(2):
         return "major"
+
+    if diff_versions:
+        tier = _tier_from_versions(*diff_versions)
+        if tier:
+            return tier
 
     versions = re.findall(_VERSION_TOKEN, title_lower)
     if len(versions) >= 2:
@@ -218,19 +287,51 @@ def _tier(title: str, body: str = "") -> str:
     return "unknown"
 
 
-def _consolidatable_groups(prs: list[dict]) -> list[dict]:
-    """Return only ecosystem/tier groups containing at least two PRs."""
-    groups: defaultdict[tuple[str, str], list[dict]] = defaultdict(list)
-    for pr in prs:
-        group = (_ecosystem(pr.get("title", "")), _tier(pr.get("title", ""), pr.get("body", "")))
-        if group[1] != "unknown":
-            groups[group].append(pr)
+def _consolidatable_groups(prs: list[dict], repo_nwo: str = "") -> list[dict]:
+    """Group PRs into consolidation batches of at least two PRs each.
 
-    return [
-        {"ecosystem": ecosystem, "tier": tier, "prs": grouped_prs}
-        for (ecosystem, tier), grouped_prs in groups.items()
-        if len(grouped_prs) >= 2
-    ]
+    Majors are always isolated: they only ever batch with other majors of the
+    same ecosystem, never with minor/patch PRs, no matter how that affects
+    batch size — a major bump needs its own breaking-change investigation
+    (see CLAUDE.md), and folding it into an otherwise-safe patch batch would
+    force that investigation onto the whole batch.
+
+    Minor and patch PRs combine into a single ecosystem-wide batch whenever
+    both are present — the combined batch is always a superset of either
+    tier alone, so this consolidates strictly more than treating them as two
+    separate (and possibly sub-threshold) tier batches. The combined batch is
+    tagged "minor" so it still gets the more cautious minor-bump handling
+    (code-change investigation) rather than being treated as a bare patch
+    batch. When only one of minor/patch is present, it's grouped on its own
+    as before.
+    """
+    tiered: defaultdict[tuple[str, str], list[dict]] = defaultdict(list)
+    for pr in prs:
+        title = pr.get("title", "")
+        ecosystem = _ecosystem(title)
+        diff_versions = _diff_versions(repo_nwo, pr["number"], ecosystem) if repo_nwo else None
+        tier = _tier(title, pr.get("body", ""), diff_versions)
+        if tier != "unknown":
+            tiered[(ecosystem, tier)].append(pr)
+
+    groups = []
+    for ecosystem in {eco for eco, _ in tiered}:
+        major_prs = tiered.get((ecosystem, "major"), [])
+        minor_prs = tiered.get((ecosystem, "minor"), [])
+        patch_prs = tiered.get((ecosystem, "patch"), [])
+
+        if len(major_prs) >= 2:
+            groups.append({"ecosystem": ecosystem, "tier": "major", "prs": major_prs})
+
+        if minor_prs and patch_prs and len(minor_prs) + len(patch_prs) >= 2:
+            groups.append({"ecosystem": ecosystem, "tier": "minor", "prs": minor_prs + patch_prs})
+        else:
+            if len(minor_prs) >= 2:
+                groups.append({"ecosystem": ecosystem, "tier": "minor", "prs": minor_prs})
+            if len(patch_prs) >= 2:
+                groups.append({"ecosystem": ecosystem, "tier": "patch", "prs": patch_prs})
+
+    return groups
 
 
 def main():
@@ -268,7 +369,7 @@ def main():
             continue
 
         prs = find_bot_prs(repo_nwo, BOT_AUTHOR)
-        groups = _consolidatable_groups(prs)
+        groups = _consolidatable_groups(prs, repo_nwo)
         if groups:
             eligible_prs = [pr for group in groups for pr in group["prs"]]
             pr_summary = [
