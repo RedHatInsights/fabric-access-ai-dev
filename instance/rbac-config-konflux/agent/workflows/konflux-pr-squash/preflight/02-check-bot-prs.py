@@ -4,6 +4,7 @@
 Reads repos from project-repos.json and checks each for open bot PRs.
 """
 
+import html
 import json
 import re
 import subprocess
@@ -118,15 +119,20 @@ def _ecosystem(title: str) -> str:
     return "python"
 
 
-def _version(value: str) -> tuple[int, int, int] | None:
-    match = re.fullmatch(r"v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-+][\w.-]+)?", value)
+def _version(value: str) -> tuple[int, int, int, int] | None:
+    match = re.fullmatch(r"v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?(?:[-+][\w.-]+)?", value)
     if not match:
         return None
-    major, minor, patch = (int(part or 0) for part in match.groups())
-    return major, minor, patch
+    major, minor, patch, build = (int(part or 0) for part in match.groups())
+    return major, minor, patch, build
 
 
-_VERSION_TOKEN = r"v?\d+(?:\.\d+){1,2}(?:[-+][\w.-]+)?"
+# {1,3} (not {1,2}) so 4-segment versions like the date-suffixed stub packages
+# (types-pyyaml `6.0.12.20260906`) match as one token instead of truncating at
+# the third segment — a truncated match makes old/new compare equal even when
+# the (date) build segment actually changed, so the bump silently vanishes and
+# _tier_from_versions never sees a difference.
+_VERSION_TOKEN = r"v?\d+(?:\.\d+){1,3}(?:[-+][\w.-]+)?"
 
 # Renovate/Mintmaker PR bodies embed the current->target version in a table
 # cell, typically as backtick-quoted values joined by an arrow (`1.2.3` ->
@@ -148,11 +154,19 @@ def _body_versions(body: str) -> tuple[str, str] | None:
     body's changelog table almost always states both the current and target
     version, so fall back to it before giving up and calling the tier
     "unknown".
+
+    Renovate/Mintmaker often renders the changelog table as raw HTML rather
+    than markdown (`<code>1.2.3</code> -&gt; <code>1.4.0</code>` instead of
+    `` `1.2.3` -> `1.4.0` ``), which breaks every pattern above since the tag
+    text sits between the version and the arrow instead of whitespace. Strip
+    tags and unescape entities first so the patterns see plain "1.2.3 -> 1.4.0"
+    regardless of markup.
     """
     if not body:
         return None
+    text = html.unescape(re.sub(r"<[^>]+>", " ", body))
     for pattern in _BODY_VERSION_PATTERNS:
-        match = pattern.search(body)
+        match = pattern.search(text)
         if match:
             return match.group(1), match.group(2)
     return None
@@ -166,7 +180,7 @@ def _tier_from_versions(old: str, new: str) -> str | None:
         return "major"
     if old_version[1] != new_version[1]:
         return "minor"
-    if old_version[2] != new_version[2]:
+    if old_version[2] != new_version[2] or old_version[3] != new_version[3]:
         return "patch"
     return None
 
