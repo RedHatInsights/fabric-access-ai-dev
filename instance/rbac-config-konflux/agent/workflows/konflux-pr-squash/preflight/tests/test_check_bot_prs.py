@@ -137,9 +137,70 @@ def test_cycle_39829_emits_skip(cycle_39829, monkeypatch, capsys):
     monkeypatch.setattr(check_bot_prs, "upstream_repo", lambda name: (repos[name]["upstream"], "github"))
     monkeypatch.setattr(check_bot_prs, "has_open_consolidation_pr", lambda repo: False)
     monkeypatch.setattr(check_bot_prs, "find_bot_prs", lambda repo, author: repo_by_name[repo]["prs"])
+    # No manifest diff is available for this fixture (no real repo checkout) —
+    # fall back to title/body classification only, same as the direct
+    # _consolidatable_groups tests above.
+    monkeypatch.setattr(check_bot_prs, "_diff_versions", lambda repo_nwo, pr_number, ecosystem: None)
 
     check_bot_prs.main()
     output = json.loads(capsys.readouterr().out.strip())
 
     assert output["status"] == cycle_39829["expected"]["status"]
     assert "same ecosystem+tier" in output["content"]
+
+
+def test_minor_and_patch_combine_into_one_ecosystem_batch():
+    """A single minor bump and a single patch bump each fail the 2+ threshold
+    alone, but real-world Konflux batches often have exactly this shape (one
+    minor-tier framework bump alongside a patch-tier bump). Combining them
+    into one ecosystem batch — tagged with the more cautious "minor" handling
+    — still gets them consolidated instead of leaving both stranded as
+    singletons.
+    """
+    prs = [
+        {"title": "chore(deps): update dependency django from 6.0.2 to 6.1.0"},
+        {"title": "chore(deps): update dependency psycopg2 from 2.9.12 to 2.9.13"},
+    ]
+
+    groups = check_bot_prs._consolidatable_groups(prs)
+
+    assert groups == [{"ecosystem": "python", "tier": "minor", "prs": prs}]
+
+
+def test_major_bumps_never_combine_with_minor_or_patch():
+    """A singleton major bump must never get folded into a minor/patch
+    ecosystem batch just to hit the 2+ threshold — it needs its own
+    breaking-change investigation (see CLAUDE.md), which a patch batch
+    shouldn't be forced into.
+    """
+    prs = [
+        {"title": "chore(deps): update dependency alpha from 1.9.0 to 2.0.0"},
+        {"title": "chore(deps): update dependency beta from 2.0.0 to 2.0.1"},
+        {"title": "chore(deps): update dependency gamma from 3.0.0 to 3.0.1"},
+    ]
+
+    groups = check_bot_prs._consolidatable_groups(prs)
+
+    assert groups == [{"ecosystem": "python", "tier": "patch", "prs": [prs[1], prs[2]]}]
+
+
+def test_diff_versions_resolve_an_otherwise_unknown_tier(monkeypatch):
+    """Titles that only state the target version, with no body table either,
+    stay "unknown" from text parsing alone. When a repo checkout is
+    available, the PR diff's manifest hunk gives the real old -> new versions
+    directly and resolves the tier.
+    """
+    prs = [
+        {"number": 3376, "title": "Update dependency uuid-utils to v1"},
+        {"number": 3341, "title": "Update dependency app-common-python to v0.3.0"},
+    ]
+    fake_versions = {3376: ("0.9.0", "1.0.0"), 3341: ("0.2.5", "0.3.0")}
+    monkeypatch.setattr(
+        check_bot_prs,
+        "_diff_versions",
+        lambda repo_nwo, pr_number, ecosystem: fake_versions[pr_number],
+    )
+
+    groups = check_bot_prs._consolidatable_groups(prs, "org/repo")
+
+    assert groups == [{"ecosystem": "python", "tier": "major", "prs": prs}]
