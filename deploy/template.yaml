@@ -57,7 +57,7 @@ objects:
 #   2. NetworkPolicy (egress restricted to proxy + memory-server + DNS)
 #
 # Prerequisites (deployed by platform-frontend-ai-dev):
-#   - devbot-proxy       (ports 3128, 9090, 8443, 8444, 8446)
+#   - devbot-proxy       (ports 3128, 9090, 8443, 8444, 8446, 8447)
 #   - devbot-memory-server (port 8080)
 #   - devbot-secrets     (Vault secret with git identity + credentials)
 # ============================================================================
@@ -359,6 +359,8 @@ objects:
       - port: 8444
         protocol: TCP
       - port: 8446
+        protocol: TCP
+      - port: 8447
         protocol: TCP
     - to:
       - podSelector:
