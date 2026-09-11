@@ -15,8 +15,10 @@ provides:
 requires:
   mcp_servers:
     - bot-memory
+    - mcp-atlassian
   env_vars:
     - BOT_INSTANCE_ID
   optional_env_vars:
     - BOT_PR_LABEL
+    - BOT_JIRA_PROJECT
     - SLACK_WEBHOOK_URL

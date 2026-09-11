@@ -28,7 +28,7 @@ fabric-access-ai-dev/
 └── README.md
 ```
 
-One instance = one workflow. `rbac-config` still starts from Jira. `rbac-config-pr-label` watches open GitHub PRs labeled `dev-bot`, creates a memory-server task, and pushes commits / review suggestions onto that same PR.
+One instance = one workflow. `rbac-config` still starts from Jira and requires the Jira key in each PR title (for example, `[RHCLOUD-12345]`). `rbac-config-pr-label` watches open GitHub PRs labeled `dev-bot`, creates a memory-server task, and pushes commits / review suggestions onto that same PR. It creates and links a Jira Task when a labeled PR has no bracketed Jira key, and updates that Jira issue to **Release Pending** when the PR merges.
 
 To run the PR-label instance, deploy a **second** bot with the same image. Do not copy the Jira bot's `BOT_LABEL` or `BOT_INSTANCE_ID`.
 
