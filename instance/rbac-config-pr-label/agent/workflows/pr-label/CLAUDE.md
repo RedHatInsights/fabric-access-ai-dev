@@ -1,6 +1,23 @@
 Autonomous PR bot. Pick GitHub PRs labeled `$BOT_PR_LABEL` (default `dev-bot`) → implement on that PR → address review comments.
 
-This workflow does **not** poll Jira for new work. Personas live at `/home/botuser/app/instance/rbac-config/agent/personas/`. Setup scripts are under that instance's `agent/scripts/`. Repo `CLAUDE.md` still overrides personas. When a persona says "comment on Jira" for routine progress, post on the GitHub PR instead — unless a human asked for Jira (see **Jira on request**).
+This workflow does **not** poll Jira for new work. Personas live at `/home/botuser/app/instance/rbac-config/agent/personas/`. Setup scripts are under that instance's `agent/scripts/`. Repo `CLAUDE.md` still overrides personas. When a persona says "comment on Jira" for routine progress, post on the GitHub PR instead — unless the title/merge policy or a human request requires Jira (see **Additional Jira requests**).
+
+## PR title and Jira policy
+
+Every GitHub PR handled by this workflow MUST contain a Jira key in square brackets in its title:
+
+```
+feat: add new feature [RHCLOUD-12345]
+```
+
+The key must match `[PROJECT-12345]` (uppercase project key and numeric issue key). Check the title before implementing or updating a newly claimed PR.
+
+- If the title already contains a Jira key, use that issue and save it as task metadata `jira_key`.
+- If it does not, create one Jira Task that accurately reflects the PR's actual changes. Use `$BOT_JIRA_PROJECT` when set; otherwise use `RHCLOUD` for this instance. Include the PR URL, original title/body, changed files, and a concise implementation summary in the description.
+- After Jira creation, update the PR title with `gh pr edit` so the new key is present in square brackets. Do not create a second ticket on later cycles; first check the task metadata and current PR title.
+- Reply on the PR with the created key and Jira URL, then continue normal PR work. Store the key with `task_update` metadata.
+
+This policy applies to both new and already-tracked PRs. A PR with a missing key is actionable work, not a reason to skip it.
 
 ## Core security override (this workflow replaces one core rule)
 
@@ -84,11 +101,13 @@ Only tasks with `external_key` prefix `pr-label:`. For each `pr_open`/`pr_change
 **Unsigned commits**: rebase to re-sign, then push. Blocks merge.
 
 **PR merged**: Do **not** invoke `/wrap-up` (that skill deletes branches and drives Jira sprint transitions). Instead:
-1. `task_update` status `done` (or `task_remove` to archive)
-2. Optionally remove the `$BOT_PR_LABEL` label: `gh pr edit <n> --repo <owner/repo> --remove-label "$BOT_PR_LABEL"`
-3. `/slack-notify` `release_pending` with the `pr-label:…` key
-4. `memory_store` learnings as `learning` + `codebase_pattern`
-5. **Never delete the author's branch**
+1. Resolve `jira_key` from task metadata or the merged PR title. If neither exists (for an older task), create the Jira Task first using the title/body/diff and add the key to the PR title.
+2. Fetch the issue's transitions with `jira_get_transitions`, move it to **Release Pending** with `jira_transition_issue` (skip only if it is already in the appropriate final state), and add a `jira_add_comment` containing the merged PR URL and a short summary.
+3. `task_update` status `done` (or `task_remove` to archive), retaining `metadata.jira_key` and the merge summary.
+4. Optionally remove the `$BOT_PR_LABEL` label: `gh pr edit <n> --repo <owner/repo> --remove-label "$BOT_PR_LABEL"`
+5. `/slack-notify` `release_pending` with the `pr-label:…` key
+6. `memory_store` learnings as `learning` + `codebase_pattern`
+7. **Never delete the author's branch**
 
 **PR closed without merge**: `task_update` `done` + `paused_reason` explaining closed. Do not delete branches.
 
@@ -121,6 +140,7 @@ Pick the first untracked candidate. No candidates → memory housekeeping → `N
      metadata={
        "last_step": "claimed",
        "next_step": "implement",
+       "jira_key": "<jira_key from preflight, or fill after creating one>",
        "prs": [{"repo": "<owner/repo>", "number": <n>, "url": "<url>", "host": "github"}]
      }
    )
@@ -163,9 +183,9 @@ Pick the first untracked candidate. No candidates → memory housekeeping → `N
 
 8. Reply on the PR summarizing what changed. `task_update` `last_addressed`. `/slack-notify` `pr_created` with the `pr-label:…` key if this is the first bot action.
 
-### Jira on request (keep MCP tools; do not poll)
+### Additional Jira requests (keep MCP tools; do not poll)
 
-Jira MCP tools stay available. Use them **only** when a **human** on the PR (comment or review) asks to create, link, or update a Jira issue — e.g. "create a Jira", "file a ticket", "open RHCLOUD", "link this to Jira".
+Jira MCP tools stay available. Besides the mandatory title/merge lifecycle above, use them when a **human** on the PR (comment or review) asks to create, link, or update another Jira issue — e.g. "create a Jira", "file a ticket", "open RHCLOUD", "link this to Jira".
 
 When asked:
 1. `jira_create_issue` (or `jira_get_issue` / `jira_add_comment` / `jira_create_issue_link` if they named a key)

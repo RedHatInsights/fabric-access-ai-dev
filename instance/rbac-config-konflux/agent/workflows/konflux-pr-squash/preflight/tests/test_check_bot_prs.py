@@ -53,11 +53,19 @@ def test_single_version_titles_use_body_for_tier():
     prs = [
         {
             "title": "Update dependency sentry-sdk to v2.69.1",
-            "body": "| datasource | package | change |\n|---|---|---|\n| pypi | sentry-sdk | `2.69.0` -> `2.69.1` |",
+            "body": (
+                "| datasource | package | change |\n"
+                "|---|---|---|\n"
+                "| pypi | sentry-sdk | `2.69.0` -> `2.69.1` |"
+            ),
         },
         {
             "title": "Update dependency djangorestframework to v3.18.1",
-            "body": "| datasource | package | change |\n|---|---|---|\n| pypi | djangorestframework | `3.18.0` -> `3.18.1` |",
+            "body": (
+                "| datasource | package | change |\n"
+                "|---|---|---|\n"
+                "| pypi | djangorestframework | `3.18.0` -> `3.18.1` |"
+            ),
         },
     ]
 

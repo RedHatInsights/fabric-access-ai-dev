@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -19,6 +20,7 @@ from common import (
 TASK_KEY_PREFIX = "pr-label:"
 # GitHub PR label — independent of BOT_LABEL (that env is the Jira ticket label).
 PR_LABEL = os.environ.get("BOT_PR_LABEL") or "dev-bot"
+JIRA_TITLE_RE = re.compile(r"\[([A-Z][A-Z0-9]+-\d+)\]")
 _GH_PR_JSON = (
     "number,title,url,headRefName,author,isCrossRepository,maintainerCanModify"
 )
@@ -34,6 +36,12 @@ _FOREIGN_AUTHORS = frozenset(
 
 def task_key(owner_repo: str, number: int) -> str:
     return f"{TASK_KEY_PREFIX}{owner_repo}#{number}"
+
+
+def jira_key_from_title(title: str) -> str | None:
+    """Return the bracketed Jira key required by the PR-label workflow."""
+    match = JIRA_TITLE_RE.search(title or "")
+    return match.group(1) if match else None
 
 
 def is_tracked(key: str, tasks: list[dict]) -> bool:
@@ -162,6 +170,7 @@ def main() -> None:
                     "url": pr.get("url", ""),
                     "branch": pr.get("headRefName", ""),
                     "author": _author_login(pr),
+                    "jira_key": jira_key_from_title(pr.get("title", "")),
                     "is_fork": fork,
                     "can_push": can_push(pr),
                     "task_key": key,
