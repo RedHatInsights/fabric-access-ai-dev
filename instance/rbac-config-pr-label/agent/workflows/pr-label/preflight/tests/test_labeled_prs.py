@@ -21,6 +21,7 @@ from labeled_prs import (  # noqa: E402
     github_repos,
     is_foreign_pr,
     is_tracked,
+    jira_key_from_title,
     main,
     own_tasks,
     task_key,
@@ -29,6 +30,11 @@ from labeled_prs import (  # noqa: E402
 
 def test_task_key_format():
     assert task_key("project-kessel/insights-rbac", 42) == "pr-label:project-kessel/insights-rbac#42"
+
+
+def test_jira_key_from_title():
+    assert jira_key_from_title("feat: add feature [RHCLOUD-12345]") == "RHCLOUD-12345"
+    assert jira_key_from_title("feat: add feature") is None
 
 
 def test_is_tracked_matches_exact_key():
