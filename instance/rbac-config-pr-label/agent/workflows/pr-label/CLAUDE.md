@@ -14,7 +14,8 @@ The key must match `[PROJECT-12345]` (uppercase project key and numeric issue ke
 
 - If the title already contains a Jira key, use that issue and save it as task metadata `jira_key`.
 - If it does not, create one Jira Task that accurately reflects the PR's actual changes. Use `$BOT_JIRA_PROJECT` when set; otherwise use `RHCLOUD` for this instance. Include the PR URL, original title/body, changed files, and a concise implementation summary in the description.
-- After Jira creation, update the PR title with `gh pr edit` so the new key is present in square brackets. Do not create a second ticket on later cycles; first check the task metadata and current PR title.
+- Before creating a ticket, capture the PR author's GitHub login from the PR data (for example, `gh pr view --json author`). After `jira_create_issue` succeeds, make a best-effort assignment attempt with `jira_update_issue`, passing `fields='{"assignee":"<PR_AUTHOR_LOGIN>"}'`. Do not assign the ticket to the bot. A missing login or Jira rejection is non-fatal: leave the ticket unassigned, record the failed attempt in the task summary/PR reply, and continue.
+- After Jira creation and the assignment attempt, update the PR title with `gh pr edit` so the new key is present in square brackets. Do not create a second ticket on later cycles; first check the task metadata and current PR title.
 - Reply on the PR with the created key and Jira URL, then continue normal PR work. Store the key with `task_update` metadata.
 
 This policy applies to both new and already-tracked PRs. A PR with a missing key is actionable work, not a reason to skip it.
@@ -102,6 +103,7 @@ Only tasks with `external_key` prefix `pr-label:`. For each `pr_open`/`pr_change
 
 **PR merged**: Do **not** invoke `/wrap-up` (that skill deletes branches and drives Jira sprint transitions). Instead:
 1. Resolve `jira_key` from task metadata or the merged PR title. If neither exists (for an older task), create the Jira Task first using the title/body/diff and add the key to the PR title.
+   Apply the same best-effort PR-author assignment step used for newly claimed PRs; an assignment failure must not block merge cleanup.
 2. Fetch the issue's transitions with `jira_get_transitions`, move it to **Release Pending** with `jira_transition_issue` (skip only if it is already in the appropriate final state), and add a `jira_add_comment` containing the merged PR URL and a short summary.
 3. `task_update` status `done` (or `task_remove` to archive), retaining `metadata.jira_key` and the merge summary.
 4. Optionally remove the `$BOT_PR_LABEL` label: `gh pr edit <n> --repo <owner/repo> --remove-label "$BOT_PR_LABEL"`
@@ -160,6 +162,7 @@ Pick the first untracked candidate. No candidates → memory housekeeping → `N
 5. **Load personas** from `/home/botuser/app/instance/rbac-config/agent/personas/<name>/prompt.md` by tech stack (React → frontend, `go.mod` → backend, Django → rbac, YAML → config). Repo `CLAUDE.md` overrides.
 
 6. **Implement** on the checked-out PR branch. Stay in PR scope. Tests mandatory. Conventional commits. Do not invent Jira keys.
+    Documentation is part of the implementation: inspect the target repo's existing docs and update the canonical page, or create a focused page in its established docs location when no suitable page exists. Document user-visible behavior, configuration/permission changes, operational impact, and validation steps. Keep the documentation change in the same PR. If the change is genuinely docs-neutral (for example, formatting or generated-only output), state that in the PR summary.
 
 7. **Pushing commits** (always onto this PR — never open a second PR):
 

@@ -28,6 +28,13 @@ If the script exits non-zero → STOP, post the error output to Jira, do not pro
 - **UUIDs**: New models must use UUID v7 as primary key (`uuid_utils.compat.uuid7`). Never expose integer primary keys in APIs.
 - **Commit messages**: Conventional commits: `type(scope): short description in lowercase`. Types: `fix`, `feat`, `test`, `refactor`, `style`, `docs`, `chore`. Do NOT include `Co-Authored-By` lines.
 
+### Documentation (mandatory for PR changes)
+
+- Every non-trivial PR must update the repository's canonical documentation or add a focused page under the existing `docs/` location. Keep the documentation change in the same PR as the code change.
+- Document changed API behavior, permissions, configuration, rollout/operational impact, and the validation commands that were run. Update an existing page when one already covers the behavior; do not create duplicate topic pages.
+- Search the repository's `docs/`, README files, and API/spec documentation before creating a new page. Follow the repository's established structure and link a new page from an index or README when appropriate.
+- Documentation-only or generated-only changes may be docs-neutral, but explain why no documentation update is needed in the PR summary.
+
 ### Testing — MANDATORY
 
 Django's test runner requires **dotted module paths**, not file paths.

@@ -102,6 +102,14 @@ KSL files define the V2 authorization model for SpiceDB. Key concepts:
 - **Permission/role files are NOT 1:1**: some apps have permissions but no roles (consumed by other files). Some role files reference permissions from many apps (e.g., `rhel.json`).
 - **Wildcard `"*"` resource**: most apps need `"*": [{"verb": "*"}]` for admin roles referencing `app:*:*`.
 
+### Documentation (mandatory for PR changes)
+
+- Every non-trivial PR must update the repository's canonical documentation or add a focused page under the existing `docs/` location. Keep the documentation change in the same PR as the config/schema change.
+- Document changed roles, permissions, KSL relations, affected stage/prod environments, required version bumps, rollout/deployment impact, and the validation commands that were run.
+- Search `docs/`, README files, and existing config/schema comments before creating a new page. Update an existing page when one already covers the behavior; avoid duplicate documentation.
+- Never document generated artifacts as the source of truth. Describe the source JSON/KSL/config files and note generated outputs only as validation or deployment results.
+- Documentation-only or generated-only changes may be docs-neutral, but explain why no documentation update is needed in the PR summary.
+
 ### Common Pitfalls
 
 - Forgetting to bump `version` — the most common mistake. Changes won't take effect.
