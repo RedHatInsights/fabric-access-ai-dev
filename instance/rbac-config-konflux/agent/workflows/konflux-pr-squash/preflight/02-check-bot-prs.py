@@ -30,7 +30,7 @@ def find_bot_prs(repo_nwo: str, bot_author: str) -> list[dict]:
                 "--state",
                 "open",
                 "--json",
-                "number,title,headRefName,url,labels,body",
+                "number,title,headRefName,baseRefName,url,labels,body,statusCheckRollup",
             ],
             capture_output=True,
             text=True,
@@ -55,6 +55,42 @@ def find_bot_prs(repo_nwo: str, bot_author: str) -> list[dict]:
         return filtered
     except (json.JSONDecodeError, KeyError):
         return []
+
+
+def _has_failed_pr_pipeline(pr: dict) -> bool:
+    """Return whether GitHub reports a failed on-pull-request pipeline."""
+    for check in pr.get("statusCheckRollup") or []:
+        name = (check.get("name") or check.get("context") or "").lower()
+        result = (check.get("conclusion") or check.get("state") or "").upper()
+        if "on-pull-request" in name and result in ("FAILURE", "ERROR"):
+            return True
+    return False
+
+
+def get_default_branch(repo_nwo: str) -> str:
+    """Return the repository's default branch, or an empty string on failure."""
+    try:
+        result = subprocess.run(
+            [
+                "gh",
+                "repo",
+                "view",
+                repo_nwo,
+                "--json",
+                "defaultBranchRef",
+                "--jq",
+                ".defaultBranchRef.name",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return ""
+
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
 
 
 def has_open_consolidation_pr(repo_nwo: str) -> bool:
@@ -108,8 +144,13 @@ def has_open_consolidation_pr(repo_nwo: str) -> bool:
     return False
 
 
-def _ecosystem(title: str) -> str:
-    """Infer dependency ecosystem from Mintmaker PR title."""
+def _ecosystem(title: str, patch: str | None = None) -> str:
+    """Infer dependency ecosystem from changed manifests, then PR title."""
+    if patch:
+        manifest_ecosystems = _changed_manifest_ecosystems(patch)
+        if len(manifest_ecosystems) == 1:
+            return next(iter(manifest_ecosystems))
+
     title_lower = title.lower()
     if "github.com/" in title_lower or "golang.org/" in title_lower or "module " in title_lower:
         return "go"
@@ -178,19 +219,22 @@ _MANIFEST_FILES = {
 }
 
 
-def _diff_versions(repo_nwo: str, pr_number: int, ecosystem: str) -> tuple[str, str] | None:
-    """Extract the real (old, new) version by diffing the PR's manifest file.
+def _changed_manifest_ecosystems(patch: str) -> set[str]:
+    changed = set()
+    for line in patch.splitlines():
+        if not line.startswith("diff --git "):
+            continue
+        path = line.split(" b/", 1)[-1]
+        changed.update(
+            ecosystem
+            for ecosystem, names in _MANIFEST_FILES.items()
+            if any(path.endswith(name) for name in names)
+        )
+    return changed
 
-    Titles like "Update dependency X to vY" only state the target version, and
-    body changelog tables are inconsistently formatted or missing entirely
-    (see _body_versions). The PR diff's hunk for the actual dependency
-    manifest always contains the true before/after version strings, so this
-    is tried before falling back to parsing prose in title/body.
-    """
-    manifest_names = _MANIFEST_FILES.get(ecosystem)
-    if not manifest_names:
-        return None
 
+def _fetch_pr_diff(repo_nwo: str, pr_number: int) -> str | None:
+    """Fetch a PR diff once so version and Go replace checks share same data."""
     try:
         result = subprocess.run(
             ["gh", "pr", "diff", str(pr_number), "--repo", repo_nwo],
@@ -204,9 +248,20 @@ def _diff_versions(repo_nwo: str, pr_number: int, ecosystem: str) -> tuple[str, 
     if result.returncode != 0:
         return None
 
+    return result.stdout
+
+
+def _diff_versions_from_patch(
+    patch: str | None, ecosystem: str
+) -> tuple[str, str] | None:
+    """Extract old/new dependency versions from the PR's manifest diff."""
+    manifest_names = _MANIFEST_FILES.get(ecosystem)
+    if not manifest_names or not patch:
+        return None
+
     in_manifest = False
     old_version = new_version = None
-    for line in result.stdout.split("\n"):
+    for line in patch.split("\n"):
         if line.startswith("+++") or line.startswith("---"):
             in_manifest = any(line.rstrip().endswith(name) for name in manifest_names)
             continue
@@ -226,6 +281,57 @@ def _diff_versions(repo_nwo: str, pr_number: int, ecosystem: str) -> tuple[str, 
     if old_version and new_version:
         return old_version, new_version
     return None
+
+
+def _go_module_path_family(module_path: str) -> tuple[str, int]:
+    match = re.fullmatch(r"(.+)/v(\d+)", module_path)
+    if match and int(match.group(2)) >= 2:
+        return match.group(1), int(match.group(2))
+    return module_path, 1
+
+
+def _go_replace_major_path_migration(patch: str) -> bool:
+    """Detect replace directives moved from one major module path to another.
+
+    A replace for `example.org/module` does not apply to the distinct Go module
+    `example.org/module/v2`. Dropping the old path can therefore undo a pinned
+    transitive security fix when that dependency still imports the old module.
+    """
+    removed, added = [], []
+    go_mod_path = None
+    for line in patch.splitlines():
+        if line.startswith("diff --git "):
+            candidate_path = line.split(" b/", 1)[-1]
+            go_mod_path = candidate_path if candidate_path.endswith("go.mod") else None
+            continue
+        if (
+            not go_mod_path
+            or line.startswith(("---", "+++"))
+            or not line.startswith(("-", "+"))
+        ):
+            continue
+
+        change = line[1:].strip()
+        if change.startswith("replace "):
+            change = change[len("replace ") :]
+        match = re.fullmatch(r"([^\s]+)\s*=>\s*([^\s]+)(?:\s+[^\s]+)?", change)
+        if not match:
+            continue
+
+        module_path, replacement_path = match.groups()
+        if module_path != replacement_path:
+            continue
+        (removed if line.startswith("-") else added).append((go_mod_path, module_path))
+
+    for old_file, old_path in removed:
+        old_family, old_major = _go_module_path_family(old_path)
+        for new_file, new_path in added:
+            if old_file != new_file:
+                continue
+            new_family, new_major = _go_module_path_family(new_path)
+            if old_family == new_family and new_major > old_major:
+                return True
+    return False
 
 
 def _tier_from_versions(old: str, new: str) -> str | None:
@@ -310,8 +416,24 @@ def _consolidatable_groups(prs: list[dict], repo_nwo: str = "") -> list[dict]:
     groups = []
     for pr in prs:
         title = pr.get("title", "")
-        ecosystem = _ecosystem(title)
-        diff_versions = _diff_versions(repo_nwo, pr["number"], ecosystem) if repo_nwo else None
+        patch = _fetch_pr_diff(repo_nwo, pr["number"]) if repo_nwo else None
+        ecosystem = _ecosystem(title, patch)
+        if patch is not None and not _changed_manifest_ecosystems(patch):
+            print(
+                f"Skipping PR #{pr.get('number', '?')}: diff changes no supported "
+                "dependency manifest",
+                file=sys.stderr,
+            )
+            continue
+        if ecosystem == "go" and patch and _go_replace_major_path_migration(patch):
+            print(
+                f"Skipping PR #{pr.get('number', '?')}: Go replace directive changes "
+                "to a new major module path; transitive dependency review required",
+                file=sys.stderr,
+            )
+            continue
+
+        diff_versions = _diff_versions_from_patch(patch, ecosystem)
         tier = _tier(title, pr.get("body", ""), diff_versions)
         if tier == "major":
             groups.append({"ecosystem": ecosystem, "tier": "major", "prs": [pr]})
@@ -354,6 +476,42 @@ def main():
             continue
 
         prs = find_bot_prs(repo_nwo, BOT_AUTHOR)
+        if prs:
+            default_branch = get_default_branch(repo_nwo)
+            if not default_branch:
+                print(
+                    f"Skipping {repo_nwo}: unable to determine default branch",
+                    file=sys.stderr,
+                )
+                continue
+
+            non_default_prs = [
+                pr for pr in prs if pr.get("baseRefName") != default_branch
+            ]
+            if non_default_prs:
+                branches = sorted(
+                    {pr.get("baseRefName") or "(unknown)" for pr in non_default_prs}
+                )
+                print(
+                    f"Skipping {len(non_default_prs)} bot PR(s) "
+                    f"in {repo_nwo} targeting non-default branch(es): "
+                    f"{', '.join(branches)} (default: {default_branch})",
+                    file=sys.stderr,
+                )
+            prs = [pr for pr in prs if pr.get("baseRefName") == default_branch]
+
+            failed_pipeline_prs = [pr for pr in prs if _has_failed_pr_pipeline(pr)]
+            if failed_pipeline_prs:
+                numbers = ", ".join(
+                    str(pr.get("number", "?")) for pr in failed_pipeline_prs
+                )
+                print(
+                    f"Skipping bot PR(s) in {repo_nwo} with failed "
+                    f"on-pull-request checks: {numbers}",
+                    file=sys.stderr,
+                )
+            prs = [pr for pr in prs if not _has_failed_pr_pipeline(pr)]
+
         groups = _consolidatable_groups(prs, repo_nwo)
         if groups:
             eligible_prs = [pr for group in groups for pr in group["prs"]]
