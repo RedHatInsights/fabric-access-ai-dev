@@ -1,0 +1,17 @@
+{
+  "repo": "example-org/example-service",
+  "default_branch": "main",
+  "prs": [
+    {
+      "number": 17,
+      "title": "chore(deps): update dependency example-package to v0.3.0",
+      "headRefName": "bot/security-compliance/example-package-0.x",
+      "baseRefName": "security-compliance",
+      "labels": [{"name": "bot"}, {"name": "security-compliance"}]
+    }
+  ],
+  "diff_versions": {
+    "17": ["0.2.9", "0.3.0"]
+  },
+  "expected_status": "skip"
+}

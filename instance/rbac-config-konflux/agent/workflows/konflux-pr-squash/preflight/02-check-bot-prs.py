@@ -30,7 +30,7 @@ def find_bot_prs(repo_nwo: str, bot_author: str) -> list[dict]:
                 "--state",
                 "open",
                 "--json",
-                "number,title,headRefName,url,labels,body",
+                "number,title,headRefName,baseRefName,url,labels,body",
             ],
             capture_output=True,
             text=True,
@@ -55,6 +55,32 @@ def find_bot_prs(repo_nwo: str, bot_author: str) -> list[dict]:
         return filtered
     except (json.JSONDecodeError, KeyError):
         return []
+
+
+def get_default_branch(repo_nwo: str) -> str:
+    """Return the repository's default branch, or an empty string on failure."""
+    try:
+        result = subprocess.run(
+            [
+                "gh",
+                "repo",
+                "view",
+                repo_nwo,
+                "--json",
+                "defaultBranchRef",
+                "--jq",
+                ".defaultBranchRef.name",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return ""
+
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
 
 
 def has_open_consolidation_pr(repo_nwo: str) -> bool:
@@ -354,6 +380,30 @@ def main():
             continue
 
         prs = find_bot_prs(repo_nwo, BOT_AUTHOR)
+        if prs:
+            default_branch = get_default_branch(repo_nwo)
+            if not default_branch:
+                print(
+                    f"Skipping {repo_nwo}: unable to determine default branch",
+                    file=sys.stderr,
+                )
+                continue
+
+            non_default_prs = [
+                pr for pr in prs if pr.get("baseRefName") != default_branch
+            ]
+            if non_default_prs:
+                branches = sorted(
+                    {pr.get("baseRefName") or "(unknown)" for pr in non_default_prs}
+                )
+                print(
+                    f"Skipping {len(non_default_prs)} bot PR(s) "
+                    f"in {repo_nwo} targeting non-default branch(es): "
+                    f"{', '.join(branches)} (default: {default_branch})",
+                    file=sys.stderr,
+                )
+            prs = [pr for pr in prs if pr.get("baseRefName") == default_branch]
+
         groups = _consolidatable_groups(prs, repo_nwo)
         if groups:
             eligible_prs = [pr for group in groups for pr in group["prs"]]
