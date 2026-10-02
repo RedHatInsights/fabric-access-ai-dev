@@ -204,19 +204,8 @@ _MANIFEST_FILES = {
 }
 
 
-def _diff_versions(repo_nwo: str, pr_number: int, ecosystem: str) -> tuple[str, str] | None:
-    """Extract the real (old, new) version by diffing the PR's manifest file.
-
-    Titles like "Update dependency X to vY" only state the target version, and
-    body changelog tables are inconsistently formatted or missing entirely
-    (see _body_versions). The PR diff's hunk for the actual dependency
-    manifest always contains the true before/after version strings, so this
-    is tried before falling back to parsing prose in title/body.
-    """
-    manifest_names = _MANIFEST_FILES.get(ecosystem)
-    if not manifest_names:
-        return None
-
+def _fetch_pr_diff(repo_nwo: str, pr_number: int) -> str | None:
+    """Fetch a PR diff once so version and Go replace checks share same data."""
     try:
         result = subprocess.run(
             ["gh", "pr", "diff", str(pr_number), "--repo", repo_nwo],
@@ -230,9 +219,20 @@ def _diff_versions(repo_nwo: str, pr_number: int, ecosystem: str) -> tuple[str, 
     if result.returncode != 0:
         return None
 
+    return result.stdout
+
+
+def _diff_versions_from_patch(
+    patch: str | None, ecosystem: str
+) -> tuple[str, str] | None:
+    """Extract old/new dependency versions from the PR's manifest diff."""
+    manifest_names = _MANIFEST_FILES.get(ecosystem)
+    if not manifest_names or not patch:
+        return None
+
     in_manifest = False
     old_version = new_version = None
-    for line in result.stdout.split("\n"):
+    for line in patch.split("\n"):
         if line.startswith("+++") or line.startswith("---"):
             in_manifest = any(line.rstrip().endswith(name) for name in manifest_names)
             continue
@@ -252,6 +252,57 @@ def _diff_versions(repo_nwo: str, pr_number: int, ecosystem: str) -> tuple[str, 
     if old_version and new_version:
         return old_version, new_version
     return None
+
+
+def _go_module_path_family(module_path: str) -> tuple[str, int]:
+    match = re.fullmatch(r"(.+)/v(\d+)", module_path)
+    if match and int(match.group(2)) >= 2:
+        return match.group(1), int(match.group(2))
+    return module_path, 1
+
+
+def _go_replace_major_path_migration(patch: str) -> bool:
+    """Detect replace directives moved from one major module path to another.
+
+    A replace for `example.org/module` does not apply to the distinct Go module
+    `example.org/module/v2`. Dropping the old path can therefore undo a pinned
+    transitive security fix when that dependency still imports the old module.
+    """
+    removed, added = [], []
+    go_mod_path = None
+    for line in patch.splitlines():
+        if line.startswith("diff --git "):
+            candidate_path = line.split(" b/", 1)[-1]
+            go_mod_path = candidate_path if candidate_path.endswith("go.mod") else None
+            continue
+        if (
+            not go_mod_path
+            or line.startswith(("---", "+++"))
+            or not line.startswith(("-", "+"))
+        ):
+            continue
+
+        change = line[1:].strip()
+        if change.startswith("replace "):
+            change = change[len("replace ") :]
+        match = re.fullmatch(r"([^\s]+)\s*=>\s*([^\s]+)(?:\s+[^\s]+)?", change)
+        if not match:
+            continue
+
+        module_path, replacement_path = match.groups()
+        if module_path != replacement_path:
+            continue
+        (removed if line.startswith("-") else added).append((go_mod_path, module_path))
+
+    for old_file, old_path in removed:
+        old_family, old_major = _go_module_path_family(old_path)
+        for new_file, new_path in added:
+            if old_file != new_file:
+                continue
+            new_family, new_major = _go_module_path_family(new_path)
+            if old_family == new_family and new_major > old_major:
+                return True
+    return False
 
 
 def _tier_from_versions(old: str, new: str) -> str | None:
@@ -337,7 +388,16 @@ def _consolidatable_groups(prs: list[dict], repo_nwo: str = "") -> list[dict]:
     for pr in prs:
         title = pr.get("title", "")
         ecosystem = _ecosystem(title)
-        diff_versions = _diff_versions(repo_nwo, pr["number"], ecosystem) if repo_nwo else None
+        patch = _fetch_pr_diff(repo_nwo, pr["number"]) if repo_nwo else None
+        if ecosystem == "go" and patch and _go_replace_major_path_migration(patch):
+            print(
+                f"Skipping PR #{pr.get('number', '?')}: Go replace directive changes "
+                "to a new major module path; transitive dependency review required",
+                file=sys.stderr,
+            )
+            continue
+
+        diff_versions = _diff_versions_from_patch(patch, ecosystem)
         tier = _tier(title, pr.get("body", ""), diff_versions)
         if tier == "major":
             groups.append({"ecosystem": ecosystem, "tier": "major", "prs": [pr]})

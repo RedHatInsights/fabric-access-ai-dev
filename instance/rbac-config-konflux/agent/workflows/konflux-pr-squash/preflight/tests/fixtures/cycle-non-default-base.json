@@ -10,8 +10,5 @@
       "labels": [{"name": "bot"}, {"name": "security-compliance"}]
     }
   ],
-  "diff_versions": {
-    "17": ["0.2.9", "0.3.0"]
-  },
   "expected_status": "skip"
 }

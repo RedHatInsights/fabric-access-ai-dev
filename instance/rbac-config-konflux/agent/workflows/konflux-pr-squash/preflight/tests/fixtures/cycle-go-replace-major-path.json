@@ -1,0 +1,16 @@
+{
+  "repo": "example-org/markdown-consumer",
+  "default_branch": "main",
+  "prs": [
+    {
+      "number": 29,
+      "title": "chore(deps): update module github.com/example/markup to v2",
+      "headRefName": "bot/main/github.com-example-markup-2.x",
+      "baseRefName": "main",
+      "labels": [{"name": "bot"}],
+      "body": ""
+    }
+  ],
+  "go_mod_diff": "diff --git a/go.mod b/go.mod\n--- a/go.mod\n+++ b/go.mod\n@@ -1,2 +1,2 @@\n-// Security fix for transitive parser dependency\n-replace github.com/example/markup => github.com/example/markup v1.8.6\n+replace github.com/example/markup/v2 => github.com/example/markup/v2 v2.1.6\n",
+  "expected_status": "skip"
+}
