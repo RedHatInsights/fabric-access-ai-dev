@@ -1,0 +1,16 @@
+{
+  "repo": "example-org/pipeline-service",
+  "default_branch": "master",
+  "prs": [
+    {
+      "number": 42,
+      "title": "chore(deps): update pipeline references",
+      "headRefName": "bot/master/pipeline-references",
+      "baseRefName": "master",
+      "labels": [{"name": "bot"}],
+      "body": "task-build-image-index: 0.3.1 -> 0.4"
+    }
+  ],
+  "pipeline_diff": "diff --git a/.tekton/pipeline.yaml b/.tekton/pipeline.yaml\n--- a/.tekton/pipeline.yaml\n+++ b/.tekton/pipeline.yaml\n-          value: quay.io/example/task:0.3.1@sha256:old\n+          value: quay.io/example/task:0.4@sha256:new\n",
+  "expected_status": "skip"
+}

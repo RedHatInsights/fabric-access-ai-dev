@@ -30,7 +30,7 @@ def find_bot_prs(repo_nwo: str, bot_author: str) -> list[dict]:
                 "--state",
                 "open",
                 "--json",
-                "number,title,headRefName,baseRefName,url,labels,body",
+                "number,title,headRefName,baseRefName,url,labels,body,statusCheckRollup",
             ],
             capture_output=True,
             text=True,
@@ -55,6 +55,16 @@ def find_bot_prs(repo_nwo: str, bot_author: str) -> list[dict]:
         return filtered
     except (json.JSONDecodeError, KeyError):
         return []
+
+
+def _has_failed_pr_pipeline(pr: dict) -> bool:
+    """Return whether GitHub reports a failed on-pull-request pipeline."""
+    for check in pr.get("statusCheckRollup") or []:
+        name = (check.get("name") or check.get("context") or "").lower()
+        result = (check.get("conclusion") or check.get("state") or "").upper()
+        if "on-pull-request" in name and result in ("FAILURE", "ERROR"):
+            return True
+    return False
 
 
 def get_default_branch(repo_nwo: str) -> str:
@@ -134,8 +144,13 @@ def has_open_consolidation_pr(repo_nwo: str) -> bool:
     return False
 
 
-def _ecosystem(title: str) -> str:
-    """Infer dependency ecosystem from Mintmaker PR title."""
+def _ecosystem(title: str, patch: str | None = None) -> str:
+    """Infer dependency ecosystem from changed manifests, then PR title."""
+    if patch:
+        manifest_ecosystems = _changed_manifest_ecosystems(patch)
+        if len(manifest_ecosystems) == 1:
+            return next(iter(manifest_ecosystems))
+
     title_lower = title.lower()
     if "github.com/" in title_lower or "golang.org/" in title_lower or "module " in title_lower:
         return "go"
@@ -202,6 +217,20 @@ _MANIFEST_FILES = {
     "npm": ("package.json",),
     "go": ("go.mod",),
 }
+
+
+def _changed_manifest_ecosystems(patch: str) -> set[str]:
+    changed = set()
+    for line in patch.splitlines():
+        if not line.startswith("diff --git "):
+            continue
+        path = line.split(" b/", 1)[-1]
+        changed.update(
+            ecosystem
+            for ecosystem, names in _MANIFEST_FILES.items()
+            if any(path.endswith(name) for name in names)
+        )
+    return changed
 
 
 def _fetch_pr_diff(repo_nwo: str, pr_number: int) -> str | None:
@@ -387,8 +416,15 @@ def _consolidatable_groups(prs: list[dict], repo_nwo: str = "") -> list[dict]:
     groups = []
     for pr in prs:
         title = pr.get("title", "")
-        ecosystem = _ecosystem(title)
         patch = _fetch_pr_diff(repo_nwo, pr["number"]) if repo_nwo else None
+        ecosystem = _ecosystem(title, patch)
+        if patch is not None and not _changed_manifest_ecosystems(patch):
+            print(
+                f"Skipping PR #{pr.get('number', '?')}: diff changes no supported "
+                "dependency manifest",
+                file=sys.stderr,
+            )
+            continue
         if ecosystem == "go" and patch and _go_replace_major_path_migration(patch):
             print(
                 f"Skipping PR #{pr.get('number', '?')}: Go replace directive changes "
@@ -463,6 +499,18 @@ def main():
                     file=sys.stderr,
                 )
             prs = [pr for pr in prs if pr.get("baseRefName") == default_branch]
+
+            failed_pipeline_prs = [pr for pr in prs if _has_failed_pr_pipeline(pr)]
+            if failed_pipeline_prs:
+                numbers = ", ".join(
+                    str(pr.get("number", "?")) for pr in failed_pipeline_prs
+                )
+                print(
+                    f"Skipping bot PR(s) in {repo_nwo} with failed "
+                    f"on-pull-request checks: {numbers}",
+                    file=sys.stderr,
+                )
+            prs = [pr for pr in prs if not _has_failed_pr_pipeline(pr)]
 
         groups = _consolidatable_groups(prs, repo_nwo)
         if groups:

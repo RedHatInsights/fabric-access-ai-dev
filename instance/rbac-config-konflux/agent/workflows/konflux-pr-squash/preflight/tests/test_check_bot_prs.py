@@ -41,6 +41,18 @@ def cycle_go_replace_major_path():
     return json.loads(fixture.read_text())
 
 
+@pytest.fixture
+def cycle_failed_required_check():
+    fixture = Path(__file__).parent / "fixtures" / "cycle-failed-required-check.json"
+    return json.loads(fixture.read_text())
+
+
+@pytest.fixture
+def cycle_non_manifest_major():
+    fixture = Path(__file__).parent / "fixtures" / "cycle-non-manifest-major.json"
+    return json.loads(fixture.read_text())
+
+
 def test_non_major_prs_in_a_repo_dont_block_the_solo_major_pr(cycle_39829):
     """insights-rbac has a 0.x-target-only PR (app-common-python) alongside an
     unrelated unknown-tier PR (django) — neither is actionable, since the
@@ -314,6 +326,91 @@ def test_go_replace_version_update_with_same_module_path_is_not_blocked():
     )
 
     assert not check_bot_prs._go_replace_major_path_migration(patch)
+
+
+def test_go_dependency_pr_with_failed_required_pipeline_does_not_start_cycle(
+    cycle_failed_required_check, monkeypatch, capsys
+):
+    repo = cycle_failed_required_check["repo"]
+    repos = {repo: {"url": "https://example.invalid/bot/repo.git", "upstream": repo}}
+    gh_calls = []
+
+    def fake_gh(command, **kwargs):
+        gh_calls.append(command)
+        if command[1:3] == ["pr", "list"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(cycle_failed_required_check["prs"]),
+            )
+        if command[1:3] == ["repo", "view"]:
+            return SimpleNamespace(
+                returncode=0, stdout=cycle_failed_required_check["default_branch"]
+            )
+        if command[1:3] == ["pr", "diff"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=cycle_failed_required_check["go_mod_diff"],
+            )
+        raise AssertionError(f"Unexpected gh command: {command}")
+
+    monkeypatch.setattr(check_bot_prs, "get_tasks", lambda: [])
+    monkeypatch.setattr(check_bot_prs, "get_capacity", lambda: (0, 10))
+    monkeypatch.setattr(check_bot_prs, "load_project_repos", lambda: repos)
+    monkeypatch.setattr(check_bot_prs, "upstream_repo", lambda name: (repo, "github"))
+    monkeypatch.setattr(check_bot_prs, "has_open_consolidation_pr", lambda repo: False)
+    monkeypatch.setattr(check_bot_prs.subprocess, "run", fake_gh)
+
+    check_bot_prs.main()
+    output = json.loads(capsys.readouterr().out.strip())
+
+    assert output["status"] == cycle_failed_required_check["expected_status"]
+    pr_list_command = next(
+        command for command in gh_calls if command[1:3] == ["pr", "list"]
+    )
+    requested_fields = pr_list_command[pr_list_command.index("--json") + 1].split(",")
+    assert "statusCheckRollup" in requested_fields
+
+
+def test_major_looking_bot_pr_without_dependency_manifest_change_is_ignored(
+    cycle_non_manifest_major, monkeypatch, capsys
+):
+    repo = cycle_non_manifest_major["repo"]
+    repos = {repo: {"url": "https://example.invalid/bot/repo.git", "upstream": repo}}
+
+    def fake_gh(command, **kwargs):
+        if command[1:3] == ["pr", "list"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(cycle_non_manifest_major["prs"]),
+            )
+        if command[1:3] == ["repo", "view"]:
+            return SimpleNamespace(
+                returncode=0, stdout=cycle_non_manifest_major["default_branch"]
+            )
+        if command[1:3] == ["pr", "diff"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=cycle_non_manifest_major["pipeline_diff"],
+            )
+        raise AssertionError(f"Unexpected gh command: {command}")
+
+    monkeypatch.setattr(check_bot_prs, "get_tasks", lambda: [])
+    monkeypatch.setattr(check_bot_prs, "get_capacity", lambda: (0, 10))
+    monkeypatch.setattr(check_bot_prs, "load_project_repos", lambda: repos)
+    monkeypatch.setattr(check_bot_prs, "upstream_repo", lambda name: (repo, "github"))
+    monkeypatch.setattr(check_bot_prs, "has_open_consolidation_pr", lambda repo: False)
+    monkeypatch.setattr(check_bot_prs.subprocess, "run", fake_gh)
+
+    check_bot_prs.main()
+    output = json.loads(capsys.readouterr().out.strip())
+
+    assert output["status"] == cycle_non_manifest_major["expected_status"]
+
+
+def test_ecosystem_uses_changed_manifest_over_generic_title():
+    patch = "diff --git a/go.mod b/go.mod\n--- a/go.mod\n+++ b/go.mod\n"
+
+    assert check_bot_prs._ecosystem("Update go-openapi packages", patch) == "go"
 
 
 def test_minor_and_patch_never_combine_since_both_are_excluded():

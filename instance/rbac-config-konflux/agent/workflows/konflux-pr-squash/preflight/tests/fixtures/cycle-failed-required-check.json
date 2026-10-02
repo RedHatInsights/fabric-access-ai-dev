@@ -1,0 +1,28 @@
+{
+  "repo": "example-org/retry-service",
+  "default_branch": "main",
+  "prs": [
+    {
+      "number": 31,
+      "title": "chore(deps): update module github.com/example/retry/v4 to v7",
+      "headRefName": "bot/main/github.com-example-retry-v7.x",
+      "baseRefName": "main",
+      "labels": [{"name": "bot"}],
+      "body": "",
+      "statusCheckRollup": [
+        {
+          "name": "Red Hat Konflux / retry-service-on-pull-request",
+          "status": "COMPLETED",
+          "conclusion": "FAILURE"
+        },
+        {
+          "name": "json-yaml-validate",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS"
+        }
+      ]
+    }
+  ],
+  "go_mod_diff": "diff --git a/go.mod b/go.mod\n--- a/go.mod\n+++ b/go.mod\n-require github.com/example/retry/v4 v4.0.0\n+require github.com/example/retry/v7 v7.0.0\n",
+  "expected_status": "skip"
+}

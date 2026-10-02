@@ -12,11 +12,13 @@ Two preflight scripts run in order:
 
 The `02-check-bot-prs.py` script validates:
 - Agent is not at task capacity
-- At least one repo in `project-repos.json` has an open **major-tier** bot PR — see **Grouping by tier** below. There is no minimum count: a single major-tier PR is enough to act on, since each is handled solo anyway.
+- At least one repo in `project-repos.json` has an open **major-tier** bot PR targeting that repo's default branch and changing a supported dependency manifest — see **Grouping by tier** below. There is no minimum count: a single major-tier PR is enough to act on, since each is handled solo anyway.
+- The source bot PR has no failed `on-pull-request` check.
+- Go PRs do not move a self-replacement directive to a new major module path; that requires transitive dependency review before automated consolidation.
 - No existing consolidation task is already in progress for that repo
 - No open PR already exists in the repo with a `chore(deps): consolidate` title or `chore/consolidate-*` branch (checked directly against GitHub — a backstop for when a prior run's `task_add` never landed, since the task store is otherwise the only de-dup signal and originals are kept open via `--keep-originals`)
 
-To classify a PR's tier, the preflight prefers the *actual* old/new version parsed directly from the PR's manifest diff (`go.mod`/`Pipfile`/`package.json`) over anything stated in the title or body — title-only text like "Update dependency X to vY" states just the target version and can't distinguish tiers by itself. Title and then body-table parsing are only a fallback for when a diff can't be fetched.
+To classify a PR's ecosystem and tier, the preflight prefers the changed dependency manifest (`go.mod`/`Pipfile`/`package.json`) and the *actual* old/new version parsed directly from its diff over anything stated in the title or body — title-only text like "Update dependency X to vY" states just the target version and can't distinguish tiers by itself. Title and then body-table parsing are only a fallback for when a diff can't be fetched. PRs that change no supported dependency manifest are not candidates, even if their body contains version strings.
 
 The preflight reads repos from `project-repos.json` (in the agent directory) and checks each GitHub repo for open bot PRs. Non-GitHub repos (e.g. GitLab) are skipped. It classifies every PR by ecosystem and bump tier, discards anything that isn't major tier, and emits one solo group per remaining major-tier PR — major PRs are never combined with each other or with anything else. The output contains a `repos` array — each entry has `repo` (owner/repo), `bot_url`, eligible `pr_count`, eligible `prs`, `groups` (ecosystem/tier/count — tier is always `"major"` and count is always `1`), and `task_key`. Process each repo entry by passing `--repo <owner/repo>` to the consolidation script, once per group.
 
