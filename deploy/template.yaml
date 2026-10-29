@@ -27,6 +27,19 @@ parameters:
   value: devbot-fabric-access
 - name: BOT_CONFIG_PATH
   value: ""
+- name: BOT_EXECUTION_ENGINE
+  value: python
+- name: REHOR_OPENCODE_DEPLOYMENT_CONFIG
+  value: ""
+- name: REHOR_OPENCODE_MAX_TOOL_CALLS
+  value: ""
+- name: REHOR_WORKSPACE_OWNER_UID
+  description: Numeric UID owning /home/botuser/app in the image; the coordinator compares the workspace owner against it instead of the pod's runtime UID.
+  value: "1000"
+- name: REHOR_MODEL_PROXY_URL
+  value: ""
+- name: REHOR_MODEL_PROXY_TOKEN
+  value: ""
 - name: GCP_PROJECT_ID
   required: true
 - name: GCP_REGION
@@ -57,7 +70,7 @@ objects:
 #   2. NetworkPolicy (egress restricted to proxy + memory-server + DNS)
 #
 # Prerequisites (deployed by platform-frontend-ai-dev):
-#   - devbot-proxy       (ports 3128, 9090, 8443, 8444, 8446, 8447)
+#   - devbot-proxy       (ports 3128, 9090, 8443, 8444, 8446, 8447, 8450)
 #   - devbot-memory-server (port 8080)
 #   - devbot-secrets     (Vault secret with git identity + credentials)
 # ============================================================================
@@ -154,6 +167,21 @@ objects:
             value: ${BOT_CONFIG_REPO}
           - name: BOT_CONFIG_PATH
             value: ${BOT_CONFIG_PATH}
+          - name: CYCLE_RUNS_API_URL
+            value: http://devbot-memory-server:8080/api/cycle-runs
+          - name: BOT_EXECUTION_ENGINE
+            value: ${BOT_EXECUTION_ENGINE}
+          - name: REHOR_OPENCODE_DEPLOYMENT_CONFIG
+            value: ${REHOR_OPENCODE_DEPLOYMENT_CONFIG}
+          - name: REHOR_OPENCODE_MAX_TOOL_CALLS
+            value: ${REHOR_OPENCODE_MAX_TOOL_CALLS}
+          - name: REHOR_WORKSPACE_OWNER_UID
+            value: ${REHOR_WORKSPACE_OWNER_UID}
+          - name: REHOR_MODEL_PROXY_URL
+            value: ${REHOR_MODEL_PROXY_URL}
+          # Non-secret client placeholder; proxy injects the upstream API key.
+          - name: REHOR_MODEL_PROXY_TOKEN
+            value: ${REHOR_MODEL_PROXY_TOKEN}
           - name: BOT_DASHBOARD_URL
             value: http://devbot-memory-server:8080/api/bot-status
           - name: COSTS_API_URL
@@ -361,6 +389,8 @@ objects:
       - port: 8446
         protocol: TCP
       - port: 8447
+        protocol: TCP
+      - port: 8450
         protocol: TCP
     - to:
       - podSelector:

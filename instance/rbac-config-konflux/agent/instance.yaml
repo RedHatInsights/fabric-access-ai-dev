@@ -1,5 +1,8 @@
 workflow: ./workflows/konflux-pr-squash
 source: scheduled
+runtime: opencode
+provider: rehor-openai
+model: gpt-6-luna
 envs:
   - node          # nvm + Node.js
   - go            # goenv + Go

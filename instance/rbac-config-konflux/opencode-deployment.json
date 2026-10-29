@@ -1,0 +1,35 @@
+{
+  "additionalDirectories": [
+    "/home/botuser/repos",
+    "/home/botuser/data",
+    "/tmp/opencode"
+  ],
+  "providers": [
+    {
+      "id": "rehor-openai",
+      "package": "@opencode/ai/providers/openai/responses",
+      "name": "Rehor OpenAI Responses",
+      "settings": {
+        "baseURL": "{env:REHOR_MODEL_PROXY_URL}",
+        "apiKey": "{env:REHOR_MODEL_PROXY_TOKEN}"
+      },
+      "models": {
+        "gpt-6.1-sol": {
+          "name": "GPT-6.1 Sol",
+          "capabilities": { "reasoning": { "supported": true } },
+          "settings": {
+            "reasoningEffort": "medium"
+          }
+        },
+        "gpt-6-luna": {
+          "name": "GPT-6 Luna",
+          "capabilities": { "reasoning": { "supported": true } },
+          "settings": {
+            "reasoningEffort": "medium"
+          }
+        }
+      }
+    }
+  ],
+  "packages": []
+}
