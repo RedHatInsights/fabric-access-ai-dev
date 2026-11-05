@@ -189,12 +189,24 @@ def test_poc_request_creates_once_and_never_labels_implementation(jira_store):
     assert new_labels == ["coord-poc"]
     assert CONFIG[3] not in store["RHCLOUD-102"]["fields"]["labels"]
     create_calls = [args for name, args in writes if name == "jira_create_issue"]
-    assert json.loads(create_calls[0]["additional_fields"])[TEAM_FIELD] == {"id": TEAM_ID}
+    assert json.loads(create_calls[0]["additional_fields"])[TEAM_FIELD] == TEAM_ID
     assert json.loads(create_calls[0]["additional_fields"])["epicKey"] == "RHCLOUD-100"
 
     again = actions.create_child(request, CONFIG, poc=True)
     assert again == {"ticket_key": "RHCLOUD-105", "created": False, "request_comment_id": "500"}
     assert len([name for name, _ in writes if name == "jira_create_issue"]) == 1
+
+
+def test_subtask_inherits_parent_team_and_refuses_mismatch(jira_store):
+    store, _ = jira_store
+    parent = store["RHCLOUD-100"]
+    parent["fields"]["issuetype"] = {"name": "Story"}
+    child_type, additional = actions.creation_fields(store["RHCLOUD-101"], TEAM_FIELD, ["coord-poc"])
+    assert child_type == "Sub-task"
+    assert additional == {"parent": "RHCLOUD-100", "labels": ["coord-poc"]}
+    parent["fields"][TEAM_FIELD] = {"id": "another-team"}
+    with pytest.raises(ValueError, match="inherits Team from parent"):
+        actions.creation_fields(store["RHCLOUD-101"], TEAM_FIELD, ["coord-poc"])
 
 
 def test_normal_ticket_creation_requires_explicit_named_proposal(jira_store):
