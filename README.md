@@ -89,8 +89,8 @@ Deploy another bot target using `deploy/template.yaml` or
 | `BOT_TEAM_FIELD_ID` | Jira's Team custom field key, e.g. `customfield_12345` (resolve in Jira; example is not a real value) |
 | `BOT_TEAM_ID` | The actual Jira Team option ID for the coordinator's Team |
 | `BOT_INCLUDE_BACKLOG` | Match the implementation bot's backlog setting; if `false`, runnable tickets need an active sprint |
-| `BOT_EXECUTION_ENGINE` | `opencode` |
-| `REHOR_OPENCODE_DEPLOYMENT_CONFIG` | `instance/rbac-project-coordinator/opencode-deployment.json` |
+| `BOT_EXECUTION_ENGINE` | `coordinator` (the runner uses OpenCode for this workflow) |
+| `REHOR_OPENCODE_DEPLOYMENT_CONFIG` | `/home/botuser/app/instance/rbac-project-coordinator/opencode-deployment.json` |
 
 No control or parent Jira key is hardcoded. The control label enrolls a child
 issue, its parent defines the project, and its Team ID must match
