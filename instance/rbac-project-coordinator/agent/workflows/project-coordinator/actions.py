@@ -201,11 +201,13 @@ def creation_fields(control: dict, team_field_id: str, extra_labels: list[str]) 
         child_type, hierarchy = "Sub-task", {"parent": key_of(parent)}
     else:
         raise ValueError("Unsupported parent issue type for child creation")
-    team_value = value(control, team_field_id)
+    team_value = team_id(control, team_field_id)
     if not team_value:
         raise ValueError("Control ticket has no Team field value")
-    if isinstance(team_value, dict):
-        team_value = {"id": team_id(control, team_field_id)}
+    if child_type == "Sub-task":
+        if team_id(parent, team_field_id) != team_value:
+            raise ValueError("Sub-task inherits Team from parent, which differs from control Team")
+        return child_type, {**hierarchy, "labels": extra_labels}
     return child_type, {**hierarchy, team_field_id: team_value, "labels": extra_labels}
 
 
