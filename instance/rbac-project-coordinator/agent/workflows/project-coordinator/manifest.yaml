@@ -1,0 +1,23 @@
+name: project-coordinator
+type: workflow
+description: Coordinate same-Team Jira work beneath a parent issue through one control ticket
+
+preflight:
+  - 01-project-state.py
+
+provides:
+  claude_md: CLAUDE.md
+
+requires:
+  mcp_servers:
+    - bot-memory
+    - mcp-atlassian
+  env_vars:
+    - BOT_LABEL
+    - BOT_INSTANCE_ID
+    - BOT_TEAM_FIELD_ID
+    - BOT_TEAM_ID
+    - BOT_IMPLEMENTATION_LABEL
+  optional_env_vars:
+    - BOT_JIRA_PROJECT
+    - BOT_INCLUDE_BACKLOG

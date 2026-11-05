@@ -10,3 +10,8 @@ The instance preflight wakes this Jira-sprint workflow for new comments by
 feedback even though they use the bot account. Read and validate the finding
 before acting; the preflight only selects the task and does not confirm that a
 finding is correct.
+
+Never claim or implement a ticket labeled `dev-bot-control`, even if it also
+has this instance's primary implementation label. Remove only the accidental
+implementation label, preserve `dev-bot-control` and all other labels, and
+comment on the control ticket so its coordinator can report the correction.
