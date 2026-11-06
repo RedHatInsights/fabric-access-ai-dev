@@ -11,6 +11,8 @@ shared_skills:
 
 provides:
   claude_md: CLAUDE.md
+  skills:
+    - dimensional-review   # Multi-dimension PR review; see skills/dimensional-review/SKILL.md
 
 requires:
   mcp_servers:

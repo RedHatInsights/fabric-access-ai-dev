@@ -174,6 +174,8 @@ Pick the first untracked candidate. No candidates → memory housekeeping → `N
 6. **Implement** on the checked-out PR branch. Stay in PR scope. Tests mandatory. Conventional commits. Do not invent Jira keys.
     Documentation is part of the implementation: inspect the target repo's existing docs and update the canonical page, or create a focused page in its established docs location when no suitable page exists. Document user-visible behavior, configuration/permission changes, operational impact, and validation steps. Keep the documentation change in the same PR. If the change is genuinely docs-neutral (for example, formatting or generated-only output), state that in the PR summary.
 
+6a. **Self-review** the diff with `dimensional-review` (see **Self-review (dimensional-review)** below, `--format markdown`) before pushing. Address consensus and critical/high findings.
+
 7. **Pushing commits** (always onto this PR — never open a second PR):
 
    **If `can_push` is true** (same-repo branch, or fork with maintainer edits):
@@ -195,7 +197,15 @@ Pick the first untracked candidate. No candidates → memory housekeeping → `N
    4. Comment on the PR: enable "Allow edits from maintainers" so the next cycle can push.
    5. `task_update` `last_step="suggestion_posted"` and `last_addressed`.
 
-8. Reply on the PR summarizing what changed. `task_update` `last_addressed`. `/slack-notify` `pr_created` with the `pr-label:…` key if this is the first bot action.
+8. Reply on the PR summarizing what changed. `task_update` `last_addressed`. `/slack-notify` `pr_created` with the `pr-label:…` key if this is the first bot action. If `can_push` was true and the push succeeded, also post the `dimensional-review` findings with `--format pr-comment` (see below) so reviewers see them alongside the summary.
+
+## Self-review (dimensional-review)
+
+`skills/dimensional-review/SKILL.md` (vendored in this workflow, loaded at `.claude/skills/dimensional-review/`) runs a multi-dimension review over a diff and reports deduped, consensus-scored findings. This instance has no agent-dispatch tool (`Task`/`Agent` is not in the bot's allowed tools, same as OpenCode's `collaboration.spawn_agent`) — see the skill's own **3.3 pr-label Workflow Dispatch (OpenCode)** section, which runs dimensions sequentially in-session instead; that section applies to this legacy runtime too.
+
+- **Format for self-review before pushing** (step 6a): `--format markdown` (the default) — writes `dimensional-review.md` + `dimensional-review-alternatives.md` for your own QA pass. Not posted anywhere by itself.
+- **Format for posting to the PR** (step 8, and optionally when addressing review feedback under **Priority 1**): `--format pr-comment` — this is the only format authorized to post externally; it submits the condensed summary via `gh pr comment`. Never post `--format markdown`/`--format json` output directly as a PR comment — run `--format pr-comment` instead.
+- Validate any `--format json` output against the vendored `skills/dimensional-review/schemas/review/review.schema.json` before using it (see the skill's **Schema Validation** section).
 
 ### Additional Jira requests (keep MCP tools; do not poll)
 

@@ -167,7 +167,10 @@ all insights. (5) Load repo guidance per the instance AGENTS.md mapping.
 mandatory; conventional commits; never invent Jira keys. Documentation is part
 of implementation: update the repo's canonical docs page or add a focused
 page in its established docs location, in the same PR; state docs-neutrality
-in the PR summary when no update is needed. (7) Push:
+in the PR summary when no update is needed. (6a) Self-review the diff with
+`dimensional-review` (see **Self-review (dimensional-review)** below,
+`--format markdown`) before pushing; address consensus and critical/high
+findings. (7) Push:
 
 - `can_push` true (same-repo branch or fork with maintainer edits):
   `git push origin HEAD` (allowed under the security override; for a fork PR
@@ -181,7 +184,31 @@ in the PR summary when no update is needed. (7) Push:
 
 (8) Reply on the PR summarizing changes; `task_update` `last_addressed`;
 `/slack-notify` `pr_created` with the `pr-label:…` key if this is the first
-bot action.
+bot action. If `can_push` was true and the push succeeded, also post the
+`dimensional-review` findings with `--format pr-comment` (see below) so
+reviewers see them alongside the summary.
+
+## Self-review (dimensional-review)
+
+`skills/dimensional-review/SKILL.md` (vendored in this workflow, loaded at
+`.claude/skills/dimensional-review/`) runs a multi-dimension review over a
+diff and reports deduped, consensus-scored findings. This instance has no
+`collaboration.spawn_agent` or per-dimension subagent — see the skill's own
+**3.3 pr-label Workflow Dispatch (OpenCode)** section, which runs dimensions
+sequentially in-session instead.
+
+- **Format for self-review before pushing** (step 6a): `--format markdown`
+  (the default) — writes `dimensional-review.md` +
+  `dimensional-review-alternatives.md` for your own QA pass. Not posted
+  anywhere by itself.
+- **Format for posting to the PR** (step 8, and optionally when addressing
+  review feedback in Priority 1): `--format pr-comment` — this is the only
+  format authorized to post externally; it submits the condensed summary via
+  `gh pr comment`. Never post `--format markdown`/`--format json` output
+  directly as a PR comment — run `--format pr-comment` instead.
+- Validate any `--format json` output against the vendored
+  `skills/dimensional-review/schemas/review/review.schema.json` before using
+  it (see the skill's **Schema Validation** section).
 
 ## Additional Jira requests
 
