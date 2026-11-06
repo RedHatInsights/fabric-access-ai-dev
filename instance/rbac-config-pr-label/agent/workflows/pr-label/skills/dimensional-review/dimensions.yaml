@@ -1,6 +1,6 @@
 # Dimensional Review catalog. Reviewer instructions live in this skill's reviewers/ directory.
 # All source paths are local to the directory containing SKILL.md.
-version: 3
+version: 4
 last_updated: '2026-11-06'
 config:
   consensus_threshold: 3
@@ -55,6 +55,7 @@ review_levels:
       - architecture
       - db-schema
       - db-query
+      - cross-repo-dependencies
     high:
       description: Maximum review coverage across every applicable dimension.
       all_applicable: true
@@ -175,6 +176,15 @@ dimensions:
   source:
     path: reviewers/integration.md
     plugin: dimensional-review:integration
+    repo: dimensional-review
+- name: cross-repo-dependencies
+  category: specialist
+  languages: all
+  description: Breaking changes to identifiers, formats, or contracts shared with repos declared in review-context.yaml
+  model_preference: opus
+  source:
+    path: reviewers/cross-repo-dependencies.md
+    plugin: dimensional-review:cross-repo-dependencies
     repo: dimensional-review
 - name: vulnerability
   category: specialist

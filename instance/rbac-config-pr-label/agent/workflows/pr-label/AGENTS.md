@@ -209,6 +209,12 @@ sequentially in-session instead.
 - Validate any `--format json` output against the vendored
   `skills/dimensional-review/schemas/review/review.schema.json` before using
   it (see the skill's **Schema Validation** section).
+- The `cross-repo-dependencies` dimension reads `review-context.yaml`
+  (instance agent root, sibling to `project-repos.json`) for the current
+  repo's declared dependents and doc links; it is the only source of
+  cross-repo context and must not be supplemented by guessing. Add entries
+  there as relationships are confirmed — an entry's absence means "no known
+  cross-repo impact," not "none exists."
 
 ## Additional Jira requests
 

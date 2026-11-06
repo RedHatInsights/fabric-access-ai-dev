@@ -206,6 +206,7 @@ Pick the first untracked candidate. No candidates → memory housekeeping → `N
 - **Format for self-review before pushing** (step 6a): `--format markdown` (the default) — writes `dimensional-review.md` + `dimensional-review-alternatives.md` for your own QA pass. Not posted anywhere by itself.
 - **Format for posting to the PR** (step 8, and optionally when addressing review feedback under **Priority 1**): `--format pr-comment` — this is the only format authorized to post externally; it submits the condensed summary via `gh pr comment`. Never post `--format markdown`/`--format json` output directly as a PR comment — run `--format pr-comment` instead.
 - Validate any `--format json` output against the vendored `skills/dimensional-review/schemas/review/review.schema.json` before using it (see the skill's **Schema Validation** section).
+- The `cross-repo-dependencies` dimension reads `review-context.yaml` (instance agent root, sibling to `project-repos.json`) for the current repo's declared dependents and doc links; it is the only source of cross-repo context and must not be supplemented by guessing. Add entries there as relationships are confirmed — an entry's absence means "no known cross-repo impact," not "none exists."
 
 ### Additional Jira requests (keep MCP tools; do not poll)
 

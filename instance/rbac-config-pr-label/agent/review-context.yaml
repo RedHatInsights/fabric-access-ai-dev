@@ -1,0 +1,25 @@
+# Cross-repository dependency map for the dimensional-review skill's
+# cross-repo-dependencies dimension (skills/dimensional-review/).
+#
+# Each top-level key is a repo name matching an entry in project-repos.json.
+# `related` lists repos that consume this repo's identifiers, schemas, or
+# contracts — the reviewer treats these as the ONLY known dependents; it
+# must not infer or fetch unlisted repositories. `docs` lists direct links
+# to Markdown files with the authoritative contract description, each
+# pointing at one file, not a repository root.
+#
+# Add entries here only once a relationship is confirmed; an empty or
+# missing `related`/`docs` list means "no known cross-repo impact," not
+# "none exists."
+
+repositories:
+  insights-rbac:
+    related:
+      - id: insights-host-inventory
+        url: https://github.com/RedHatInsights/insights-host-inventory
+        relationship: consumes RBAC permissions/roles for host and workspace access control
+    docs:
+      - id: hbi-kessel-effects
+        url: https://github.com/RedHatInsights/insights-host-inventory/blob/master/docs/kessel-effects-on-hbi.md
+      - id: hbi-rbac-v2-groups-migration
+        url: https://github.com/RedHatInsights/insights-host-inventory/blob/master/docs/design-docs/groups_rbac_v2_design_and_implementation_status.md
