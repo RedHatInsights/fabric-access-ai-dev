@@ -16,6 +16,13 @@ shape; confirm the option with `jira_get_field_options` when available. Do not
 create the issue without the Team value; if it cannot be set, report the
 blocker.
 
+## Coordinator control tickets
+
+Never claim or implement a ticket labeled `dev-bot-control`, even if it also
+has this instance's primary implementation label. Remove only the accidental
+implementation label, preserve `dev-bot-control` and all other labels, and
+comment on the control ticket so its coordinator can report the correction.
+
 ## Specialist subagents
 
 Use the profile-local subagents in `.opencode/agents/` when ticket scope

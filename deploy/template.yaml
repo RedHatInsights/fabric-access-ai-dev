@@ -11,6 +11,14 @@ parameters:
   required: true
 - name: BOT_LABEL
   value: hcc-ai-platform-accessmanagement
+- name: BOT_IMPLEMENTATION_LABEL
+  value: hcc-ai-platform-accessmanagement
+- name: BOT_JIRA_PROJECT
+  value: RHCLOUD
+- name: BOT_TEAM_FIELD_ID
+  value: ""
+- name: BOT_TEAM_ID
+  value: ""
 - name: BOT_REPLICAS
   value: "0"
 - name: BOT_BOARD_NAME
@@ -109,6 +117,14 @@ objects:
           env:
           - name: BOT_LABEL
             value: ${BOT_LABEL}
+          - name: BOT_IMPLEMENTATION_LABEL
+            value: ${BOT_IMPLEMENTATION_LABEL}
+          - name: BOT_JIRA_PROJECT
+            value: ${BOT_JIRA_PROJECT}
+          - name: BOT_TEAM_FIELD_ID
+            value: ${BOT_TEAM_FIELD_ID}
+          - name: BOT_TEAM_ID
+            value: ${BOT_TEAM_ID}
           - name: BOT_MEMORY_URL
             value: http://devbot-memory-server:8080/mcp
           - name: BOT_MEMORY_HEALTH_URL
