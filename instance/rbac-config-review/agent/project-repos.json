@@ -1,0 +1,32 @@
+{
+  "insights-rbac": {
+    "url": "https://github.com/project-kessel/insights-rbac.git",
+    "upstream": "https://github.com/project-kessel/insights-rbac.git",
+    "readonly": true
+  },
+  "rbac-config": {
+    "url": "https://github.com/project-kessel/rbac-config.git",
+    "upstream": "https://github.com/project-kessel/rbac-config.git",
+    "readonly": true
+  },
+  "entitlements-api-go": {
+    "url": "https://github.com/RedHatInsights/entitlements-api-go.git",
+    "upstream": "https://github.com/RedHatInsights/entitlements-api-go.git",
+    "readonly": true
+  },
+  "uhc-auth-proxy": {
+    "url": "https://github.com/RedHatInsights/uhc-auth-proxy.git",
+    "upstream": "https://github.com/RedHatInsights/uhc-auth-proxy.git",
+    "readonly": true
+  },
+  "turnpike": {
+    "url": "https://github.com/RedHatInsights/turnpike.git",
+    "upstream": "https://github.com/RedHatInsights/turnpike.git",
+    "readonly": true
+  },
+  "cloudwatch-aggregator": {
+    "url": "https://github.com/RedHatInsights/cloudwatch-aggregator.git",
+    "upstream": "https://github.com/RedHatInsights/cloudwatch-aggregator.git",
+    "readonly": true
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "review": {
+    "review_type": "review",
+    "pr": {
+      "number": 3114,
+      "title": "Add job to re-replicate updated workspaces",
+      "author": "example-author",
+      "url": "https://github.com/project-kessel/insights-rbac/pull/3114"
+    },
+    "generated": "2026-07-07T10:00:00Z",
+    "dimensions_dispatched": 8,
+    "total_raw_findings": 45,
+    "total_deduped_findings": 18,
+    "consensus_findings": 5,
+    "findings": [
+      {
+        "id": "1",
+        "file": "rbac/internal/views.py",
+        "line": 2706,
+        "severity": "medium",
+        "dimension": "correctness",
+        "source_skill": "productivity-utils:code-review",
+        "source_repo": "team-productivity-utils",
+        "finding": "Missing parameter validation returns 500 instead of 400",
+        "impact": "Clients that omit the parameter receive a server error instead of a validation response.",
+        "evidence": "request.GET['since'] accessed with bracket notation — raises KeyError (500) when absent",
+        "suggestion": "Use request.GET.get('since') and return 400 if None",
+        "confidence": 0.95,
+        "agreed_by": ["correctness", "error-handling", "api-contract"],
+        "agreed_by_skills": ["productivity-utils:code-review", "error-handling-reviewer", "api-contract-reviewer"],
+        "agreed_count": 3,
+        "alternatives": [
+          {
+            "approach": "Use request.GET.get() with explicit 400 response",
+            "trade_off": "Simple, no framework overhead, but manual per-parameter",
+            "recommended": true
+          },
+          {
+            "approach": "Use DRF serializer validation with BooleanField(required=True)",
+            "trade_off": "DRF handles 400 automatically, but adds serializer layer for simple params"
+          }
+        ]
+      },
+      {
+        "id": "2",
+        "file": "rbac/management/tasks.py",
+        "line": 89,
+        "severity": "high",
+        "dimension": "performance",
+        "source_skill": "performance-reviewer",
+        "source_repo": "claude-engineering-toolkit",
+        "finding": "Unbounded retry loop with no backoff",
+        "evidence": "while True: retry without sleep or max_retries",
+        "suggestion": "Add exponential backoff and max retry count",
+        "confidence": 0.9,
+        "agreed_by": ["performance", "error-handling"],
+        "agreed_by_skills": ["performance-reviewer", "error-handling-reviewer"],
+        "agreed_count": 2,
+        "alternatives": []
+      }
+    ]
+  }
+}

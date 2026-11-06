@@ -1,0 +1,35 @@
+review_label: dev-bot-review
+repositories:
+  insights-rbac:
+    related:
+      - id: rbac-config
+        url: https://github.com/project-kessel/rbac-config
+        relationship: Role and permission configuration consumed by RBAC.
+      - id: hbi
+        url: https://github.com/RedHatInsights/insights-host-inventory
+        relationship: Host inventory integration.
+      - id: kessel-inventory-api
+        url: https://github.com/project-kessel/inventory-api
+        relationship: Inventory authorization API contract.
+      - id: kessel-inventory-consumer
+        url: https://github.com/project-kessel/inventory-consumer
+        relationship: Inventory event and relationship ingestion.
+    docs:
+      - id: rbac-config-readme
+        url: https://github.com/project-kessel/rbac-config/blob/master/README.md
+      - id: hbi-readme
+        url: https://github.com/RedHatInsights/insights-host-inventory/blob/master/README.md
+      - id: hbi-kessel-effects
+        url: https://github.com/RedHatInsights/insights-host-inventory/blob/master/docs/kessel-effects-on-hbi.md
+      - id: hbi-rbac-v2-groups-migration
+        url: https://github.com/RedHatInsights/insights-host-inventory/blob/master/docs/design-docs/groups_rbac_v2_design_and_implementation_status.md
+      - id: inventory-api-readme
+        url: https://github.com/project-kessel/inventory-api/blob/main/README.md
+      - id: inventory-consumer-readme
+        url: https://github.com/project-kessel/inventory-consumer/blob/main/README.md
+  rbac-config:
+    related:
+      - id: insights-rbac
+        url: https://github.com/project-kessel/insights-rbac
+        relationship: Service consuming RBAC configuration.
+    docs: []

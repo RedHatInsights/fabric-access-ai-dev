@@ -1,0 +1,12 @@
+name: review-only
+type: workflow
+description: Review labeled GitHub PRs across the configured repositories
+
+preflight:
+  - 01-review-queue.py
+
+requires:
+  mcp_servers:
+    - bot-memory
+  env_vars:
+    - BOT_INSTANCE_ID

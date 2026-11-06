@@ -1,0 +1,233 @@
+# Dimensional Review catalog. Reviewer instructions live in this skill's reviewers/ directory.
+# All source paths are local to the directory containing SKILL.md.
+version: 4
+last_updated: '2026-11-06'
+config:
+  consensus_threshold: 3
+  dedup_jaccard: 0.4
+  dedup_line_range: 5
+language_extensions:
+  python:
+  - py
+  - pyi
+  go:
+  - go
+  javascript:
+  - js
+  - jsx
+  - mjs
+  - cjs
+  typescript:
+  - ts
+  - tsx
+  java:
+  - java
+  rust:
+  - rs
+  yaml:
+  - yaml
+  - yml
+  sql:
+  - sql
+  proto:
+  - proto
+  shell:
+  - sh
+  - bash
+review_levels:
+  default: high
+  presets:
+    light:
+      description: Small cost-saving review focused on core correctness and security.
+      dimensions:
+      - correctness
+      - security
+    medium:
+      description: Balanced review across core correctness, security, runtime behavior, contracts, and database
+        changes.
+      dimensions:
+      - correctness
+      - security
+      - performance
+      - error-handling
+      - test-quality
+      - api-contract
+      - architecture
+      - db-schema
+      - db-query
+      - cross-repo-dependencies
+    high:
+      description: Maximum review coverage across every applicable dimension.
+      all_applicable: true
+dimensions:
+- name: correctness
+  category: general
+  languages: all
+  description: Bugs, logic errors, edge cases, off-by-one, null derefs
+  model_preference: terra
+  source:
+    path: reviewers/correctness.md
+    plugin: dimensional-review:correctness
+    repo: dimensional-review
+- name: code-quality
+  category: general
+  languages: all
+  description: Readability, naming, complexity, duplication, style consistency
+  model_preference: luna
+  source:
+    path: reviewers/code-quality.md
+    plugin: dimensional-review:code-quality
+    repo: dimensional-review
+- name: architecture
+  category: general
+  languages: all
+  description: Design patterns, separation of concerns, coupling, layering violations
+  model_preference: terra
+  source:
+    path: reviewers/architecture.md
+    plugin: dimensional-review:architecture
+    repo: dimensional-review
+- name: security
+  category: specialist
+  languages: all
+  description: OWASP Top 10, auth, secrets, injection, crypto
+  model_preference: terra
+  source:
+    path: reviewers/security.md
+    plugin: dimensional-review:security
+    repo: dimensional-review
+- name: performance
+  category: specialist
+  languages: all
+  description: N+1 queries, memory leaks, blocking calls, caching, allocations
+  model_preference: luna
+  source:
+    path: reviewers/performance.md
+    plugin: dimensional-review:performance
+    repo: dimensional-review
+- name: error-handling
+  category: specialist
+  languages: all
+  description: Swallowed exceptions, error propagation, HTTP status codes, retries
+  model_preference: luna
+  source:
+    path: reviewers/error-handling.md
+    plugin: dimensional-review:error-handling
+    repo: dimensional-review
+- name: test-quality
+  category: specialist
+  languages: all
+  description: Coverage gaps, brittle tests, mock correctness, missing edge cases
+  model_preference: luna
+  source:
+    path: reviewers/test-quality.md
+    plugin: dimensional-review:test-quality
+    repo: dimensional-review
+- name: concurrency
+  category: specialist
+  languages: all
+  description: Race conditions, deadlocks, thread safety, transaction isolation
+  model_preference: terra
+  source:
+    path: reviewers/concurrency.md
+    plugin: dimensional-review:concurrency
+    repo: dimensional-review
+- name: api-contract
+  category: specialist
+  languages: all
+  description: Breaking changes, REST conventions, backward compatibility, versioning
+  model_preference: luna
+  source:
+    path: reviewers/api-contract.md
+    plugin: dimensional-review:api-contract
+    repo: dimensional-review
+- name: db-schema
+  category: specialist
+  languages: all
+  file_patterns:
+  - '**/migrations/**'
+  - '**/*.sql'
+  - '**/models.py'
+  - '**/models/**'
+  description: Migration safety, missing indexes, constraints, column types
+  model_preference: terra
+  source:
+    path: reviewers/db-schema.md
+    plugin: dimensional-review:db-schema
+    repo: dimensional-review
+- name: db-query
+  category: specialist
+  languages: all
+  file_patterns:
+  - '**/*.py'
+  - '**/*.go'
+  - '**/*.sql'
+  description: N+1 queries, ORM correctness, select_related, unbounded SELECTs
+  model_preference: luna
+  source:
+    path: reviewers/db-query.md
+    plugin: dimensional-review:db-query
+    repo: dimensional-review
+- name: integration
+  category: specialist
+  languages: all
+  description: Webhook delivery, retries, idempotency, circuit breakers, event ordering
+  model_preference: luna
+  source:
+    path: reviewers/integration.md
+    plugin: dimensional-review:integration
+    repo: dimensional-review
+- name: cross-repo-dependencies
+  category: specialist
+  languages: all
+  description: Breaking changes to identifiers, formats, or contracts shared with repos declared in review-context.yaml
+  model_preference: terra
+  source:
+    path: reviewers/cross-repo-dependencies.md
+    plugin: dimensional-review:cross-repo-dependencies
+    repo: dimensional-review
+- name: vulnerability
+  category: specialist
+  languages:
+  - python
+  - go
+  - java
+  description: CVE exposure, dependency vulnerabilities, unsafe deserialization
+  model_preference: luna
+  source:
+    path: reviewers/vulnerability.md
+    plugin: dimensional-review:vulnerability
+    repo: dimensional-review
+- name: go-idioms
+  category: specialist
+  languages:
+  - go
+  description: Go-specific patterns — error wrapping, interface compliance, goroutine leaks
+  model_preference: luna
+  source:
+    path: reviewers/go-idioms.md
+    plugin: dimensional-review:go-idioms
+    repo: dimensional-review
+- name: react-patternfly
+  category: specialist
+  languages:
+  - javascript
+  - typescript
+  file_patterns:
+  - '**/*.jsx'
+  - '**/*.tsx'
+  description: React + PatternFly anti-patterns, hooks usage, component structure
+  model_preference: luna
+  source:
+    path: reviewers/react-patternfly.md
+    plugin: dimensional-review:react-patternfly
+    repo: dimensional-review
+- name: learning-extraction
+  category: meta
+  languages: all
+  description: Extract reusable patterns and anti-patterns worth remembering
+  model_preference: luna
+  source:
+    path: reviewers/learning-extraction.md
+    plugin: dimensional-review:learning-extraction
+    repo: dimensional-review

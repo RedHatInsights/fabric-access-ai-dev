@@ -1,0 +1,5 @@
+# Architecture review
+
+Review module boundaries, dependency direction, ownership, separation of responsibilities, coupling, and data flow across the target repository's declared related repositories. Use the target repo's `review-context.yaml` entry, related-repository snapshots and documents pinned in the review manifest, and the impact report as architecture context. Treat impact-report matches as leads, not proof. Do not infer or fetch unlisted repositories or documents; if cross-repo context is unavailable, state that limitation and continue with the local architecture.
+
+Report only concrete design problems introduced or made worse by the PR that materially harm system changeability, correctness, or testability. Tie each finding to a changed PR line and, for cross-repo claims, cite supporting sources from the pinned manifest. Avoid duplicating contract-specific findings better owned by `api-contract`, `integration`, or `cross-repo-dependencies`; do not propose broad redesigns for local changes.
