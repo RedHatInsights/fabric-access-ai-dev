@@ -207,6 +207,33 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    Do not treat an answer as a defect by itself; return only the evidence-based
    next action, no-change decision, or one focused follow-up question.
 
+   For another verified human comment that asks why or how a finding occurs,
+   or asks what it means, load `explanatory-answer` and answer from the current
+   pinned manifest and the finding's inline thread. For a longer reply, use
+   these headings in order:
+
+   ```markdown
+   **Answer:** <direct response>
+   **Why or how:** <mechanism in a clear sequence>
+   **Reasoning:** <connect pinned facts to the answer; cite evidence>
+   **Example:** <only when useful>
+   **Implication:** <what follows or what to do, when relevant>
+   ```
+
+   Omit optional sections when they add nothing; a simple question may need
+   only `**Answer:**`. If a commenter explicitly requests a diagram or graph
+   in an explanation reply, add a concise Mermaid diagram after the prose when
+   pinned context supports an accurate one. Otherwise include a diagram only
+   when it materially improves understanding. Do not put diagrams in the
+   status summary or original finding comments. If the needed context is
+   missing, ask one focused question instead of guessing. Reply in the inline
+   thread when the question is inline; for a top-level question, post one
+   top-level reply. Add
+   `<!-- dev-review-bot:fabric-access-explanation:<source-comment-id> -->` and
+   check for that marker in the same comment collection before posting so
+   retries do not duplicate the answer. Explanation replies do not create
+   findings or start a full re-review.
+
    Record skipped or failed passes and their reasons in task state. If no
    pass completes, stop without publishing a clean review.
    When `manifest.format` is `custom`, persist each completed pass named in
@@ -218,9 +245,10 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    The bot's verifier, evidence gate, and publishing steps below still apply.
 
    Deduplicate the results and convert the merged findings
-   into the JSON file described below — at most seven actionable findings
-   under the snapshot directory:
-   {"findings":[{"id":"F1",
+   into the JSON file described below — one short `pr_summary` sentence and
+   at most seven actionable findings under the snapshot directory:
+   {"pr_summary":"This PR ...",
+   "findings":[{"id":"F1",
    "category":"cross_repo|contract|deploy|invariant|local",
    "source_dimensions":["correctness"],
    "severity":"blocking|suggestion|nit",
@@ -230,9 +258,11 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    "scenario":["step 1","step 2"],
    "evidence":{"explanation":"... [R1].","refs":[{"id":"R1",
    "repo":"owner/repo","sha":"40-character pinned SHA","file":"path","line":1}]},
-   "suggested_fix":"..."}]}. Keep PR findings in prose; do not add diagrams
-   to the compact summary or inline threads. Use only source revisions in the
-   manifest.
+   "suggested_fix":"..."}]}. Write `pr_summary` as one clear sentence of
+   at most 280 characters describing what the PR changes. Base it on the PR
+   title, description, and reviewed diff; do not summarize findings or verdicts.
+   Keep PR findings in prose; do not add diagrams to the status summary or
+   inline threads. Use only source revisions in the manifest.
    Map reviewer `critical` or `high` severity to `blocking`, `medium` to
    `suggestion`, and `low` or `info` to `nit`. Use `question` only for a
    missing-context comment, never for an assumed defect. `scenario` must be a
@@ -252,13 +282,15 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    A cross_repo finding needs a concrete related-repository code reference.
    Set `source_dimensions` to the names of the actual passes that found it;
    after deduplication retain the union. This field is required for every new
-   finding and is retained in the ledger. State `**Dimension:** <names>` in
-   both summary and inline comments. Existing ledger entries without it must
-   say `**Dimension:** not recorded in prior review`; do not invent an origin.
+   finding and is retained in the ledger. Include dimensions in the status
+   table and state `**Dimension:** <names>` in inline comments. Existing ledger
+   entries without a dimension must say `not recorded in prior review`; do not
+   invent an origin.
    Avoid duplicate comments already present on the PR.
-   Keep summaries and inline comments in prose. For explanation answers outside
-   the finding format, use the explanatory-answer skill's optional diagram only
-   when it materially improves understanding.
+   Keep status summaries and original finding comments in prose. Explanation
+   replies follow the explanatory-answer skill: include a concise, accurate
+   Mermaid diagram when explicitly requested and supported by pinned context;
+   otherwise add one only when it materially improves understanding.
    If a prior ledger has `open` entries, also propose exactly one re-check
    per open entry, in a second JSON file under the snapshot directory:
    {"verifications":[{"finding_id":"F1","status":"addressed|still_open|uncertain",
@@ -310,23 +342,22 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    and reports the update_count (0 on the first review).
 
    For `manifest.format == "standard"`, use the generated publication JSON and
-   inline comments. The summary has a `Review N` heading (without `#N`) and one
-   compact status line with plain-text finding IDs, severity, dimension,
-   resolution state, and an `[inline comment]` link for each finding. Keep
-   scenarios, evidence, and fixes in the
-   inline comments. Their heading and bold labels follow this workflow's usual
-   format. `manifest.format == "custom"` keeps the status summary compact as
-   well; its selected skills control the detailed inline comment layout.
+   inline comments. The status summary has a `Review N` heading (without `#N`),
+   the one-sentence `pr_summary`, and a `Findings` table with plain-text IDs,
+   severity, dimension, resolution state, and a separate link to each inline
+   thread. Keep finding details in the inline comments. The table and help
+   footer use the fixed workflow template. `manifest.format == "custom"` uses
+   that same status template; selected skills control only the detailed inline
+   comment layout.
    First run the same command
    with `--skill-results <skill-results.json> --prepare-custom <verified.json>`.
-   It writes only confirmed findings, updated ledger, review number, recorded
-   formatting-skill results, and their pinned guide paths; it does not write a
-   review. Read each of those guides and results, and use each skill's requested
+   It writes the PR summary, confirmed findings, updated ledger, review
+   number, recorded formatting-skill results, and their pinned guide paths; it
+   does not write a review. Read each of those guides and results, and use each skill's requested
    layout to compose `custom-format.json` from only the verified JSON. Keep
    skill-specific wording and structure in inline comments. The summary still
-   contains only `Review N` and the one-line list of plain-text finding IDs,
-   severity, dimension, resolution status, and `[inline comment]` links. Do not put finding detail in the
-   summary.
+   uses the fixed `Review N`, `pr_summary`, and Findings-table template. Do not
+   put finding detail in the status table.
    If a selected guide does not specify an output layout, stop and report that
    custom formatting cannot be determined; do not invent a layout.
    Each skill's inline findings must reflect only completed passes and confirmed

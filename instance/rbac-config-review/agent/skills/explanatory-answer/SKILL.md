@@ -1,6 +1,6 @@
 ---
 name: explanatory-answer
-description: Explain answers to any question with a direct response, clear reasoning, and optional evidence, examples, or Mermaid diagrams when they improve understanding.
+description: Explain answers with direct reasoning, evidence, examples, and requested Mermaid diagrams when pinned context supports them.
 ---
 
 # Explanatory Answer
@@ -19,9 +19,19 @@ Use these headings in this order when a longer answer benefits from structure. O
 
 ## Optional diagram
 
-Default to prose. Add a Mermaid diagram only when it explains a relationship,
-branch, or sequence substantially better than a few sentences and the
-destination has enough room to display it. Keep node labels short and ground
-every connection in the same facts as the prose. If a preview clips labels,
-remove the diagram and explain the relationship in text. A diagram supplements
-the answer; its availability does not require one.
+Default to prose. If the user explicitly asks for a diagram or graph in an
+explanation reply, include one when the pinned facts support an accurate
+visualization, even if prose alone would be sufficient. Use a fenced Mermaid
+block and choose a flowchart, sequence diagram, or other suitable form. Place
+it after the explanation and any implication. If the user did not ask for a
+diagram, add one only when it explains a relationship, branch, or sequence
+substantially better than a few sentences.
+
+Keep diagrams concise, use short labels, and ground every edge in the same
+facts as the prose. GitHub renders Mermaid in pull request Markdown. If the
+available context cannot support an accurate diagram, say what is missing
+instead of inventing a relationship. If labels are clipped or the diagram
+does not render clearly, simplify it or explain the relationship in text.
+Diagrams supplement explanation replies; they do not belong in status
+summaries or original finding comments, and their availability does not
+require one when the user has not requested it.

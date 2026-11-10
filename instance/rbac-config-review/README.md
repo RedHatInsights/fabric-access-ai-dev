@@ -67,7 +67,9 @@ The per-repository settings are:
   inline finding layout. `custom` requires at least one entry in `skills`; the
   selected skills define the detailed inline layout for findings attributed to
   them and must complete for publication. Other findings use the standard
-  inline layout. Both formats use the same compact status summary.
+  inline layout. Both formats use the same status summary template: a short
+  PR-purpose sentence, a Findings table with inline-thread links, and help for
+  requesting a re-review or explanation.
 
 The loader validates the label, repository mappings, dimension names, unique
 IDs, and URL shapes before polling GitHub. Related repository links must be
@@ -88,10 +90,11 @@ context sources unless entries are added for them.
 Write comments for developers working on this project: direct, technically
 precise, and easy to scan. Use short sentences and standard terminology. This
 applies to status comments, inline findings, context questions, and answer
-follow-ups. The status comment is one compact line with the finding count,
-plain-text finding IDs, severity, dimension, resolution state, and an inline
-comment link for each finding.
-Detailed scenarios, evidence, and fixes belong in those inline comments.
+follow-ups. The status comment has a short description of what the PR changes,
+then a Findings heading with counts and a table of plain-text finding IDs,
+severity, dimension, resolution state, and separate inline-comment links. It
+ends with the re-review command and a prompt for explanation questions.
+Detailed scenarios, evidence, and fixes belong in the inline comments.
 
 Every finding and feedback comment that describes behavior includes a realistic
 sequence of steps that reproduces it. Cite pinned evidence inline beside the
@@ -102,12 +105,23 @@ small polish items, and `question` for missing-context requests.
 
 When an author asks for an explanation or asks “how”, the review agent must
 load [`agent/skills/explanatory-answer/SKILL.md`](agent/skills/explanatory-answer/SKILL.md)
-before replying. Answer directly, explain the mechanism in order, connect facts
-to the conclusion with references, and state the implication or next step when
-useful. Add an example or diagram only when it materially improves the answer.
-Replies to context-question answers follow the same order: Answer, Why or how,
-Reasoning, optional Example, and Implication. Evidence links sit beside the
-claims they support.
+before replying. For longer replies, use these headings in order; omit optional
+sections when they add no value:
+
+1. **Answer** — direct response.
+2. **Why or how** — mechanism in a clear sequence.
+3. **Reasoning** — connect pinned facts to the conclusion; cite evidence.
+4. **Example** — include only when it helps.
+5. **Implication** — say what follows or what to do, when relevant.
+
+A simple answer may use only **Answer**. Evidence links sit beside the claims
+they support. If a commenter asks for a diagram or graph, include a concise
+Mermaid diagram after the explanation when pinned context supports an accurate
+one. Otherwise, include one only when it materially improves understanding.
+Diagrams are for explanation replies, not status summaries or original finding
+comments. Every explanation reply includes the hidden marker
+`<!-- dev-review-bot:fabric-access-explanation:<source-comment-id> -->` so a
+retry can detect an answer already posted.
 
 The `missing-context-detector` subagent asks only when missing information
 could change the review conclusion or requested action; it must not assume a
@@ -271,10 +285,12 @@ diff and supported by pinned references. Finding IDs (`F1`, `F2`, …) are kept
 stable across the summary, inline comments, and later review updates.
 
 The user-facing output is GitHub comments: one review summary and anchored
-inline threads for confirmed findings. Review requests can be made with a new
-top-level PR comment containing exactly `/review-bot re-review`; the workflow
-checks that the requester is an organization member before starting a fresh
-pass. It preserves finding IDs and includes the review number in the summary.
+inline threads for confirmed findings. The summary has a short description of
+the PR, a Findings table with inline-thread links, and prompts for requesting
+a re-review or explanation. Review requests can be made with a new top-level
+PR comment containing exactly `/review-bot re-review`; the workflow checks
+that the requester is an organization member before starting a fresh pass. It
+preserves finding IDs and includes the review number in the summary.
 
 ## Deployment settings
 

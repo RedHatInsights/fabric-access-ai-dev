@@ -92,7 +92,7 @@ def test_first_cycle_ledger_has_no_carried_entries(tmp_path):
     body = evidence.render_ledger(manifest, ledger, accepted, update_count=1)
     assert body.startswith("## Review 2\n")
     assert "not recorded in prior review" in body
-    assert "F1 · blocking · not recorded in prior review · open ([inline comment](review-comment:F1))" in body
+    assert "| F1 | blocking | not recorded in prior review | open | [Open thread](review-comment:F1) |" in body
     assert "Old permission disappears" not in body
     assert "fabric-access-review:" + "a" * 40 + ":" + "b" * 40 in body
 
@@ -138,7 +138,7 @@ def test_same_head_rereview_increments_heading_and_retains_finding(tmp_path, mon
     assert json.loads(capsys.readouterr().out)["update_count"] == 1
     second_text = json.loads(second_body.read_text())["body"]
     assert second_text.startswith("## Review 2\n")
-    assert "F1 · blocking · not recorded in prior review · open ([inline comment](review-comment:F1))" in second_text
+    assert "| F1 | blocking | not recorded in prior review | open | [Open thread](review-comment:F1) |" in second_text
     assert json.loads(second_ledger.read_text())[0]["id"] == "F1"
 
 
@@ -218,7 +218,7 @@ def test_custom_format_uses_confirmed_findings_and_preserves_skill_layout(tmp_pa
     capsys.readouterr()
     rendered = json.loads(body.read_text())["body"]
     assert rendered.startswith("## Review 1")
-    assert "F1 · blocking · goose-kiss-review · open ([inline comment](review-comment:F1))" in rendered
+    assert "| F1 | blocking | goose-kiss-review | open | [Open thread](review-comment:F1) |" in rendered
     assert "**Location:**" not in rendered
     posted = json.loads(inline.read_text())
     assert len(posted) == 1
@@ -245,7 +245,7 @@ def test_custom_rereview_keeps_ledger_ids_and_skill_heading(tmp_path):
     custom = {"inline_comments": []}
     body, comments = evidence.render_custom(manifest, ledger, [], 1, custom)
     assert body.startswith("## Review 2")
-    assert "F1 · blocking · not recorded in prior review · open ([inline comment](review-comment:F1))" in body
+    assert "| F1 | blocking | not recorded in prior review | open | [Open thread](review-comment:F1) |" in body
     assert comments == []
 
 
@@ -284,7 +284,7 @@ def test_custom_summary_remains_compact_for_carried_findings(tmp_path):
     custom = {"inline_comments": []}
     body, comments = evidence.render_custom(manifest, ledger, [], 0, custom)
     assert body.startswith("## Review 1")
-    assert "F1 · blocking · correctness · open ([inline comment](review-comment:F1))" in body
+    assert "| F1 | blocking | correctness | open | [Open thread](review-comment:F1) |" in body
     assert comments == []
 
 
@@ -309,7 +309,7 @@ def test_addressed_verification_with_confirmed_verdict_closes_entry(tmp_path):
 
     body = evidence.render_ledger(manifest, updated, [], update_count=2)
     assert body.startswith("## Review 3\n")
-    assert "F1 · blocking · not recorded in prior review · addressed ([inline comment](review-comment:F1))" in body
+    assert "| F1 | blocking | not recorded in prior review | addressed | [Open thread](review-comment:F1) |" in body
     assert "Alias added" not in body
 
 
@@ -344,7 +344,7 @@ def test_refuted_addressed_claim_stays_open(tmp_path):
     assert "not confirmed" in updated[0]["status_note"]
 
     body = evidence.render_ledger(manifest, updated, [], update_count=2)
-    assert "F1 · blocking · not recorded in prior review · open ([inline comment](review-comment:F1))" in body
+    assert "| F1 | blocking | not recorded in prior review | open | [Open thread](review-comment:F1) |" in body
 
 
 def test_still_open_verification_needs_no_verdict(tmp_path):
