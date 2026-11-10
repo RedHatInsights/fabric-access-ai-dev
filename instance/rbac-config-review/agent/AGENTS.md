@@ -43,13 +43,14 @@ different model ad hoc, infer a preference from the PR, or move a dimension to
 another model during a run. Change the catalog preference when the intended
 assignment should change for future reviews.
 
-Run passes sequentially in plan order. Invoke the selected worker with the same
-pinned PR context and only its assigned dimension, then wait for its result
-before starting the next pass. The separate `review-verifier` remains on Terra
-and attempts to refute proposed findings. If a selected worker is unavailable,
-mark that pass failed and continue with the other planned passes; do not silently
-retry it with a different model. Follow the workflow's publication gate if no
-review pass completes.
+Run passes in batches of at most four concurrent workers, forming batches in
+plan order. Invoke each selected worker with the same pinned PR context and
+only its assigned dimension. Wait for all results in a batch, record them by
+dimension name, then start the next batch. The separate `review-verifier`
+remains on Terra and attempts to refute proposed findings. If a selected
+worker is unavailable, mark that pass failed and continue with the other
+planned passes; do not silently retry it with a different model. Follow the
+workflow's publication gate if no review pass completes.
 
 ## Comment writing and context questions
 
