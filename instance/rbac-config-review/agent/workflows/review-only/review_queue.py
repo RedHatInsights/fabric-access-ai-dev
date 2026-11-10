@@ -10,7 +10,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from common import INSTANCE_ID, MEMORY_URL, http_get, load_project_repos, output_result
 from review_config import ReviewConfigError, github_repo_url, load_config
@@ -119,8 +119,33 @@ def _ledger_recovery_id(chosen: dict, meta: dict) -> str:
     return "LR-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
 
 
+_ORG_MEMBER_CACHE: dict[tuple[str, str], bool] = {}
+
+
+def _is_org_member(org: str, login: str) -> bool:
+    """Check private or public organization membership using the bot's GH auth."""
+    key = (org.casefold(), login.casefold())
+    if key in _ORG_MEMBER_CACHE:
+        return _ORG_MEMBER_CACHE[key]
+    endpoint = f"orgs/{quote(org, safe='')}/members/{quote(login, safe='')}"
+    result = subprocess.run(
+        ["gh", "api", "--include", endpoint],
+        capture_output=True, text=True, timeout=15, check=False,
+    )
+    response = result.stdout + "\n" + result.stderr
+    status = re.search(r"(?m)^HTTP/\S+\s+(\d{3})\b", response)
+    if status and status.group(1) == "204" and result.returncode == 0:
+        _ORG_MEMBER_CACHE[key] = True
+        return True
+    if status and status.group(1) == "404":
+        _ORG_MEMBER_CACHE[key] = False
+        return False
+    reason = response.strip().splitlines()[-1:] or ["GitHub returned no HTTP status"]
+    raise RuntimeError(f"Could not verify @{login}'s membership in {org}: {reason[0][:200]}")
+
+
 def _request_ledger_recovery(chosen: dict, meta: dict) -> bool:
-    """Ask the PR author before discarding history when every ledger copy is gone."""
+    """Require an organization member's approval before discarding review history."""
     recovery_id = _ledger_recovery_id(chosen, meta)
     marker = f"<!-- dev-review-bot:ledger-recovery:{recovery_id} -->"
     comments = fetch_comments(chosen["repo"], chosen["number"])
@@ -130,23 +155,22 @@ def _request_ledger_recovery(chosen: dict, meta: dict) -> bool:
         user = comment.get("user") or {}
         body = comment.get("body")
         login = user.get("login") if isinstance(user, dict) else None
+        comment_id = comment.get("id")
         if (isinstance(login, str) and login.casefold() == bot_login.casefold()
+                and isinstance(comment_id, int) and not isinstance(comment_id, bool) and comment_id > 0
                 and isinstance(body, str) and marker in body):
             created = _parse_timestamp(comment.get("created_at"))
             if created is not None:
                 requests.append((created, comment))
 
     if not requests:
-        author = chosen.get("pr_author")
-        if not isinstance(author, str) or not author.strip():
-            raise RuntimeError("Cannot ask about ledger recovery because the PR author is unknown")
         body = (
             f"**Review history needs recovery ({recovery_id}).**\n\n"
             "I could not find a usable ledger in the status review, saved publication, or local ledger. "
             "A fresh review will restart the finding history and may assign new finding IDs. "
-            f"Should I run a fresh re-review for @{author}?\n\n"
-            f"Reply exactly `Review bot: yes {recovery_id}` to approve, or "
-            f"`Review bot: no {recovery_id}` to leave this PR paused.\n\n{marker}"
+            "Should a fresh re-review run? Any member of the repository's GitHub organization can "
+            f"include `Review bot: yes {recovery_id}` to approve, or "
+            f"`Review bot: no {recovery_id}` to decline, anywhere in their comment.\n\n{marker}"
         )
         result = subprocess.run(
             ["gh", "api", f"repos/{chosen['repo']}/issues/{chosen['number']}/comments",
@@ -154,36 +178,48 @@ def _request_ledger_recovery(chosen: dict, meta: dict) -> bool:
             capture_output=True, text=True, timeout=30, check=False,
         )
         if result.returncode:
-            raise RuntimeError(f"Cannot ask PR author about ledger recovery: {result.stderr.strip()[:300]}")
+            raise RuntimeError(f"Cannot ask about ledger recovery: {result.stderr.strip()[:300]}")
         chosen["ledger_recovery_state"] = "asked"
         return False
 
-    request_at, _request_comment = min(requests, key=lambda item: item[0])
-    pr_author = chosen.get("pr_author")
-    if not isinstance(pr_author, str) or not pr_author.strip():
-        chosen["ledger_recovery_state"] = "waiting"
-        return False
-    expected = {
-        f"review bot: yes {recovery_id}": True,
-        f"review bot: no {recovery_id}": False,
-    }
+    request_at, request_comment = min(
+        requests, key=lambda item: (item[0], item[1]["id"])
+    )
+    request_id = request_comment["id"]
+    org = chosen["repo"].split("/", 1)[0]
+    response_pattern = re.compile(
+        rf"Review bot:\s*(yes|no)\s+{re.escape(recovery_id)}(?![A-Za-z0-9_-])",
+        re.IGNORECASE,
+    )
     answers = []
     for comment in comments:
         user = comment.get("user") or {}
         created = _parse_timestamp(comment.get("created_at"))
+        comment_id = comment.get("id")
         body = comment.get("body")
         if (not isinstance(user, dict) or user.get("type") != "User"
                 or not isinstance(user.get("login"), str)
-                or user["login"].casefold() != pr_author.casefold()
-                or created is None or created <= request_at or not isinstance(body, str)):
+                or created is None
+                or not isinstance(comment_id, int) or isinstance(comment_id, bool)
+                or (created, comment_id) <= (request_at, request_id)
+                or not isinstance(body, str)):
             continue
-        decision = expected.get(body.strip().casefold())
-        if decision is not None:
-            answers.append((created, decision))
+        decisions = {match.group(1).casefold() for match in response_pattern.finditer(body)}
+        if len(decisions) != 1:
+            continue
+        try:
+            member = _is_org_member(org, user["login"])
+        except (OSError, RuntimeError, subprocess.TimeoutExpired):
+            chosen["ledger_recovery_state"] = "verification_unavailable"
+            return False
+        if member:
+            answers.append((created, comment_id, decisions.pop() == "yes", user["login"]))
     if not answers:
         chosen["ledger_recovery_state"] = "waiting"
         return False
-    _answer_at, approved = max(answers, key=lambda item: item[0])
+    _answer_at, response_id, approved, responder = max(answers, key=lambda item: (item[0], item[1]))
+    chosen["ledger_recovery_responder"] = responder
+    chosen["ledger_recovery_response_comment_id"] = response_id
     chosen["ledger_recovery_state"] = "approved" if approved else "declined"
     return approved
 
@@ -249,6 +285,11 @@ def restore_prior_ledger(chosen: dict, task: dict | None) -> bool:
                 return False
             chosen["update_count"] = 0
             chosen["ledger_recovery_approved"] = True
+            chosen["kind"] = "review"
+            chosen["feedback_comment_ids"] = [
+                ident for ident in (chosen.get("feedback_comment_ids") or [])
+                if ident != f"issue:{chosen['ledger_recovery_response_comment_id']}"
+            ]
             if empty_pending is not None and not empty_pending.reusable:
                 chosen["ignore_review_id"] = True
             return True
@@ -437,7 +478,9 @@ def candidate(pr: dict, repo_key: str, repo: str, task: dict | None,
     }
 
 
-def pick_work(repos: dict, config: dict, tasks: list[dict]) -> tuple[dict | None, list[str]]:
+def pick_work(repos: dict, config: dict, tasks: list[dict],
+              excluded_task_keys: set[str] | None = None) -> tuple[dict | None, list[str]]:
+    excluded_task_keys = excluded_task_keys or set()
     by_key = {task["external_key"]: task for task in tasks}
     found: list[dict] = []
     errors: list[str] = []
@@ -458,6 +501,8 @@ def pick_work(repos: dict, config: dict, tasks: list[dict]) -> tuple[dict | None
         for pr in prs:
             key = task_key(repo, pr.get("number"))
             open_pr_keys.add(key)
+            if key in excluded_task_keys:
+                continue
             task = by_key.get(key)
             if task and task.get("status") == "archived":
                 # Keep the unique task key reserved. Operators can unarchive
@@ -504,6 +549,8 @@ def pick_work(repos: dict, config: dict, tasks: list[dict]) -> tuple[dict | None
         if task_ref is None:
             continue
         repo_key, repo, number = task_ref
+        if task["external_key"] in excluded_task_keys:
+            continue
         if repo in failed_repos:
             continue
         if task_key(repo, number) in open_pr_keys:
@@ -521,6 +568,8 @@ def pick_work(repos: dict, config: dict, tasks: list[dict]) -> tuple[dict | None
     if not found:
         boundary_probes.sort(key=lambda entry: (entry[0]["updated_at"], entry[0]["repo"], entry[0]["number"]))
         for probe, meta, since, through in boundary_probes:
+            if probe["task_key"] in excluded_task_keys:
+                continue
             try:
                 seen_ids = meta.get("seen_rereview_comment_ids") or []
                 if not isinstance(seen_ids, list) or any(type(ident) is not int or ident <= 0 for ident in seen_ids):
@@ -551,33 +600,44 @@ def main() -> None:
             output_result("error", "No repositories in project-repos.json")
             return
         tasks = load_tasks()
-        chosen, errors = pick_work(repos, config, tasks)
-        if chosen is None:
-            status = "error" if errors else "skip"
-            detail = "; ".join(errors) if errors else "No labeled PR needs review or feedback handling"
-            output_result(status, detail)
+        excluded_task_keys: set[str] = set()
+        recovery_waits: list[str] = []
+        while True:
+            chosen, errors = pick_work(repos, config, tasks, excluded_task_keys)
+            if chosen is None:
+                status = "error" if errors else "skip"
+                detail = "; ".join(errors) if errors else "No labeled PR needs review or feedback handling"
+                if recovery_waits:
+                    detail = ("Waiting for organization-member ledger-recovery decisions on "
+                              + ", ".join(recovery_waits) + "; " + detail)
+                output_result(status, detail)
+                return
+            active_count = sum(
+                task.get("status") in ACTIVE
+                and task.get("external_key") not in excluded_task_keys
+                for task in tasks
+            )
+            if chosen["kind"] == "review" and not chosen["task_active"] and active_count >= 10:
+                output_result("skip", f"Review instance at task capacity ({active_count}/10)")
+                return
+            task = next((item for item in tasks if item.get("external_key") == chosen["task_key"]), None)
+            try:
+                proceed = restore_prior_ledger(chosen, task)
+            except (LedgerError, OSError, subprocess.TimeoutExpired) as exc:
+                output_result("error", f"{chosen['repo']}#{chosen['number']}: {exc}")
+                return
+            if not proceed:
+                state = chosen.get("ledger_recovery_state", "waiting")
+                if state in {"asked", "waiting", "declined", "verification_unavailable"}:
+                    # A consent wait gates only this PR; keep scanning the queue.
+                    excluded_task_keys.add(chosen["task_key"])
+                    recovery_waits.append(f"{chosen['repo']}#{chosen['number']}")
+                    continue
+                output_result("skip", f"{chosen['repo']}#{chosen['number']}: ledger recovery state {state}")
+                return
+            chosen.pop("priority")
+            output_result("start", json.dumps({"work": chosen, "discovery_errors": errors}))
             return
-        active_count = sum(task.get("status") in ACTIVE for task in tasks)
-        if chosen["kind"] == "review" and not chosen["task_active"] and active_count >= 10:
-            output_result("skip", f"Review instance at task capacity ({active_count}/10)")
-            return
-        task = next((item for item in tasks if item.get("external_key") == chosen["task_key"]), None)
-        try:
-            proceed = restore_prior_ledger(chosen, task)
-        except (LedgerError, OSError, subprocess.TimeoutExpired) as exc:
-            output_result("error", f"{chosen['repo']}#{chosen['number']}: {exc}")
-            return
-        if not proceed:
-            state = chosen.get("ledger_recovery_state", "waiting")
-            details = {
-                "asked": "Asked the PR author whether to start a fresh review",
-                "waiting": "Waiting for the PR author's ledger-recovery decision",
-                "declined": "The PR author declined a fresh review",
-            }.get(state, "Waiting for the PR author's ledger-recovery decision")
-            output_result("skip", f"{chosen['repo']}#{chosen['number']}: {details}")
-            return
-        chosen.pop("priority")
-        output_result("start", json.dumps({"work": chosen, "discovery_errors": errors}))
     except (ReviewConfigError, RuntimeError, ValueError) as exc:
         print(f"Review queue error: {exc}", file=sys.stderr)
         output_result("error", str(exc))
