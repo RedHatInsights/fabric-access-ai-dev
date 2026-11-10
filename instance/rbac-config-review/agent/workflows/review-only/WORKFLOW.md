@@ -385,9 +385,14 @@ impact, suggested fix, and pinned references already shown in their inline
 comments, with raw source-line text removed. Addressed findings are reduced to
 ID/status tombstones so IDs are never reused. Verifier notes and other
 unpublished analysis are not included. Never include credentials, secrets, or
-private instructions. If an older status review has no payload and its legacy
-ledger file is gone, preflight stops before starting a model session; that
-review needs a one-time ledger restore.
+private instructions. Before posting, status, inline, and context-comment
+publishers reject recognized credential patterns and some common personal or
+payment identifiers without echoing their values. This guard covers common
+token/key formats, credential assignments, email addresses, SSNs, and
+payment-card numbers; it is not a general secret or personal-data detector,
+so review text must still avoid sensitive details. If an older status review
+has no payload and its legacy ledger file is gone, preflight stops before
+starting a model session; that review needs a one-time ledger restore.
 
 ## Explaining a review finding
 

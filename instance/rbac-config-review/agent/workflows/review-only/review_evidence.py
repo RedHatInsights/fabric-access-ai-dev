@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from impact_analysis import changed_lines
+from public_comment_safety import ensure_public_content
 
 
 class EvidenceError(ValueError):
@@ -694,14 +695,16 @@ def main() -> None:
             raise EvidenceError("--context-responses and --context-response-comments-output must be used together")
         if args.context_questions:
             questions = validate_context_questions(json.loads(args.context_questions.read_text()), manifest, args.update_count or 0)
-            args.context_question_comments_output.write_text(
-                json.dumps(render_context_question_comments(questions), indent=2)
-            )
+            question_comments = render_context_question_comments(questions)
+            for comment in question_comments:
+                ensure_public_content(comment["body"], "Context question")
+            args.context_question_comments_output.write_text(json.dumps(question_comments, indent=2))
         if args.context_responses:
             responses = validate_context_responses(json.loads(args.context_responses.read_text()), manifest)
-            args.context_response_comments_output.write_text(
-                json.dumps(render_context_response_comments(responses), indent=2)
-            )
+            response_comments = render_context_response_comments(responses)
+            for comment in response_comments:
+                ensure_public_content(comment["body"], "Context response")
+            args.context_response_comments_output.write_text(json.dumps(response_comments, indent=2))
         findings = validate_findings(json.loads(args.findings.read_text()), manifest, impact)
         accepted = confirmed(findings, json.loads(args.verdicts.read_text()))
         if args.ledger is None:
@@ -744,6 +747,9 @@ def main() -> None:
             comments = render_inline_comments(accepted)
         else:
             raise EvidenceError("Unknown review format")
+        ensure_public_content(body, "Status review")
+        for comment in comments:
+            ensure_public_content(comment["body"], f"Finding {comment['id']}")
         args.publication_output.write_text(json.dumps({"body": body}, indent=2))
         if args.ledger_output:
             args.ledger_output.write_text(json.dumps(new_ledger, indent=2))

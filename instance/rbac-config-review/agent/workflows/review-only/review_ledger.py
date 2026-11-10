@@ -11,6 +11,8 @@ import zlib
 from pathlib import Path
 from uuid import uuid4
 
+from public_comment_safety import ensure_public_content
+
 
 MARKER_RE = re.compile(r"<!-- dev-review-bot:review-ledger:v1:([A-Za-z0-9_-]+) -->")
 REVISION_RE = re.compile(r"<!-- dev-review-bot:fabric-access-review:([0-9a-f]{40}):([0-9a-f]{40}) -->")
@@ -111,6 +113,7 @@ def public_ledger(ledger: object) -> list[dict]:
             if key in entry:
                 public[key] = _sha(entry[key], f"{field}.{key}")
 
+        ensure_public_content(json.dumps(public, ensure_ascii=False), f"Ledger finding {ident}")
         if status == "addressed":
             output.append(public)
             continue
@@ -151,6 +154,7 @@ def public_ledger(ledger: object) -> list[dict]:
             "explanation": _text(evidence.get("explanation"), f"{field}.evidence.explanation"),
             "refs": evidence_refs,
         }
+        ensure_public_content(json.dumps(public, ensure_ascii=False), f"Ledger finding {ident}")
         output.append(public)
     return output
 
@@ -187,6 +191,7 @@ def append_to_body(body: str, repo: str, pr: int, head: str, base: str,
     """Append one compressed, versioned HTML-comment payload to a review body."""
     if not isinstance(body, str) or not body.strip():
         raise LedgerError("Review body is empty")
+    ensure_public_content(body, "Status review")
     revision = REVISION_RE.findall(body)
     if revision != [(head, base)]:
         raise LedgerError("Review body must contain exactly one matching revision marker")

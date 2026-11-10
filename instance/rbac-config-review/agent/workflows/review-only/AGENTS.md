@@ -389,9 +389,14 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    notes, and resolution prose are omitted. HTML comments are hidden in
    GitHub's rendered view, not private: users with PR access can read them via
    GitHub's API. Never put secrets, credentials, private prompts, or unposted
-   analysis in the payload. Publishers also migrate legacy `fabric-access-*`
-   markers when resuming a pending publication. Keep markers in standard and
-   custom formats.
+   analysis in the payload. Summary, inline, and context-comment publishers
+   reject recognized credential patterns and some common personal/payment
+   identifiers without echoing their values; this is a narrow pattern guard,
+   not a general secret or personal-data detector.
+   If it blocks publication, remove the sensitive value from the finding and
+   regenerate the validated comment before retrying. Publishers also migrate
+   legacy `fabric-access-*` markers when resuming a pending publication. Keep
+   markers in standard and custom formats.
    Include file/line references in the review body (already true of the
    validated output). Record the review URL and id.
 8. Mark the task `pr_open` with `metadata.pr_lifecycle="open"`, review_id, the

@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from post_review import api
+from public_comment_safety import ensure_public_content
 from review_evidence import render_context_response_comments, validate_context_responses
 
 
@@ -47,6 +48,10 @@ def publish(repo: str, pr: int, head: str, comments_path: Path) -> dict:
     comments = json.loads(comments_path.read_text())
     if not isinstance(comments, list):
         raise ValueError("Context comments must be a JSON array")
+    for comment in comments:
+        if not isinstance(comment, dict) or not isinstance(comment.get("body"), str):
+            raise ValueError("Each context comment needs a body")
+        ensure_public_content(comment["body"], "Context comment")
     posted = unchanged = 0
     latest_comment_at = None
     endpoint = f"repos/{repo}/issues/{pr}/comments"
@@ -154,6 +159,8 @@ def render_responses(manifest_path: Path, responses_path: Path, output_path: Pat
     manifest = json.loads(manifest_path.read_text())
     responses = validate_context_responses(json.loads(responses_path.read_text()), manifest)
     comments = render_context_response_comments(responses)
+    for comment in comments:
+        ensure_public_content(comment["body"], "Context response")
     output_path.write_text(json.dumps(comments, indent=2))
     return comments
 

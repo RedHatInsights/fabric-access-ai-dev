@@ -9,6 +9,7 @@ import re
 import subprocess
 from pathlib import Path
 
+from public_comment_safety import ensure_public_content
 from review_ledger import append_to_body
 
 
@@ -75,6 +76,7 @@ def publish(repo: str, pr: int, head: str, base: str, publication: Path,
         return f"[{label}]({url})" if url else f"{label} (comment unavailable)"
 
     body = re.sub(r"\[([^\]]+)\]\(review-comment:(F[1-9]\d*)\)", replace_finding_link, body)
+    ensure_public_content(body, "Status review")
     if ledger_path:
         ledger = json.loads(ledger_path.read_text())
         review_numbers = re.findall(r"(?m)^## Review ([1-9]\d*)$", body)
