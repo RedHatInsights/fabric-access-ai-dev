@@ -25,8 +25,9 @@ PR queue.
 ## `review-context.yaml`
 
 The file is at `agent/review-context.yaml`. Its top-level `review_label` is the
-GitHub label required on an open PR for it to enter the queue. The current value
-is `dev-bot-review`. This is distinct from the deployment variable `BOT_LABEL`,
+GitHub label required on an open PR for it to enter the queue. A new GitHub
+event adding that label authorizes a full review; an already-present label does
+not. The current value is `dev-bot-review`. This is distinct from the deployment variable `BOT_LABEL`,
 which labels the bot runner and is not used to select PRs.
 
 Each key under `repositories` should match a key in `project-repos.json`. For
@@ -247,7 +248,7 @@ enabled for a repository through its `skills` list.
 project-repos.json + review-context.yaml
                  │
                  ▼
-  Find open, labeled PRs (one PR per cycle)
+  Find open labeled PRs and check review authorization
                  │
                  ▼
   Pin PR head/base and build review context
@@ -264,11 +265,14 @@ project-repos.json + review-context.yaml
 ```
 
 The queue only considers GitHub repositories in `project-repos.json`, open PRs
-with `review_label`, and at most one eligible PR in a cycle. It skips drafts,
-the bot's own PRs, and entries without head/base revisions. It tracks work in
-the shared task-state service, so interrupted reviews can resume and later
-reviews can update the existing summary instead of creating duplicate review
-summaries.
+with `review_label`, and at most one eligible PR in a cycle. A newly added
+`review_label` event is the only automatic authorization for a full review;
+the label merely being present does not authorize one. A changed head/base SHA
+or re-review request requires explicit organization-member approval before
+review work starts. It skips drafts, the bot's own PRs, and entries without
+head/base revisions. It tracks work in the shared task-state service, so
+interrupted authorized reviews can resume and later reviews can update the
+existing summary instead of creating duplicate review summaries.
 
 Task status follows the PR lifecycle: a review that has been published is
 `pr_open` while the PR awaits changes or merge. The queue checks tracked PRs
@@ -288,10 +292,12 @@ stable across the summary, inline comments, and later review updates.
 The user-facing output is GitHub comments: one review summary and anchored
 inline threads for confirmed findings. The summary has a short description of
 the PR, a Findings table with inline-thread links, and prompts for requesting
-a re-review or explanation. Review requests can be made with a new top-level
-PR comment containing exactly `/review-bot re-review`; the workflow checks
-that the requester is an organization member before starting a fresh pass. It
-preserves finding IDs and includes the review number in the summary.
+a re-review or explanation. A new top-level PR comment containing exactly
+`/review-bot re-review` asks for approval; it does not start a review. The bot
+posts a revision-bound approval ID, and any verified member of the repository's
+GitHub organization can reply `Review bot: yes <RA-ID>` or
+`Review bot: no <RA-ID>`. A verified yes starts the pass and preserves finding
+IDs while incrementing the review number in the summary.
 
 ## Deployment settings
 

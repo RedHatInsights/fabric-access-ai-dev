@@ -16,10 +16,27 @@ bot_status_update with this instance ID at cycle start and end.
   PR URL in
   metadata.prs=[{"repo": "<owner>/<repo>", "number": <number>,
   "url": "<PR URL>", "host": "github"}], and the preflight head/base SHAs.
+  Persist any supplied `review_label_event_id`, `review_authorization`,
+  `review_approval_id`, `review_approval_response_comment_id`, and
+  `review_approval_responder` in task metadata. Set
+  `active_head_sha` and `active_base_sha` to the preflight SHA pair.
   If add fails, stop without posting.
 - Existing task: task_get with key and source type, then task_update to
   in_progress for a new head/base pair or an authorized re-review request.
-  Do not claim another instance's task.
+  Set `active_head_sha` and `active_base_sha` to the preflight pair and persist
+  all supplied authorization fields. Do not claim another instance's task.
+- Authorization gate: for `kind="review"`, preflight must supply either
+  `review_authorization="label_added"` or
+  `review_authorization="organization_member_approved"`. If neither is
+  present, stop before context building or any model call. A label event ID
+  means the configured review label was newly added; a currently present
+  label alone does not authorize a review. Persist the event ID on the task so
+  it cannot authorize another pass. SHA changes and `/review-bot re-review`
+  requests need an organization member's explicit `Review bot: yes <RA-ID>`
+  response to the marked PR comment. The approval is bound to the exact head
+  and base SHAs in that request. A pending or declined approval is not review
+  work; preflight continues with other PRs. An interrupted, already-authorized
+  task resumes without asking again.
 - Save last_step and next_step at milestones. When a review is posted,
   update to pr_open with last_reviewed_sha, last_reviewed_base_sha,
   last_reviewed_at, last_seen_updated_at, review URL, review_id, update_count,
@@ -92,9 +109,12 @@ returns to `pr_open` and can be reviewed again when its head/base changes.
 ## Review or resume
 
 At the start of a new review, check for re-review commands in the preflight
-time window as described under **Feedback check**. A review already triggered
-by a changed SHA also satisfies any authorized commands in that window; record
-their IDs for the cycle. Save the preflight `updated_at` as this cycle's
+time window as described under **Feedback check**. Commands do not authorize a
+review by themselves: preflight asks for approval, and only a verified
+organization-member yes response makes the work eligible. A fresh event adding
+the configured review label is the only automatic full-review trigger. A
+review already triggered by a label-add event also satisfies any authorized
+commands in that window; record their IDs for the cycle. Save the preflight `updated_at` as this cycle's
 watermark. Do not add comments arriving later to the current cycle: the next
 feedback check must see them.
 
@@ -509,7 +529,14 @@ only by this bot's comments do not start an AI cycle. Store the returned
 A member can request another full review, even on the same commit, by posting
 a **new top-level PR conversation comment** whose entire text is
 `/review-bot re-review` (case-insensitive, surrounding whitespace allowed).
-Edits to old comments and inline replies are not commands.
+Edits to old comments and inline replies are not commands. This command asks
+the bot to post an approval request; it does not start a review. A verified
+organization member must then reply `Review bot: yes <RA-ID>` to the marked
+request. A `no` response or no response leaves the PR waiting and does not
+prevent other queued PRs from being processed. Head or base SHA changes follow
+the same approval flow. Only a newly observed GitHub `labeled` event for the
+configured review label starts a full review automatically. A label that is
+already present without a new label-add event cannot trigger a review.
 Before acting on any new comment or review thread, including an ordinary
 correction or acceptance, verify its author's organization membership using
 the core `check_org_member` / `store_org_member` procedure. Ignore non-members

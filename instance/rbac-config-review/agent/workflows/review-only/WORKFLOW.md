@@ -14,12 +14,11 @@ with the re-review command and a prompt for explanation questions. Its hidden
 versioned ledger payload is restored from GitHub at the start of later cycles,
 so review history does not depend on an instance-local file surviving.
 
-To request a fresh pass without changing the PR, an organization member can
-post a new top-level PR comment containing only `/review-bot re-review`.
-The PR must still carry the configured review label. The bot verifies the
-commenter's membership, reuses the existing finding ledger and summary, and
-increments the review number in the summary heading. The first pass is
-`Review 1`; multiple requests received before the next pass are coalesced.
+Adding the configured review label is the only event that automatically
+authorizes a full review. A changed head/base SHA or a `/review-bot re-review`
+comment requires an organization member to approve a marked PR comment before
+the bot starts review work. Waiting for approval on one PR does not block other
+queued PRs.
 
 ## Stages
 
@@ -50,7 +49,7 @@ cycle so bot-authored updates alone do not start a model session.
 
 | Piece | File | Script or AI | Role |
 |---|---|---|---|
-| Queue | `preflight/01-review-queue.py` → `review_queue.py` | Script | Picks one labeled PR needing review/feedback, or one tracked PR needing lifecycle reconciliation; checks for unseen human comments before a feedback session |
+| Queue | `preflight/01-review-queue.py` → `review_queue.py` | Script | Picks one newly label-authorized review, approval-gated revision/re-review, feedback pass, or lifecycle reconciliation; checks unseen human comments before a feedback session |
 | Config validation | `review_config.py` | Script | Loads and strictly validates `review-context.yaml` (GitHub URL shape, `.md`-only doc links, unique ids) |
 | Context builder | `build_context.py` | Script | Checks out the PR head read-only, clones related repos at a pinned SHA, fetches configured Markdown docs at a pinned commit, writes `manifest.json` |
 | Skill preparation | `review_skills.py` | Script | Selects dimensions, reads selected recipe YAML at a pinned commit, and generates per-run review skills |
@@ -119,14 +118,14 @@ legacy-state reconciliation:
 
 1. **Filters out**: drafts, PRs authored by the bot itself, and PRs missing a
    head/base SHA. A PR paused for its current SHA pair is checked only when
-   there is newer feedback; an authorized command can explicitly retry it.
+   there is newer feedback.
 2. **Classifies survivors** into one kind (first match wins):
 
    | Kind | Condition | Priority |
    |---|---|---|
-   | `resume` | Task status is `in_progress`/`pr_changes` — a review cycle was interrupted | 0 (highest) |
-   | `review` | No task yet, or current head/base SHA differs from `last_reviewed_sha`/`last_reviewed_base_sha` | 1 |
-   | `feedback_check` | SHA unchanged and preflight finds an unseen human issue/review comment since `last_seen_updated_at`; authorized commands start a fresh review | 2 |
+   | `resume` | Task status is `in_progress`/`pr_changes` and its stored active head/base pair matches the PR | 0 (highest) |
+   | `review` | A new event added the configured label, or the current head/base pair differs from the stored review pair and needs approval | 1 |
+   | `feedback_check` | SHA unchanged and preflight finds unseen human issue/review feedback; `/review-bot re-review` requests approval for a fresh pass | 2 |
    | `merge_complete` | GitHub confirms a tracked PR has merged | 0 |
    | `closed_unmerged` | GitHub confirms a tracked PR closed without merging | 0 |
    | `reconcile_open` | A legacy `done` task is still open, or a closed-unmerged PR was reopened | 3 |
@@ -138,14 +137,22 @@ legacy-state reconciliation:
 3. **Picks exactly one** candidate across every repo, sorted by
    `(priority, updatedAt, repo, number)` — one PR per cycle, oldest
    highest-priority first.
-4. **Capacity gate**: a brand-new `review` is skipped if 10 tasks are already
-   active, even if otherwise eligible. A feedback check also checks capacity
-   before starting a requested re-review.
+4. **Authorization and capacity gates**: a new GitHub `labeled` event for the
+   configured label authorizes a full review automatically. A currently
+   present label without a new label event does not. Head/base changes and
+   re-review commands post one idempotent PR comment with a revision-bound
+   approval ID. Any member of the repository's GitHub organization can reply
+   `Review bot: yes <RA-ID>` or `Review bot: no <RA-ID>`. Only a verified yes
+   response authorizes a full pass. Waiting or declining excludes that PR for
+   this preflight run and the queue continues to other PRs. A brand-new review
+   is skipped if 10 tasks are already active, even if otherwise authorized.
+   An interrupted, already-authorized review resumes without asking again.
 
-Requests are matched exactly from new top-level comments, bounded by the
-preflight timestamp, and deduplicated using comment IDs in task state. The
-runner verifies org membership before acting on commands or ordinary feedback;
-ordinary feedback does not trigger a full review. Before starting a feedback
+Re-review commands are matched exactly from new top-level comments, bounded by
+the preflight timestamp, and deduplicated using comment IDs in task state. A
+command only starts an approval request; it does not authorize review. The
+runner verifies organization membership on approvals and on feedback before
+acting. Ordinary feedback does not trigger a full review. Before starting a feedback
 session, preflight checks issue comments, review comments, and submitted reviews
 for unseen human-authored activity. Bot-authored updates alone do not invoke the
 model. Same-second feedback IDs are saved to prevent replay.
@@ -487,7 +494,7 @@ This PR aligns the documented role response with the fields returned by the hand
 
 ---
 
-- **Re-review:** Add a new top-level PR comment containing `/review-bot re-review`.
+- **Re-review:** Add a new top-level PR comment containing `/review-bot re-review`; the bot will ask for approval before reviewing.
 - **Explanation:** Ask a question about a finding in a PR comment; the bot will answer with pinned context.
 
 <!-- dev-review-bot:fabric-access-review:<head_sha>:<base_sha> -->
@@ -579,8 +586,8 @@ bot_status_update(instance_id="fabric-access-review", state="idle",
   comments; the tracked `review_id` remains the summary review's ID. A
   `<!-- dev-review-bot:fabric-access-review:<head_sha>:<base_sha> -->`
   marker in the summary records which revision it reflects. `feedback_check`
-  cycles do not touch `review_id` or inline threads unless an authorized
-  re-review command starts the normal review path. Verified member feedback is
+  cycles do not touch `review_id` or inline threads unless a fresh label-add
+  event or an approved re-review starts the normal review path. Verified member feedback is
   recorded in task state; this instance cannot write to shared memory.
 - Related repositories and linked docs are read-only context — they never
   expand the PR queue, and `review-context.yaml` is the only source of
