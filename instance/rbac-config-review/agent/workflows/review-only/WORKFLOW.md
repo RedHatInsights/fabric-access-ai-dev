@@ -78,7 +78,7 @@ read-only worker: Terra uses `review-terra`, and Luna uses `review-luna`.
 `review_plan` records the resolved worker. Dimensions run in plan-ordered
 batches of at most four concurrent workers; each batch is recorded before the
 next starts.
-`review-verifier` separately checks findings on Terra. If a preferred worker
+`review-verifier` separately checks findings on Luna. If a preferred worker
 fails, that dimension is recorded as failed instead of being silently rerun on
 another model.
 The high preset remains the default. For a documentation-only diff, dimensions
@@ -317,7 +317,7 @@ rechecks the live PR state, then sets `done` only for a merged PR, `paused` for
 a closed unmerged PR, or `pr_open` when reconciling an open PR.
 
 Gray bands are script (no model call); the red band is where Terra or Luna
-reviews the selected dimensions and Terra's review-verifier tries to refute
+reviews the selected dimensions and Luna's review-verifier tries to refute
 proposed findings.
 
 ## Finding shape

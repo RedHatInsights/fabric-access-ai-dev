@@ -299,14 +299,14 @@ GitHub PR label selected by `review-context.yaml: review_label`.
 
 | Profile | Agent | Configured model |
 |---|---|---|
-| `terra` | `review-terra`, `review-verifier` | `rehor-openai/gpt-6.1-terra` |
-| `luna` | `review-runner`, `review-luna` | `rehor-openai/gpt-6-luna` |
+| `terra` | `review-terra` | `rehor-openai/gpt-6.1-terra` |
+| `luna` | `review-runner`, `review-luna`, `review-verifier` | `rehor-openai/gpt-6-luna` |
 
 The primary `review-runner` uses Luna for orchestration. Dimension passes are
 dispatched in batches of at most four concurrent workers to `review-terra` or
 `review-luna` according to the resolved model preference. Results are recorded
 by dimension before the next batch. The separate `review-verifier` subagent
-also uses Terra to refute proposed findings. See the [runner config](agent/.opencode/agents/review-runner.md),
+also uses Luna to refute proposed findings. See the [runner config](agent/.opencode/agents/review-runner.md),
 [Terra reviewer config](agent/.opencode/agents/review-terra.md),
 [Luna reviewer config](agent/.opencode/agents/review-luna.md),
 [verifier config](agent/.opencode/agents/review-verifier.md), and

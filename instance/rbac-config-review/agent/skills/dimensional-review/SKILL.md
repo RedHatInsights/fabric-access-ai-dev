@@ -140,7 +140,7 @@ plan resolves every pass to both a `model_preference` and a `review_agent`:
 Terra-preference passes use the read-only `review-terra` subagent, while Luna-
 preference passes use the read-only `review-luna` subagent. A missing
 preference uses the catalog's Luna default. The separate `review-verifier`
-subagent remains on Terra for evidence refutation.
+subagent uses Luna for evidence refutation.
 
 Run applicable dimensions in **bounded parallel batches of at most four**,
 keeping the review-plan order when forming each batch. Dispatch the independent

@@ -26,8 +26,8 @@ Follow the active workflow AGENTS.md for the exact cycle.
 The review bot's default model is GPT-6 Luna. It is configured on both the
 instance (`instance.yaml`) and the primary `review-runner` agent. Use Luna for
 overall review orchestration and dimensions with no explicit preference.
-Dimensions with a `terra` preference use Terra, and the separate verifier
-continues to use Terra.
+Dimensions with a `terra` preference use Terra. The separate verifier uses
+Luna.
 
 Dimensions can set `model_preference` in
 `skills/dimensional-review/dimensions.yaml`:
@@ -48,7 +48,7 @@ Run passes in batches of at most four concurrent workers, forming batches in
 plan order. Invoke each selected worker with the same pinned PR context and
 only its assigned dimension. Wait for all results in a batch, record them by
 dimension name, then start the next batch. The separate `review-verifier`
-remains on Terra and attempts to refute proposed findings. If a selected
+uses Luna to attempt to refute proposed findings. If a selected
 worker is unavailable, mark that pass failed and continue with the other
 planned passes; do not silently retry it with a different model. Follow the
 workflow's publication gate if no review pass completes.

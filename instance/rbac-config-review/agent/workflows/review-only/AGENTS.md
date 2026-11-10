@@ -166,7 +166,7 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    schema. Dispatch the workers in a batch concurrently and record each result
    before moving to the next batch. If a selected worker is unavailable, mark
    that pass failed and continue without silently switching models. Keep
-   `review-verifier` on Terra for the separate
+   `review-verifier` on Luna for the separate
    refutation step. Run CONTEXT with this manifest, then EXECUTE and MERGE per
    the skill.
    Feed the
