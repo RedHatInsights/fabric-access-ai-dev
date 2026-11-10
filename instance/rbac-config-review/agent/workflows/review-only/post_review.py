@@ -130,6 +130,8 @@ def publish(repo: str, pr: int, head: str, base: str, publication: Path,
                 raise RuntimeError("Pending review is not owned by the current bot account")
             if not isinstance(tracked.get("body"), str) or tracked["body"].strip():
                 raise RuntimeError("Pending review has content and cannot safely be replaced")
+            if tracked.get("commit_id") != head:
+                raise RuntimeError("Pending review targets an older commit and cannot be reused")
             pending_comments = api(f"{endpoint}/{review_id}/comments?per_page=100", paginate=True)
             if not isinstance(pending_comments, list) or pending_comments:
                 raise RuntimeError("Pending review has comments and cannot safely be submitted")
@@ -143,7 +145,7 @@ def publish(repo: str, pr: int, head: str, base: str, publication: Path,
         raise RuntimeError("GitHub did not confirm review publication")
     if action in {"updated", "submitted"} and result["id"] != review_id:
         raise RuntimeError("GitHub returned a different review ID")
-    if action == "submitted" and result.get("state") == "PENDING":
+    if action == "submitted" and result.get("state") != "COMMENTED":
         raise RuntimeError("GitHub did not submit the pending review")
     return {"review_id": result["id"], "review_url": result.get("html_url"), "action": action}
 

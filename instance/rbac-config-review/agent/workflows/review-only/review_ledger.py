@@ -271,7 +271,8 @@ def decode_body(body: object, repo: str, pr: int) -> dict:
     return {**payload, "findings": ledger}
 
 
-def restore_from_review(repo: str, pr: int, review_id: int, bot_login: str) -> dict:
+def restore_from_review(repo: str, pr: int, review_id: int, bot_login: str,
+                        expected_head: str | None = None) -> dict:
     if (not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo)
             or not isinstance(pr, int) or isinstance(pr, bool) or pr < 1
             or not isinstance(review_id, int) or isinstance(review_id, bool) or review_id < 1):
@@ -292,6 +293,8 @@ def restore_from_review(repo: str, pr: int, review_id: int, bot_login: str) -> d
     if review.get("state") == "PENDING":
         if not isinstance(review.get("body"), str) or review["body"].strip():
             raise LedgerError("Tracked pending review has content and cannot safely restore the ledger")
+        if expected_head is not None and review.get("commit_id") != expected_head:
+            raise LedgerError("Tracked pending review targets an older commit and cannot be reused")
         comments_result = subprocess.run(
             ["gh", "api", f"repos/{repo}/pulls/{pr}/reviews/{review_id}/comments",
              "--paginate", "--slurp"],

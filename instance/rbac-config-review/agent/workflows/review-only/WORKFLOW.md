@@ -395,9 +395,10 @@ payment-card numbers; it is not a general secret or personal-data detector,
 so review text must still avoid sensitive details. If an older status review
 has no payload and its legacy ledger file is gone, preflight stops before
 starting a model session; that review needs a one-time ledger restore. An
-empty bot-owned pending review with no review comments is recoverable: the
-publisher submits it with the fresh summary as a COMMENT review. Pending
-reviews with content or inline comments still require manual reconciliation.
+empty bot-owned pending review for the current head with no review comments is
+recoverable: the publisher submits it with the fresh summary as a COMMENT
+review. Pending reviews with content, inline comments, or an older head still
+require manual reconciliation.
 
 ## Explaining a review finding
 

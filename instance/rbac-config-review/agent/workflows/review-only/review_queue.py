@@ -134,7 +134,7 @@ def restore_prior_ledger(chosen: dict, task: dict | None) -> None:
     if isinstance(review_id, int) and not isinstance(review_id, bool) and review_id > 0:
         try:
             payload = restore_from_review(
-                chosen["repo"], chosen["number"], review_id, _bot_login()
+                chosen["repo"], chosen["number"], review_id, _bot_login(), chosen["head_sha"]
             )
         except EmptyPendingReview:
             # Reuse this draft only after the publisher replaces it with a

@@ -35,10 +35,11 @@ bot_status_update with this instance ID at cycle start and end.
   body is the durable ledger source. Preflight reads its hidden, versioned
   payload and writes a temporary `work.ledger_path` for this cycle; the next
   cycle restores the ledger from GitHub again. An empty bot-owned pending
-  review with no inline comments can be reused: preflight uses the legacy
-  ledger if present, or starts a fresh ledger otherwise, and the publisher
-  submits the completed status body as a COMMENT review. Pending reviews with
-  content or inline comments require manual reconciliation.
+  review on the current head with no inline comments can be reused: preflight
+  uses the legacy ledger if present, or starts a fresh ledger otherwise, and
+  the publisher submits the completed status body as a COMMENT review.
+  Pending reviews with content, inline comments, or an older head require
+  manual reconciliation.
 - `seen_rereview_comment_ids` records processed command comment IDs;
   `seen_feedback_comment_ids` records human conversation/review comment IDs
   seen at the timestamp boundary; `pending_publication` records a validated
