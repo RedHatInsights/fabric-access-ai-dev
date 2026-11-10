@@ -11,6 +11,7 @@ from urllib.parse import urlencode
 from common import INSTANCE_ID, MEMORY_URL, http_get, load_project_repos, output_result
 from review_config import ReviewConfigError, github_repo_url, load_config
 from review_ledger import (
+    EmptyPendingReview,
     LedgerError,
     LedgerPayloadMissing,
     decode_body,
@@ -32,11 +33,11 @@ def task_key(repo: str, number: int) -> str:
 
 
 def load_tasks() -> list[dict]:
-    """Page through task state; a failed memory read must not imply no reviews."""
+    """Load all task states so archived keys suppress duplicate task creation."""
     tasks: list[dict] = []
     offset = 0
     while True:
-        params = {"exclude_status": "archived", "limit": 100, "offset": offset}
+        params = {"limit": 100, "offset": offset}
         if INSTANCE_ID:
             params["instance_id"] = INSTANCE_ID
         data = http_get(f"{MEMORY_URL}/api/tasks?{urlencode(params)}")
@@ -128,12 +129,17 @@ def restore_prior_ledger(chosen: dict, task: dict | None) -> None:
         return
 
     payload = None
+    empty_pending = False
     review_id = meta.get("review_id")
     if isinstance(review_id, int) and not isinstance(review_id, bool) and review_id > 0:
         try:
             payload = restore_from_review(
                 chosen["repo"], chosen["number"], review_id, _bot_login()
             )
+        except EmptyPendingReview:
+            # Reuse this draft only after the publisher replaces it with a
+            # complete, submitted status review. Keep an old ledger if present.
+            empty_pending = True
         except LedgerPayloadMissing:
             # Upgrade path for existing reviews: use an old local ledger once,
             # then the next published status comment carries the durable copy.
@@ -144,16 +150,22 @@ def restore_prior_ledger(chosen: dict, task: dict | None) -> None:
     if payload is None:
         legacy_path = meta.get("ledger_path")
         if not isinstance(legacy_path, str) or not Path(legacy_path).is_file():
-            raise LedgerError(
-                "Prior review has no embedded ledger and its legacy local ledger is unavailable"
-            )
-        try:
-            ledger = public_ledger(json.loads(Path(legacy_path).read_text()))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise LedgerError(f"Could not read the legacy ledger: {exc}") from exc
-        update_count = meta.get("update_count", 0)
-        if not isinstance(update_count, int) or isinstance(update_count, bool) or update_count < 0:
-            raise LedgerError("Legacy review update_count is invalid")
+            if not empty_pending:
+                raise LedgerError(
+                    "Prior review has no embedded ledger and its legacy local ledger is unavailable"
+                )
+            # No submitted summary or recoverable ledger exists. Leave
+            # work.ledger_path unset so the workflow creates its first ledger.
+            chosen["update_count"] = 0
+            return
+        else:
+            try:
+                ledger = public_ledger(json.loads(Path(legacy_path).read_text()))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise LedgerError(f"Could not read the legacy ledger: {exc}") from exc
+            update_count = meta.get("update_count", 0)
+            if not isinstance(update_count, int) or isinstance(update_count, bool) or update_count < 0:
+                raise LedgerError("Legacy review update_count is invalid")
     else:
         ledger = payload["findings"]
         update_count = payload["update_count"]
@@ -352,6 +364,10 @@ def pick_work(repos: dict, config: dict, tasks: list[dict]) -> tuple[dict | None
             key = task_key(repo, pr.get("number"))
             open_pr_keys.add(key)
             task = by_key.get(key)
+            if task and task.get("status") == "archived":
+                # Keep the unique task key reserved. Operators can unarchive
+                # this existing record when the PR should be reviewed again.
+                continue
             item = candidate(pr, repo_key, repo, task)
             if item is None and task and task.get("status") in {"done", "paused", "pr_open"}:
                 # updatedAt has second precision: a new command can share the

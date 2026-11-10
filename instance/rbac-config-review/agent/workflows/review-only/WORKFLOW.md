@@ -172,8 +172,10 @@ instance can all have tasks in the same memory server. `review_queue.py`'s
 `load_tasks()` filters strictly on
 `source_type == "github" and external_key.startswith("review-only:github:")`
 — so even a task for the exact same PR number created by a different
-instance is invisible to this one. There is no author-based or label-based
-task filtering; the `external_key` prefix *is* the isolation boundary.
+instance is invisible to this one. It includes archived records to keep their
+unique keys reserved; a labeled PR with an archived task is skipped until the
+existing task is unarchived. There is no author-based or label-based task
+filtering; the `external_key` prefix *is* the isolation boundary.
 
 ### Memory: task state vs. the shared RAG store
 
@@ -392,7 +394,10 @@ token/key formats, credential assignments, email addresses, SSNs, and
 payment-card numbers; it is not a general secret or personal-data detector,
 so review text must still avoid sensitive details. If an older status review
 has no payload and its legacy ledger file is gone, preflight stops before
-starting a model session; that review needs a one-time ledger restore.
+starting a model session; that review needs a one-time ledger restore. An
+empty bot-owned pending review with no review comments is recoverable: the
+publisher submits it with the fresh summary as a COMMENT review. Pending
+reviews with content or inline comments still require manual reconciliation.
 
 ## Explaining a review finding
 

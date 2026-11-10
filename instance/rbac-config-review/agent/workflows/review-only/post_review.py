@@ -118,12 +118,33 @@ def publish(repo: str, pr: int, head: str, base: str, publication: Path,
         result = api(endpoint, "POST", {"commit_id": head, "event": "COMMENT", "body": body})
         action = "posted"
     else:
-        result = api(f"{endpoint}/{review_id}", "PUT", {"body": body})
-        action = "updated"
+        tracked = api(f"{endpoint}/{review_id}")
+        if not isinstance(tracked, dict):
+            raise RuntimeError("GitHub returned invalid tracked review data")
+        if tracked.get("state") == "PENDING":
+            actor = api("user")
+            author = (tracked.get("user") or {}).get("login")
+            if (not isinstance(actor, dict) or not isinstance(actor.get("login"), str)
+                    or not isinstance(author, str)
+                    or author.casefold() != actor["login"].casefold()):
+                raise RuntimeError("Pending review is not owned by the current bot account")
+            if not isinstance(tracked.get("body"), str) or tracked["body"].strip():
+                raise RuntimeError("Pending review has content and cannot safely be replaced")
+            pending_comments = api(f"{endpoint}/{review_id}/comments?per_page=100", paginate=True)
+            if not isinstance(pending_comments, list) or pending_comments:
+                raise RuntimeError("Pending review has comments and cannot safely be submitted")
+            result = api(f"{endpoint}/{review_id}/events", "POST",
+                         {"body": body, "event": "COMMENT"})
+            action = "submitted"
+        else:
+            result = api(f"{endpoint}/{review_id}", "PUT", {"body": body})
+            action = "updated"
     if not isinstance(result, dict) or not isinstance(result.get("id"), int):
         raise RuntimeError("GitHub did not confirm review publication")
-    if action == "updated" and result["id"] != review_id:
+    if action in {"updated", "submitted"} and result["id"] != review_id:
         raise RuntimeError("GitHub returned a different review ID")
+    if action == "submitted" and result.get("state") == "PENDING":
+        raise RuntimeError("GitHub did not submit the pending review")
     return {"review_id": result["id"], "review_url": result.get("html_url"), "action": action}
 
 
