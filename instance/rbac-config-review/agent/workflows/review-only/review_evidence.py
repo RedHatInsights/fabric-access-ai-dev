@@ -383,11 +383,79 @@ def render_inline_comments(findings: list[dict]) -> list[dict]:
     return comments
 
 
-def render_review(manifest: dict, findings: list[dict]) -> str:
+def validate_pr_summary(data: object, manifest: dict) -> str:
+    """Return a concise, single-line description of what the PR changes."""
+    if not isinstance(data, dict):
+        raise EvidenceError("Expected findings object")
+    summary = data.get("pr_summary")
+    if summary is None:
+        summary = manifest.get("pr", {}).get("title")
+        if not isinstance(summary, str) or not summary.strip():
+            summary = "This PR updates the reviewed code."
+        summary = " ".join(summary.split())
+        if len(summary) > 280:
+            summary = summary[:277].rsplit(" ", 1)[0].rstrip() + "..."
+        return summary
+    if not isinstance(summary, str) or not summary.strip():
+        raise EvidenceError("pr_summary must be a non-empty sentence")
+    summary = " ".join(summary.split())
+    if len(summary) > 280:
+        raise EvidenceError("pr_summary must not exceed 280 characters")
+    if "<!--" in summary or "-->" in summary:
+        raise EvidenceError("pr_summary must not contain HTML comments")
+    return summary
+
+
+def table_cell(value: object) -> str:
+    """Keep generated finding text on one valid Markdown table row."""
+    text = " ".join(str(value).split())
+    return text.replace("|", "&#124;") or "—"
+
+
+def findings_table(findings: list[dict]) -> list[str]:
+    lines = [
+        "| ID | Severity | Dimension | Status | Inline comment |",
+        "|---|---|---|---|---|",
+    ]
+    if not findings:
+        lines.append("| — | — | — | No confirmed findings. | — |")
+        return lines
+    for item in findings:
+        ident = item["id"]
+        lines.append(
+            f"| {ident} | {table_cell(item.get('severity') or 'not recorded')} "
+            f"| {table_cell(dimension_label(item))} "
+            f"| {table_cell(item.get('status', 'open'))} | [Open thread](review-comment:{ident}) |"
+        )
+    return lines
+
+
+def render_status_review(manifest: dict, findings: list[dict], review_number: int,
+                         summary: str | None = None) -> str:
+    """Render the shared status-review template for standard and custom reviews."""
     pr = manifest["pr"]
-    lines = ["## Review 1", "", compact_status_line(findings)]
-    lines.extend(["", f"<!-- dev-review-bot:fabric-access-review:{pr['head_sha']}:{pr['base_sha']} -->"])
+    summary = summary or validate_pr_summary({}, manifest)
+    lines = [
+        f"## Review {review_number}",
+        "",
+        summary,
+        "",
+        f"### {compact_status_line(findings)}",
+        "",
+        *findings_table(findings),
+        "",
+        "---",
+        "",
+        "- **Re-review:** Add a new top-level PR comment containing `/review-bot re-review`.",
+        "- **Explanation:** Ask a question about a finding in a PR comment; the bot will answer with pinned context.",
+        "",
+        f"<!-- dev-review-bot:fabric-access-review:{pr['head_sha']}:{pr['base_sha']} -->",
+    ]
     return "\n".join(lines) + "\n"
+
+
+def render_review(manifest: dict, findings: list[dict], summary: str | None = None) -> str:
+    return render_status_review(manifest, findings, 1, summary)
 
 
 def open_entries(ledger: list[dict]) -> list[dict]:
@@ -514,28 +582,17 @@ def link_evidence(explanation: str, refs: list[dict]) -> str:
 
 
 def compact_status_line(findings: list[dict]) -> str:
-    """Render the findings and resolution state without repeating inline detail."""
-    if not findings:
-        return "Findings: 0 confirmed."
+    """Summarize finding counts for the Findings heading."""
     open_count = sum(item.get("status", "open") == "open" for item in findings)
     addressed_count = sum(item.get("status") == "addressed" for item in findings)
-    links = []
-    for item in findings:
-        ident = item["id"]
-        severity = item.get("severity") or "not recorded"
-        status = item.get("status", "open")
-        dimension = dimension_label(item)
-        links.append(f"{ident} · {severity} · {dimension} · {status} ([inline comment](review-comment:{ident}))")
     return (f"Findings ({len(findings)} total; {open_count} open, "
-            f"{addressed_count} addressed): " + "; ".join(links))
+            f"{addressed_count} addressed)")
 
 
-def render_ledger(manifest: dict, ledger: list[dict], new_findings: list[dict], update_count: int) -> str:
-    """Render one compact status comment; finding details live in inline threads."""
-    pr = manifest["pr"]
-    lines = [f"## Review {update_count + 1}", "", compact_status_line(ledger), ""]
-    lines.append(f"<!-- dev-review-bot:fabric-access-review:{pr['head_sha']}:{pr['base_sha']} -->")
-    return "\n".join(lines) + "\n"
+def render_ledger(manifest: dict, ledger: list[dict], new_findings: list[dict],
+                  update_count: int, summary: str | None = None) -> str:
+    """Render the updated status review with the carried finding ledger."""
+    return render_status_review(manifest, ledger, update_count + 1, summary)
 
 
 def custom_skill_results(manifest: dict, data: object) -> tuple[list[dict], list[dict]]:
@@ -593,8 +650,9 @@ def validate_format_verdict(data: object, format_skills: list[dict]) -> None:
 
 
 def render_custom(manifest: dict, ledger: list[dict], new_findings: list[dict],
-                  update_count: int, data: object) -> tuple[str, list[dict]]:
-    """Validate skill-formatted inline comments; keep the status summary compact."""
+                  update_count: int, data: object,
+                  summary: str | None = None) -> tuple[str, list[dict]]:
+    """Validate skill-formatted inline comments and use the shared status template."""
     if not isinstance(data, dict):
         raise EvidenceError("Custom format must be an object")
     entries = {entry["id"]: entry for entry in ledger}
@@ -652,9 +710,7 @@ def render_custom(manifest: dict, ledger: list[dict], new_findings: list[dict],
         if finding["id"] not in custom_expected:
             custom_by_id[finding["id"]] = render_inline_comments([finding])[0]
     comments = [custom_by_id[finding["id"]] for finding in new_findings]
-    pr = manifest["pr"]
-    body = f"## Review {update_count + 1}\n\n{compact_status_line(ledger)}"
-    body += f"\n\n<!-- dev-review-bot:fabric-access-review:{pr['head_sha']}:{pr['base_sha']} -->\n"
+    body = render_status_review(manifest, ledger, update_count + 1, summary)
     return body, comments
 
 
@@ -705,7 +761,9 @@ def main() -> None:
             for comment in response_comments:
                 ensure_public_content(comment["body"], "Context response")
             args.context_response_comments_output.write_text(json.dumps(response_comments, indent=2))
-        findings = validate_findings(json.loads(args.findings.read_text()), manifest, impact)
+        findings_data = json.loads(args.findings.read_text())
+        summary = validate_pr_summary(findings_data, manifest)
+        findings = validate_findings(findings_data, manifest, impact)
         accepted = confirmed(findings, json.loads(args.verdicts.read_text()))
         if args.ledger is None:
             new_ledger = apply_ledger_updates([], accepted, [], manifest["pr"]["head_sha"])
@@ -725,7 +783,8 @@ def main() -> None:
             format_skills, skill_results = custom_skill_results(manifest, json.loads(args.skill_results.read_text()))
             if args.prepare_custom and not args.custom_format and not args.custom_verdict:
                 args.prepare_custom.write_text(json.dumps({
-                    "findings": accepted, "ledger": new_ledger, "update_count": update_count,
+                    "pr_summary": summary, "findings": accepted,
+                    "ledger": new_ledger, "update_count": update_count,
                     "review_number": update_count + 1, "format_skills": format_skills,
                     "skill_results": skill_results,
                 }, indent=2))
@@ -737,12 +796,12 @@ def main() -> None:
             format_verdict = json.loads(args.custom_verdict.read_text())
             validate_format_verdict(format_verdict, format_skills)
             body, comments = render_custom(manifest, new_ledger, accepted, update_count,
-                                           json.loads(args.custom_format.read_text()))
+                                           json.loads(args.custom_format.read_text()), summary)
         elif format_name == "standard":
             if args.custom_format or args.custom_verdict or args.prepare_custom or args.skill_results:
                 raise EvidenceError("Custom formatting options require format: custom")
-            body = render_review(manifest, accepted) if args.ledger is None else render_ledger(
-                manifest, new_ledger, accepted, update_count
+            body = render_review(manifest, accepted, summary) if args.ledger is None else render_ledger(
+                manifest, new_ledger, accepted, update_count, summary
             )
             comments = render_inline_comments(accepted)
         else:

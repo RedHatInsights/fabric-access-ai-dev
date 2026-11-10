@@ -6,9 +6,11 @@ deployed). Each cycle it reviews at most one GitHub PR labeled in
 never edits, commits, pushes, approves, requests changes, or merges — it keeps
 one GitHub review summary per PR and edits it in place each cycle. It also
 posts one idempotent inline thread per actionable finding, using the same
-finding ID in the summary and inline comment. The summary uses one compact
-status line with plain-text finding IDs and `[inline comment]` links to each
-thread; scenarios, evidence, and fixes stay in the inline comments. Its hidden
+finding ID in the summary and inline comment. The summary has a one-sentence
+purpose statement followed by a Findings table with plain-text IDs, severity,
+dimension, resolution state, and a separate link to each inline thread.
+Scenarios, evidence, and fixes stay in the inline comments. The summary ends
+with the re-review command and a prompt for explanation questions. Its hidden
 versioned ledger payload is restored from GitHub at the start of later cycles,
 so review history does not depend on an instance-local file surviving.
 
@@ -30,7 +32,7 @@ flowchart LR
         A["Preflight<br/>(review_queue.py)"] --> B["Context<br/>(build_context.py)"]
         B --> C["Review<br/>(Terra/Luna by dimension)"]
         C --> D["Verify<br/>(review-verifier)"]
-        D --> E["Publish<br/>(inline threads, then compact status summary)"]
+        D --> E["Publish<br/>(inline threads, then formatted status summary)"]
     end
     E --> GH2["GitHub review summary + inline threads"]
     E -.-> Memory
@@ -61,7 +63,7 @@ cycle so bot-authored updates alone do not start a model session.
 | Missing-context detector | `.opencode/agents/missing-context-detector.md` | **AI** (subagent) | Asks only material questions, then evaluates author answers against pinned context |
 | Explanation quality | `skills/explanatory-answer/SKILL.md` | **AI** (review-runner) | General guidance for direct answers, causal reasoning, evidence, and optional Mermaid diagrams; this workflow maps it to finding fields |
 | Verifier | `.opencode/agents/review-verifier.md` | **AI** (subagent) | Independently tries to refute every proposed finding using only pinned sources |
-| Evidence gate | `review_evidence.py` | Script | Rejects findings without real pinned locations/references; caps at seven; requires one verdict per finding; renders the compact status summary |
+| Evidence gate | `review_evidence.py` | Script | Rejects findings without real pinned locations/references; caps at seven; requires one verdict per finding; renders the status template |
 | Review ledger transport | `review_ledger.py`, `review_queue.py`, `post_review.py` | Script | Embeds a public-safe ledger in the status review and restores it from GitHub before a model session |
 | Inline publisher | `post_inline_comments.py` | Script | Posts or updates one anchored comment per confirmed finding on the current PR head, deduplicated by finding ID |
 
@@ -308,7 +310,7 @@ sequenceDiagram
         R->>R: review_evidence.py → compact publication + inline/context comments + ledger
     end
     R->>GH: post/update inline threads and context questions
-    R->>GH: create/update one compact status summary with inline links
+    R->>GH: create/update one status summary with a Findings table and inline links
     R->>Q: task_update (status=pr_open, reviewed SHA, review_id, update_count)
 ```
 
@@ -378,10 +380,11 @@ From a task's second cycle onward, `review_evidence.py` also takes a prior
 those (same adversarial check as new findings) before the ledger entry closes.
 `"still_open"`/`"uncertain"` need no verdict. One re-check per currently-open
 entry is required; the merged result becomes the new `ledger.json`. The posted
-review body has a `Review N` heading and one compact status line with each
-finding's stable ID, severity, dimension, resolution state, and inline-thread
-link. Detailed explanations stay in the inline comments. Review numbers omit
-the `#` prefix so GitHub does not treat them as issue links.
+review body has a `Review N` heading, a one-sentence description of what the PR
+changes, and a Findings table with each finding's stable ID, severity,
+dimension, resolution state, and inline-thread link. Detailed explanations
+stay in the inline comments. Review numbers omit the `#` prefix so GitHub does
+not treat them as issue links.
 
 The hidden payload is not private data: GitHub returns HTML-comment text in
 the review body API to anyone who can access the PR. It stores only the fields
@@ -420,6 +423,11 @@ workflow's finding schema maps a direct answer to `claim`, the circumstance to
 `evidence.refs`, the consequence to `impact`, and the correction to
 `suggested_fix`. Re-check explanations use the same causal chain. PR findings
 use prose because the summary is compact and inline threads have limited width.
+During a feedback check, a verified member can ask how or why a finding occurs.
+The bot answers from pinned context in the same inline thread or as a top-level
+reply, using `explanatory-answer`; the reply carries a hidden
+`dev-review-bot:explanation:<source-comment-id>` marker and does not start a
+new review.
 
 For example, [PR #3567](https://github.com/project-kessel/insights-rbac/pull/3567#discussion_r4511659742)
 has a documentation mismatch:
@@ -438,13 +446,25 @@ has a documentation mismatch:
 
 ## Example comments
 
-A compact status summary (the publisher replaces `review-comment:F1` with the
+Status review template (the publisher replaces `review-comment:F1` with the
 GitHub URL of the inline thread; finding IDs remain plain text):
 
 ```markdown
 ## Review 2
 
-Findings (2 total; 1 open, 1 addressed): F1 · blocking · correctness · open ([inline comment](review-comment:F1)); F2 · nit · documentation · addressed ([inline comment](review-comment:F2))
+This PR aligns the documented role response with the fields returned by the handler.
+
+### Findings (2 total; 1 open, 1 addressed)
+
+| ID | Severity | Dimension | Status | Inline comment |
+|---|---|---|---|---|
+| F1 | blocking | correctness | open | [Open thread](review-comment:F1) |
+| F2 | nit | documentation | addressed | [Open thread](review-comment:F2) |
+
+---
+
+- **Re-review:** Add a new top-level PR comment containing `/review-bot re-review`.
+- **Explanation:** Ask a question about a finding in a PR comment; the bot will answer with pinned context.
 
 <!-- dev-review-bot:fabric-access-review:<head_sha>:<base_sha> -->
 <!-- dev-review-bot:review-ledger:v1:<compressed-public-ledger> -->
@@ -527,9 +547,9 @@ bot_status_update(instance_id="fabric-access-review", state="idle",
   that same review via `PUT .../reviews/<review_id>` instead of posting a new
   one — there is at most one review summary per PR. The inline publisher
   upserts comments by finding ID for the current head, so retries do not
-  duplicate a thread. Summary headings use `Review N` (without `#N`), and its
-  compact status line keeps finding IDs unlinked and adds a separate inline
-  comment link for each thread. Inline
+  duplicate a thread. Summary headings use `Review N` (without `#N`), followed
+  by a short PR-purpose sentence and a Findings table. Finding IDs stay plain
+  text; each row has a separate inline-comment link. Inline
   comments start with the same ID; custom formats preserve their selected
   skill's detailed layout. GitHub may create separate review records for inline
   comments; the tracked `review_id` remains the summary review's ID. A
