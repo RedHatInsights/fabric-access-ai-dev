@@ -35,6 +35,10 @@ class LedgerPayloadMissing(LedgerError):
 class EmptyPendingReview(LedgerPayloadMissing):
     """A bot-owned pending review is empty and can safely receive a fresh summary."""
 
+    def __init__(self, message: str, *, reusable: bool = True):
+        super().__init__(message)
+        self.reusable = reusable
+
 
 def _text(value: object, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
@@ -293,8 +297,6 @@ def restore_from_review(repo: str, pr: int, review_id: int, bot_login: str,
     if review.get("state") == "PENDING":
         if not isinstance(review.get("body"), str) or review["body"].strip():
             raise LedgerError("Tracked pending review has content and cannot safely restore the ledger")
-        if expected_head is not None and review.get("commit_id") != expected_head:
-            raise LedgerError("Tracked pending review targets an older commit and cannot be reused")
         comments_result = subprocess.run(
             ["gh", "api", f"repos/{repo}/pulls/{pr}/reviews/{review_id}/comments",
              "--paginate", "--slurp"],
@@ -311,6 +313,11 @@ def restore_from_review(repo: str, pr: int, review_id: int, bot_login: str,
             raise LedgerError("GitHub returned invalid pending-review comments")
         if any(comment_pages):
             raise LedgerError("Tracked pending review has comments and cannot safely be reused")
+        if expected_head is not None and review.get("commit_id") != expected_head:
+            raise EmptyPendingReview(
+                "Tracked pending review targets an older commit and cannot be reused",
+                reusable=False,
+            )
         raise EmptyPendingReview("Tracked review is an empty pending draft; start a fresh ledger")
     return decode_body(review.get("body"), repo, pr)
 

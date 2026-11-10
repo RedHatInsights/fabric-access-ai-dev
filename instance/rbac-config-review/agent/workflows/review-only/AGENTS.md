@@ -32,14 +32,26 @@ bot_status_update with this instance ID at cycle start and end.
   confirms a non-null `mergedAt` for the pull request.
 - `review_id` and `update_count` exist from the task's first posted review
   onward; a task with no `review_id` yet has never posted. The status review
-  body is the durable ledger source. Preflight reads its hidden, versioned
-  payload and writes a temporary `work.ledger_path` for this cycle; the next
-  cycle restores the ledger from GitHub again. An empty bot-owned pending
-  review on the current head with no inline comments can be reused: preflight
-  uses the legacy ledger if present, or starts a fresh ledger otherwise, and
-  the publisher submits the completed status body as a COMMENT review.
-  Pending reviews with content, inline comments, or an older head require
-  manual reconciliation.
+  body is the durable ledger source. Preflight checks that review first, then
+  checks a recoverable pending publication and the legacy local ledger. It
+  writes the recovered data to a temporary `work.ledger_path`; the next cycle
+  restores the ledger from GitHub again. If an existing review has no ledger
+  in any recoverable location, preflight posts one marked comment asking the
+  PR author whether to start a fresh review, then returns `skip` without
+  starting a model session. It waits for the PR author to reply exactly
+  `Review bot: yes <recovery-id>` or `Review bot: no <recovery-id>`; only the
+  author's reply to that request counts. Yes starts a fresh ledger at update
+  count 0. No or no reply leaves the PR waiting without a review run. An empty
+  bot-owned pending review on the current head with no inline comments can be
+  reused after approval. If that empty draft targets an older head, preflight
+  sets `work.ignore_review_id`; clear the old `review_id` and omit
+  `--review-id` so the new review is published separately. Pending reviews
+  with content or inline comments still require manual reconciliation.
+- When preflight supplies `ledger_recovery_approved`, the PR author approved
+  starting over because the old ledger could not be recovered. Start the new
+  ledger with `update_count=0`; do not claim to have carried old finding IDs
+  forward. If `work.ignore_review_id` is true, set the task's old `review_id`
+  and `review_url` to null and do not pass `--review-id` to the publisher.
 - `seen_rereview_comment_ids` records processed command comment IDs;
   `seen_feedback_comment_ids` records human conversation/review comment IDs
   seen at the timestamp boundary; `pending_publication` records a validated
