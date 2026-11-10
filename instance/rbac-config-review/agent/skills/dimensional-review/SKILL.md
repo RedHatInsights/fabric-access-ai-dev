@@ -112,11 +112,12 @@ If a selected guide is missing or unreadable, mark that dimension as failed and 
 
 Print the local source table and dispatch counts before launching. For example:
 
-| Dimension | Guide | Status |
-|-----------|-------|--------|
-| correctness | reviewers/correctness.md | LOCAL |
-| security | reviewers/security.md | LOCAL |
-| ... | ... | ... |
+| Dimension | Guide | Preference | Worker | Status |
+|-----------|-------|------------|--------|--------|
+| correctness | reviewers/correctness.md | terra | current | LOCAL |
+| code-quality | reviewers/code-quality.md | luna | review-luna | LOCAL |
+| security | reviewers/security.md | terra | current | LOCAL |
+| ... | ... | ... | ... | ... |
 
 All selected reviewer guides loaded locally
 
@@ -133,9 +134,24 @@ For each selected dimension, prepend the full local reviewer guide to a shared r
 
 ### 3.3 rbac-config-review Workflow Dispatch (OpenCode)
 
-This vendored copy runs inside the `rbac-config-review` instance's `review-runner` agent on OpenCode. The `review-verifier` subagent is reserved for the later evidence-refutation pass. Review dimensions run in the current session.
+This vendored copy runs inside the `rbac-config-review` instance's
+`review-runner` agent on OpenCode. The instance default is Terra. The review
+plan resolves every pass to both a `model_preference` and a `review_agent`:
+Terra-preference passes use the current `review-runner` session, while Luna-
+preference passes use the read-only `review-luna` subagent. A missing
+preference uses the catalog's Terra default. The separate `review-verifier`
+subagent remains on Terra for evidence refutation.
 
-Instead, run each applicable dimension **sequentially in the current session**: for each dimension, load its local reviewer guide, build the same prompt described below as an internal review pass over the diff and relevant source files, and produce that dimension's JSON finding object before moving to the next dimension. This trades dispatch parallelism for guaranteed availability under this runtime — the CONTEXT/DETECT/MERGE phases, dedup, and consensus scoring are unchanged; Step 5 uses the review-only workflow's GitHub publication. `model_preference` in `dimensions.yaml` remains advisory metadata and must not be mapped to an unrelated model.
+Run applicable dimensions **sequentially in review-plan order**. For each
+pass, use the `review_agent` already resolved in the manifest, send the same
+pinned PR context and dimension-specific guide, and wait for exactly one JSON
+result before moving to the next pass. A preference chooses the model worker;
+it does not change dimension applicability, review criteria, or the output
+schema. Do not silently fall back to another model if the selected worker is
+unavailable: mark that dimension failed, report the reason, and continue with
+the remaining passes. CONTEXT/DETECT/MERGE, deduplication, and consensus
+scoring are unchanged; Step 5 uses the review-only workflow's GitHub
+publication.
 
 Each dimension's review pass must include:
 
@@ -235,7 +251,7 @@ All thresholds are defined in the sibling `dimensions.yaml` under `config:`:
 ## Adding a New Dimension
 
 1. Create a focused reviewer guide at reviewers/<dimension-name>.md. Keep it specific to that review concern.
-2. Add a dimension entry to dimensions.yaml with its name, category, language and optional file-pattern match rules, model_preference if useful, and the following source fields:
+2. Add a dimension entry to dimensions.yaml with its name, category, language and optional file-pattern match rules, a `model_preference` (`terra` or `luna`; omitted means Terra), and the following source fields:
        source:
          path: reviewers/<dimension-name>.md
          plugin: dimensional-review:<dimension-name>
@@ -250,7 +266,7 @@ Built-in reviewer guides remain inside this skill's reviewers/ directory. Dynami
 
 ## Rules
 
-1. Run each dimension review sequentially in the current session per **3.3 rbac-config-review Workflow Dispatch (OpenCode)** — `review-runner` has no `collaboration.spawn_agent` or per-dimension subagent available; `review-verifier` is reserved for the workflow's evidence-refutation pass.
+1. Run each dimension sequentially per the resolved `review_agent` in the review plan and **3.3 rbac-config-review Workflow Dispatch (OpenCode)**. Terra-preference passes use `review-runner`; Luna-preference passes use `review-luna`. `review-verifier` remains reserved for evidence refutation.
 2. Reviewers are read-only: do not modify the target repository, post PR comments, or persist learnings unless the user explicitly selected an output/action that authorizes it.
 3. In this instance, only `workflows/review-only/AGENTS.md` step 7 posts to a PR, using the validated JSON publication and inline-comment files after `review_evidence.py` validation. Do not create separate review reports.
 4. If a required read, agent dispatch, or output write is blocked, report the blocker and do not claim that the affected work completed.

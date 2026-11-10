@@ -116,27 +116,38 @@ Each item under `dimensions` describes one review pass. Common fields are:
   run.
 - **`source.path`**: local reviewer guide for a built-in dimension. The
   `plugin` and `repo` fields identify its source attribution.
-- **`model_preference`** (optional): advisory metadata only in this instance.
-  Review passes run sequentially in one OpenCode session, and this field does
-  not route a pass to a different model. The current session uses the model in
-  `agent/instance.yaml` (`gpt-6-luna`), so catalog entries marked `terra` still
-  run under Luna. The configured model aliases are `luna` →
-  `rehor-openai/gpt-6-luna` and `terra` → `rehor-openai/gpt-6.1-terra` in the
+- **`model_preference`** (optional): selects the model worker for a pass.
+  `terra` runs in the primary `review-runner` session, and `luna` runs in the
+  read-only `review-luna` subagent. A missing preference uses the catalog's
+  Terra default. `build_context.py` resolves each selected pass to
+  `review_agent` in `manifest.json`; the workflow dispatches passes sequentially
+  and records worker failures instead of silently switching models. The
+  configured aliases are `luna` → `rehor-openai/gpt-6-luna` and `terra` →
+  `rehor-openai/gpt-6.1-terra` in the
   [OpenCode deployment config](https://github.com/RedHatInsights/fabric-access-ai-dev/blob/main/instance/rbac-config-review/opencode-deployment.json).
-  That file makes both models available; the dimension preference still needs
-  dispatch logic to select between them.
+  Terra is the default for broad or high-judgment review. Luna is used for
+  dimensions whose configured preference calls for a focused Luna pass. The
+  dimension list in `dimensions.yaml` is the source of those preferences:
+  correctness, architecture, security, concurrency, database schema, and
+  cross-repository dependencies currently use Terra; code quality,
+  documentation, observability, performance, error handling, test quality,
+  API contract, database queries, integrations, vulnerability, Go idioms,
+  React/PatternFly, and learning extraction use Luna. The opt-in KISS recipe
+  has no preference and therefore uses Terra.
 
 `language_extensions` maps changed-file suffixes to language names. Automatic
 selection uses changed paths, the chosen level, `default`, languages, file
 patterns, and documentation-only rules. Built-in entries currently have
 `default: true`; `goose-kiss-review` is a dynamic entry with `default: false`.
 
-The catalog's `config` holds review-wide deduplication and consensus settings:
-`consensus_threshold` is the number of dimensions that must agree for a
-consensus finding, and `dedup_jaccard` / `dedup_line_range` help group findings
-that describe the same issue. Consensus affects ranking; the workflow also
-filters for confidence, verifies proposed findings, and caps publication at
-seven actionable findings.
+The catalog's `config` holds review-wide model routing, deduplication, and
+consensus settings. `default_model_preference` controls the worker for
+dimensions without an explicit preference, and `model_routing` maps each
+preference to an OpenCode agent. `consensus_threshold` is the number of
+dimensions that must agree for a consensus finding, and `dedup_jaccard` /
+`dedup_line_range` help group findings that describe the same issue. Consensus
+affects ranking; the workflow also filters for confidence, verifies proposed
+findings, and caps publication at seven actionable findings.
 The dimensional-review skill's pre-filter currently requires confidence of at
 least `0.7` before findings are handed to verification and evidence checks.
 
@@ -215,7 +226,7 @@ pass. It preserves finding IDs and includes the review number in the summary.
 
 The instance's workflow, runtime, provider, and model are configured in
 `agent/instance.yaml` (`scheduled`, `opencode`, `rehor-openai`,
-`gpt-6-luna`). App-interface supplies the deployment environment, including
+`gpt-6.1-terra`). App-interface supplies the deployment environment, including
 the config path, instance identity, bot label, and execution engine. The
 review deployment settings are:
 
@@ -231,13 +242,11 @@ review deployment settings are:
 `BOT_LABEL` is passed to the bot as a deployment label; it is separate from the
 GitHub PR label selected by `review-context.yaml: review_label`.
 
-The configured `review-runner` is the primary agent on Luna. The existing
-`review-verifier` subagent is on Terra and is reserved for refuting proposed
-findings. Runner permissions currently allow that verifier subagent only.
-Routing Terra-preference dimensions would require adding a dedicated Terra
-review worker, allowing the runner to invoke it, and changing the workflow to
-dispatch dimensions by their model profile. Keep the verifier's separate
-refutation role. See the [runner config](https://github.com/RedHatInsights/fabric-access-ai-dev/blob/main/instance/rbac-config-review/agent/.opencode/agents/review-runner.md)
+The primary `review-runner` runs on Terra. Passes marked `luna` use the
+`review-luna` subagent on Luna; passes marked `terra` or with no preference
+use the primary. The separate `review-verifier` subagent also runs on Terra
+and is reserved for refuting proposed findings. See the [runner config](https://github.com/RedHatInsights/fabric-access-ai-dev/blob/main/instance/rbac-config-review/agent/.opencode/agents/review-runner.md),
+[Luna worker config](https://github.com/RedHatInsights/fabric-access-ai-dev/blob/main/instance/rbac-config-review/agent/.opencode/agents/review-luna.md),
 and [verifier config](https://github.com/RedHatInsights/fabric-access-ai-dev/blob/main/instance/rbac-config-review/agent/.opencode/agents/review-verifier.md).
 
 See the root [project README](../../README.md) for the overall bot repository

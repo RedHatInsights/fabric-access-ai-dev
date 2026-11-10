@@ -56,6 +56,18 @@ def mock_gh(monkeypatch):
 def test_default_dimensions_exclude_the_opt_in_recipe():
     catalog = yaml.safe_load((skills.SKILL_DIR / "dimensions.yaml").read_text())
     entries = {item["name"]: item for item in catalog["dimensions"]}
+    default_preference = catalog["config"]["default_model_preference"]
+    routing = catalog["config"]["model_routing"]
+    assert default_preference == "terra"
+    assert skills.resolve_model_route(entries["correctness"], default_preference, routing) == {
+        "model_preference": "terra", "review_agent": "current",
+    }
+    assert skills.resolve_model_route(entries["code-quality"], default_preference, routing) == {
+        "model_preference": "luna", "review_agent": "review-luna",
+    }
+    assert skills.resolve_model_route(entries["goose-kiss-review"], default_preference, routing) == {
+        "model_preference": "terra", "review_agent": "current",
+    }
     assert all(item["default"] is True for name, item in entries.items() if name != "goose-kiss-review")
     assert entries["goose-kiss-review"]["default"] is False
     assert entries["goose-kiss-review"]["source"]["path"] == (
@@ -91,6 +103,8 @@ def test_repository_skill_runs_despite_default_and_level_and_receives_pinned_con
     plan = skills.prepare(source, config, tmp_path / "run", level="light")
     names = [item["name"] for item in plan["passes"]]
     assert names == ["correctness", "security", "db-schema", "goose-kiss-review"]
+    assert plan["default_model_preference"] == "terra"
+    assert all(item["review_agent"] == "current" for item in plan["passes"])
     custom = plan["passes"][-1]
     skill = Path(custom["guide_path"])
     assert skill.name == "guide.txt"

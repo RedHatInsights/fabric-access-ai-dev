@@ -24,7 +24,7 @@ flowchart LR
     Memory[("bot-memory")] <--> A
     subgraph Cycle["one cycle, at most one PR"]
         A["Preflight<br/>(review_queue.py)"] --> B["Context<br/>(build_context.py)"]
-        B --> C["Review<br/>(dimensional-review)"]
+        B --> C["Review<br/>(Terra/Luna by dimension)"]
         C --> D["Verify<br/>(review-verifier)"]
         D --> E["Publish<br/>(review_evidence.py + post_inline_comments.py)"]
     end
@@ -49,8 +49,9 @@ plain Python and run every cycle regardless of whether anything needs review.
 | Skill preparation | `review_skills.py` | Script | Selects dimensions, reads selected recipe YAML at a pinned commit, and generates per-run review skills |
 | Impact analysis | `impact_analysis.py` | Script | Deterministically (no LLM) extracts changed identifiers from the diff and `git grep`-matches them in related repos → `impact.json`'s `consumer_usages` (candidates, not confirmed breakage) |
 | Re-review request detection | `rereview_requests.py` | Script | Finds exact commands in top-level comments; the runner verifies each author's organization membership before acting |
-| Review criteria | `skills/dimensional-review/SKILL.md` | **AI** (review-runner) | Multi-dimension review (correctness, security, `cross-repo-dependencies`, …) over the pinned context; deduped and consensus-scored |
-| Explanation quality | `skills/explanatory-answer/SKILL.md` | **AI** (review-runner) | General guidance for direct answers, causal reasoning, evidence, and optional Mermaid diagrams; this workflow maps it to finding fields |
+| Model routing | `review_skills.py` + `dimensions.yaml` | Script | Resolves each pass's model preference to the Terra primary or Luna subagent in `review_plan` |
+| Review criteria | `skills/dimensional-review/SKILL.md` | **AI** (review-runner / review-luna) | Multi-dimension review over pinned context, with Terra/Luna selected per dimension; results are deduped and consensus-scored |
+| Explanation quality | `skills/explanatory-answer/SKILL.md` | **AI** (selected review worker) | General guidance for direct answers, causal reasoning, evidence, and optional Mermaid diagrams; this workflow maps it to finding fields |
 | Verifier | `.opencode/agents/review-verifier.md` | **AI** (subagent) | Independently tries to refute every proposed finding using only pinned sources |
 | Evidence gate | `review_evidence.py` | Script | Rejects any finding whose location/reference isn't a real pinned line; caps at seven findings; requires one verdict per finding; validates optional Mermaid sources and renders them in the review summary |
 | Inline publisher | `post_inline_comments.py` | Script | Posts or updates one anchored comment per confirmed finding on the current PR head, deduplicated by finding ID |
@@ -62,7 +63,13 @@ required. The generated skill gets the same pinned PR, related repositories,
 docs, and impact report as the built-in passes. Recipe extensions and test
 execution are not enabled by importing a recipe. The `high` level includes
 the applicable built-in dimensions, including documentation and observability.
-Dimension passes run sequentially; `review-verifier` checks their findings.
+Terra is the default model for the primary `review-runner`. Each dimension's
+`model_preference` selects its worker: `terra` uses that primary session, and
+`luna` uses the read-only `review-luna` subagent. Missing preferences resolve
+to Terra. `review_plan` records the resolved worker, and dimensions run
+sequentially; `review-verifier` separately checks findings on Terra. If a
+preferred worker fails, that dimension is recorded as failed instead of being
+silently rerun on another model.
 The high preset remains the default. For a documentation-only diff, dimensions
 marked `skip_documentation_only` do not run; the current catalog selects six
 passes instead of fourteen. Mixed code and documentation changes still select
@@ -245,6 +252,7 @@ become a published finding.
 sequenceDiagram
     participant Q as Preflight
     participant R as review-runner
+    participant L as review-luna
     participant V as review-verifier
     participant GH as GitHub
 
@@ -254,7 +262,15 @@ sequenceDiagram
         R->>R: build_context.py → manifest.json + impact.json
     end
     rect rgb(248, 215, 218)
-        R->>R: selected review skills + explanatory-answer → findings.json
+        loop Selected dimensions, sequentially
+            alt preference is terra
+                R->>R: Run pass in primary Terra session
+            else preference is luna
+                R->>L: Run pass with pinned context
+                L->>R: One dimension JSON result
+            end
+        end
+        R->>R: Merge dimension results + explanatory-answer
         R->>V: findings + pinned context
         V->>R: verdicts.json (confirmed/refuted/uncertain)
     end
@@ -266,9 +282,9 @@ sequenceDiagram
     R->>Q: task_update (last_reviewed_sha, review_id, update_count)
 ```
 
-Gray bands are script (no model call); the red band is where an LLM
-actually reasons — review-runner proposing findings, and review-verifier
-trying to refute them.
+Gray bands are script (no model call); the red band is where Terra or Luna
+reviews the selected dimensions and Terra's review-verifier tries to refute
+proposed findings.
 
 ## Finding shape
 

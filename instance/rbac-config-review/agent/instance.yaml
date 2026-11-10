@@ -2,7 +2,7 @@ workflow: ./workflows/review-only
 source: scheduled
 runtime: opencode
 provider: rehor-openai
-model: gpt-6-luna
+model: gpt-6.1-terra
 envs: []
 claude_md:
   strategy: ignore

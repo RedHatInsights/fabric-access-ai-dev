@@ -188,30 +188,57 @@ def select(catalog: dict, changed_files: list[str], level: str, focus: list[str]
     return selected
 
 
+def resolve_model_route(item: dict, default_preference: str, model_routing: dict) -> dict:
+    preference = item.get("model_preference", default_preference)
+    if not isinstance(preference, str) or preference not in model_routing:
+        raise SkillError(f"Unknown model preference for {item['name']}: {preference}")
+    route = model_routing[preference]
+    review_agent = route.get("review_agent") if isinstance(route, dict) else None
+    if not isinstance(review_agent, str) or not review_agent:
+        raise SkillError(f"Model preference {preference} has no review agent")
+    return {"model_preference": preference, "review_agent": review_agent}
+
+
 def prepare(manifest: dict, config: dict, output_dir: Path, focus: list[str] | None = None,
             level: str | None = None) -> dict:
     catalog = yaml.safe_load((SKILL_DIR / "dimensions.yaml").read_text())
     if not isinstance(catalog, dict):
         raise SkillError("Invalid dimensional review catalog")
+    catalog_config = catalog.get("config")
+    default_preference = (
+        catalog_config.get("default_model_preference")
+        if isinstance(catalog_config, dict) else None
+    )
+    model_routing = (
+        catalog_config.get("model_routing") if isinstance(catalog_config, dict) else None
+    )
+    if (not isinstance(default_preference, str) or not isinstance(model_routing, dict)
+            or default_preference not in model_routing):
+        raise SkillError("Invalid default model preference or model routing configuration")
     chosen_level = level or catalog["review_levels"]["default"]
     changed = json.loads(Path(manifest["impact_path"]).read_text())["changed_files"]
     repo_key = manifest["pr"].get("repo_key")
     required = config.get("repositories", {}).get(repo_key, {}).get("skills", [])
     selected = select(catalog, changed, chosen_level, focus, required)
+    routed = [(item, resolve_model_route(item, default_preference, model_routing))
+              for item in selected]
     revisions: dict[tuple[str, str], str] = {}
     passes = []
-    for item in selected:
+    for item, route in routed:
         if item.get("type") == "dynamic":
-            passes.append(generate_skill(item, manifest, output_dir, revisions))
+            pass_info = generate_skill(item, manifest, output_dir, revisions)
+            passes.append({**pass_info, **route})
             continue
         source = item["source"]
         guide = (SKILL_DIR / source["path"]).resolve()
         if not guide.is_relative_to(SKILL_DIR.resolve()) or not guide.is_file():
             raise SkillError(f"Missing reviewer guide: {source['path']}")
         passes.append({"name": item["name"], "guide_path": str(guide),
-                       "source_skill": source.get("plugin"), "source_repo": source.get("repo")})
+                       "source_skill": source.get("plugin"), "source_repo": source.get("repo"),
+                       **route})
     output_dir.mkdir(parents=True, exist_ok=True)
-    plan = {"mode": "dimensions", "level": chosen_level, "passes": passes,
+    plan = {"mode": "dimensions", "level": chosen_level,
+            "default_model_preference": default_preference, "passes": passes,
             "plan_path": str(output_dir / "review-plan.json")}
     Path(plan["plan_path"]).write_text(json.dumps(plan, indent=2))
     return plan

@@ -96,6 +96,18 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    pass this manifest's pinned PR checkout, final diff, related-repository
    snapshots, linked docs, and impact report. Run CONTEXT with this manifest,
    then EXECUTE and MERGE per the skill.
+   Use each pass's resolved `review_agent` and `model_preference` from
+   `review_plan`: `terra` uses the current Terra `review-runner`, and `luna`
+   uses the read-only `review-luna` subagent. Terra is the default for broad,
+   high-judgment work. Luna is preferred for the catalog's narrower focused
+   checks. The current per-dimension assignments in `dimensions.yaml` are the
+   source of truth; do not override them based on your own model choice. A
+   missing preference resolves to Terra during plan preparation. The
+   preference selects the worker only; it does not change the dimension's
+   criteria or JSON schema. Run passes sequentially and wait for each result.
+   If a selected worker is unavailable, mark that pass failed and continue
+   without silently switching models. Keep `review-verifier` on Terra for the
+   separate refutation step.
    Feed the
    `architecture` dimension this repo's `review-context.yaml` entry, its
    manifest-pinned related-repository snapshots and documents, and the impact
