@@ -332,9 +332,158 @@ def _api_items(endpoint: str) -> list[dict]:
     return [item for page in pages for item in page if isinstance(item, dict)]
 
 
+def _latest_review_label_event(repo: str, number: int, label: str) -> dict | None:
+    """Return the newest GitHub event that added the configured review label."""
+    events = _api_items(f"repos/{repo}/issues/{number}/events?per_page=100")
+    matches = []
+    for event in events:
+        event_label = event.get("label") or {}
+        event_id = event.get("id")
+        created = _parse_timestamp(event.get("created_at"))
+        if (event.get("event") == "labeled" and isinstance(event_label, dict)
+                and isinstance(event_label.get("name"), str)
+                and event_label["name"].casefold() == label.casefold()
+                and isinstance(event_id, int) and not isinstance(event_id, bool) and event_id > 0
+                and created is not None):
+            matches.append((created, event_id, event))
+    if not matches:
+        return None
+    _created, _event_id, event = max(matches, key=lambda item: (item[0], item[1]))
+    return {"id": event["id"], "created_at": event["created_at"]}
+
+
+def _is_new_review_label_event(event: dict | None, task: dict | None) -> bool:
+    if event is None:
+        return False
+    meta = _metadata(task or {})
+    event_id = event["id"]
+    saved_id = meta.get("review_label_event_id")
+    if isinstance(saved_id, int) and not isinstance(saved_id, bool):
+        return event_id > saved_id
+    if saved_id is not None:
+        return False
+    if task is None:
+        return True
+    if meta.get("last_reviewed_sha"):
+        reviewed_at = _parse_timestamp(meta.get("last_reviewed_at"))
+        added_at = _parse_timestamp(event.get("created_at"))
+        return reviewed_at is not None and added_at is not None and added_at > reviewed_at
+    return True
+
+
+def _apply_review_label_event(item: dict, event: dict | None, task: dict | None) -> None:
+    meta = _metadata(task or {})
+    if event is not None:
+        item["review_label_event_id"] = event["id"]
+    elif isinstance(meta.get("review_label_event_id"), int):
+        item["review_label_event_id"] = meta["review_label_event_id"]
+    if _is_new_review_label_event(event, task) and item.get("kind") != "resume":
+        item["kind"] = "review"
+        item["priority"] = 1
+        item["review_authorization"] = "label_added"
+    elif item.get("kind") == "review":
+        item["review_authorization"] = "approval_required"
+
+
+def _review_approval_id(chosen: dict, task: dict | None) -> str:
+    meta = _metadata(task or {})
+    command_ids = chosen.get("rereview_comment_ids") or []
+    trigger = "rereview:" + ",".join(str(item) for item in sorted(command_ids)) if command_ids else "revision"
+    key = "|".join(str(value or "") for value in (
+        chosen["repo"], chosen["number"], meta.get("last_reviewed_sha"),
+        meta.get("last_reviewed_base_sha"), chosen["head_sha"], chosen["base_sha"], trigger,
+    ))
+    return "RA-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
+
+
+def _request_review_approval(chosen: dict, task: dict | None) -> dict:
+    """Ask for an organization member's approval, scoped to this revision."""
+    approval_id = _review_approval_id(chosen, task)
+    marker = f"<!-- dev-review-bot:review-approval:{approval_id} -->"
+    comments = fetch_comments(chosen["repo"], chosen["number"])
+    bot_login = _bot_login()
+    requests = []
+    for comment in comments:
+        user = comment.get("user") or {}
+        if (isinstance(user, dict) and isinstance(user.get("login"), str)
+                and user["login"].casefold() == bot_login.casefold()
+                and isinstance(comment.get("body"), str) and marker in comment["body"]):
+            created = _parse_timestamp(comment.get("created_at"))
+            ident = comment.get("id")
+            if (created is not None and isinstance(ident, int)
+                    and not isinstance(ident, bool) and ident > 0):
+                requests.append((created, ident, comment))
+    if not requests:
+        if chosen.get("rereview_comment_ids"):
+            reason = "A re-review was requested without a new review-label event."
+        elif task and _metadata(task).get("last_reviewed_sha"):
+            reason = "The PR head or base changed since the last review."
+        else:
+            reason = "The configured review label has no new label-add event."
+        body = (
+            f"**Review approval required ({approval_id}).**\n\n{reason} "
+            f"Target revision: head `{chosen['head_sha'][:12]}`, "
+            f"base `{chosen['base_sha'][:12]}`. "
+            "No review will run until an organization member approves this revision. "
+            f"Reply `Review bot: yes {approval_id}` to approve or "
+            f"`Review bot: no {approval_id}` to decline.\n\n{marker}"
+        )
+        result = subprocess.run(
+            ["gh", "api", f"repos/{chosen['repo']}/issues/{chosen['number']}/comments",
+             "--method", "POST", "--field", f"body={body}"],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        if result.returncode:
+            raise RuntimeError(f"Cannot ask for review approval: {result.stderr.strip()[:300]}")
+        return {"state": "waiting", "approval_id": approval_id}
+
+    request_at, request_id, _request_comment = min(requests, key=lambda item: (item[0], item[1]))
+    org = chosen["repo"].split("/", 1)[0]
+    response_pattern = re.compile(
+        rf"Review bot:\s*(yes|no)\s+{re.escape(approval_id)}(?![A-Za-z0-9_-])",
+        re.IGNORECASE,
+    )
+    answers = []
+    for comment in comments:
+        user = comment.get("user") or {}
+        created = _parse_timestamp(comment.get("created_at"))
+        ident = comment.get("id")
+        body = comment.get("body")
+        if (not isinstance(user, dict) or user.get("type") != "User"
+                or not isinstance(user.get("login"), str) or created is None
+                or not isinstance(ident, int) or isinstance(ident, bool)
+                or (created, ident) <= (request_at, request_id)
+                or not isinstance(body, str)):
+            continue
+        decisions = {match.group(1).casefold() for match in response_pattern.finditer(body)}
+        if len(decisions) != 1:
+            continue
+        login = user["login"]
+        try:
+            member = _is_org_member(org, login)
+        except (OSError, RuntimeError, subprocess.TimeoutExpired):
+            return {"state": "verification_unavailable", "approval_id": approval_id}
+        if member:
+            answers.append((created, ident, decisions.pop() == "yes", login))
+    if not answers:
+        return {"state": "waiting", "approval_id": approval_id}
+    _at, response_id, approved, responder = max(answers, key=lambda item: (item[0], item[1]))
+    return {
+        "state": "approved" if approved else "declined",
+        "approval_id": approval_id,
+        "response_comment_id": response_id,
+        "responder": responder,
+    }
+
+
 def _external_feedback_key(item: dict, since: str, through: str,
                            key_prefix: str, seen_ids: set[str], bot_login: str) -> str | None:
     if key_prefix == "issue" and isinstance(item.get("body"), str):
+        # This command is a review-authorization request, not feedback to send
+        # through the model. It is handled separately after org membership is
+        # verified.
+        if re.fullmatch(r"/review-bot\s+re-review", item["body"].strip(), re.IGNORECASE):
+            return None
         # A negative ledger-recovery answer closes that request without making
         # every later preflight treat the same control comment as new feedback.
         if re.fullmatch(r"Review bot: no LR-[0-9a-f]{12}", item["body"].strip(), re.IGNORECASE):
@@ -371,6 +520,25 @@ def external_feedback_ids(repo: str, number: int, since: str, through: str,
             if key:
                 found.append(key)
     return found
+
+
+def _eligible_rereview_ids(chosen: dict, task: dict | None, since: str) -> list[int]:
+    if task is None:
+        return []
+    meta = _metadata(task)
+    seen = meta.get("seen_rereview_comment_ids") or []
+    if not isinstance(seen, list) or any(type(ident) is not int or ident <= 0 for ident in seen):
+        raise ValueError("Invalid seen_rereview_comment_ids")
+    comments = fetch_comments(chosen["repo"], chosen["number"], since)
+    candidates = rereview_requests(
+        comments, since, chosen["updated_at"], set(seen)
+    )
+    org = chosen["repo"].split("/", 1)[0]
+    eligible = []
+    for request in candidates:
+        if _is_org_member(org, request["login"]):
+            eligible.append(request["id"])
+    return eligible
 
 
 def _task_pr(task: dict, repos: dict) -> tuple[str, str, int] | None:
@@ -424,7 +592,7 @@ def lifecycle_work(task: dict, repo_key: str, repo: str, number: int, pr: dict) 
 
 
 def candidate(pr: dict, repo_key: str, repo: str, task: dict | None,
-              pending_rereview: bool = False) -> dict | None:
+              pending_rereview: bool = False, force_review: bool = False) -> dict | None:
     if not isinstance(pr.get("number"), int):
         return None
     author = (pr.get("author") or {}).get("login", "")
@@ -441,6 +609,18 @@ def candidate(pr: dict, repo_key: str, repo: str, task: dict | None,
             kind, priority = "reconcile_open", 3
         else:
             return None
+    elif status in RESUMABLE:
+        active_head = meta.get("active_head_sha")
+        active_base = meta.get("active_base_sha")
+        if active_head == sha and active_base == base_sha:
+            kind, priority = "resume", 0
+        else:
+            # A task without a matching active revision cannot safely resume
+            # against a different or unknown snapshot. It needs fresh review
+            # authorization, unless the label was just added.
+            kind, priority = "review", 1
+    elif force_review:
+        kind, priority = "review", 1
     elif status == "paused" and meta.get("paused_sha") == sha and meta.get("paused_base_sha") == base_sha:
         if pr.get("updatedAt", "") <= meta.get("last_seen_updated_at", "") and not pending_rereview:
             if meta.get("pr_lifecycle") == "closed_unmerged":
@@ -449,8 +629,6 @@ def candidate(pr: dict, repo_key: str, repo: str, task: dict | None,
                 return None
         else:
             kind, priority = "feedback_check", 2
-    elif status in RESUMABLE:
-        kind, priority = "resume", 0
     elif meta.get("last_reviewed_sha") != sha or meta.get("last_reviewed_base_sha") != base_sha:
         kind, priority = "review", 1
     elif pr.get("updatedAt", "") > meta.get("last_seen_updated_at", "") or pending_rereview:
@@ -517,6 +695,17 @@ def pick_work(repos: dict, config: dict, tasks: list[dict],
                 since, through = meta.get("last_seen_updated_at"), pr.get("updatedAt")
                 if probe and probe["kind"] == "feedback_check" and since and through and since <= through:
                     boundary_probes.append((probe, meta, since, through))
+            if item and item["kind"] != "resume":
+                try:
+                    label_event = _latest_review_label_event(repo, pr["number"], config["review_label"])
+                except (RuntimeError, subprocess.TimeoutExpired, ValueError, json.JSONDecodeError) as exc:
+                    errors.append(f"{repo}#{pr['number']}: cannot verify review-label event: {exc}")
+                    # Fail closed when GitHub cannot confirm that the label
+                    # was just added. Changed revisions still require approval.
+                    if item["kind"] == "review":
+                        item["review_authorization"] = "approval_required"
+                else:
+                    _apply_review_label_event(item, label_event, task)
             if item:
                 meta = _metadata(task or {})
                 seen_feedback = meta.get("seen_feedback_comment_ids") or []
@@ -526,6 +715,12 @@ def pick_work(repos: dict, config: dict, tasks: list[dict],
                     continue
                 since = meta.get("last_seen_updated_at") or meta.get("last_reviewed_at") or "1970-01-01T00:00:00Z"
                 try:
+                    command_ids = _eligible_rereview_ids(item, task, since)
+                    if command_ids:
+                        item["rereview_comment_ids"] = command_ids
+                        item["kind"] = "review"
+                        item["priority"] = 1
+                        item["review_authorization"] = "approval_required"
                     feedback_ids = external_feedback_ids(
                         repo, pr["number"], since, item["updated_at"], set(seen_feedback)
                     ) if task and item["kind"] in {"review", "feedback_check"} else []
@@ -536,6 +731,10 @@ def pick_work(repos: dict, config: dict, tasks: list[dict],
                     if item["kind"] == "feedback_check":
                         errors.append(f"{repo}#{pr['number']}: {exc}")
                         continue
+                    # An unverified comment must not authorize or trigger a
+                    # full review; SHA changes remain gated by approval.
+                    if item["kind"] == "review":
+                        item["review_authorization"] = item.get("review_authorization", "approval_required")
                     item["feedback_comment_ids"] = []
                     found.append(item)
     for task in tasks:
@@ -571,10 +770,13 @@ def pick_work(repos: dict, config: dict, tasks: list[dict],
             if probe["task_key"] in excluded_task_keys:
                 continue
             try:
-                seen_ids = meta.get("seen_rereview_comment_ids") or []
-                if not isinstance(seen_ids, list) or any(type(ident) is not int or ident <= 0 for ident in seen_ids):
-                    raise ValueError("Invalid seen_rereview_comment_ids")
-                comments = fetch_comments(probe["repo"], probe["number"], since)
+                label_event = _latest_review_label_event(
+                    probe["repo"], probe["number"], config["review_label"]
+                )
+                if _is_new_review_label_event(label_event, by_key.get(probe["task_key"])):
+                    _apply_review_label_event(probe, label_event, by_key.get(probe["task_key"]))
+                    found.append(probe)
+                    break
                 seen_feedback = meta.get("seen_feedback_comment_ids") or []
                 if (not isinstance(seen_feedback, list)
                         or any(not isinstance(ident, str) for ident in seen_feedback)):
@@ -582,7 +784,13 @@ def pick_work(repos: dict, config: dict, tasks: list[dict],
                 feedback_ids = external_feedback_ids(
                     probe["repo"], probe["number"], since, through, set(seen_feedback)
                 )
-                if rereview_requests(comments, since, through, set(seen_ids)) or feedback_ids:
+                command_ids = _eligible_rereview_ids(probe, by_key.get(probe["task_key"]), since)
+                if command_ids:
+                    probe["rereview_comment_ids"] = command_ids
+                    probe["kind"] = "review"
+                    probe["priority"] = 1
+                    probe["review_authorization"] = "approval_required"
+                if command_ids or feedback_ids:
                     probe["feedback_comment_ids"] = feedback_ids
                     found.append(probe)
                     break
@@ -602,6 +810,7 @@ def main() -> None:
         tasks = load_tasks()
         excluded_task_keys: set[str] = set()
         recovery_waits: list[str] = []
+        approval_waits: list[str] = []
         while True:
             chosen, errors = pick_work(repos, config, tasks, excluded_task_keys)
             if chosen is None:
@@ -610,6 +819,9 @@ def main() -> None:
                 if recovery_waits:
                     detail = ("Waiting for organization-member ledger-recovery decisions on "
                               + ", ".join(recovery_waits) + "; " + detail)
+                if approval_waits:
+                    detail = ("Waiting for organization-member review approvals on "
+                              + ", ".join(approval_waits) + "; " + detail)
                 output_result(status, detail)
                 return
             active_count = sum(
@@ -621,6 +833,21 @@ def main() -> None:
                 output_result("skip", f"Review instance at task capacity ({active_count}/10)")
                 return
             task = next((item for item in tasks if item.get("external_key") == chosen["task_key"]), None)
+            if (chosen["kind"] == "review"
+                    and chosen.get("review_authorization") != "label_added"):
+                try:
+                    approval = _request_review_approval(chosen, task)
+                except (RuntimeError, subprocess.TimeoutExpired, ValueError, json.JSONDecodeError) as exc:
+                    output_result("error", f"{chosen['repo']}#{chosen['number']}: {exc}")
+                    return
+                if approval["state"] != "approved":
+                    excluded_task_keys.add(chosen["task_key"])
+                    approval_waits.append(f"{chosen['repo']}#{chosen['number']} ({approval['state']})")
+                    continue
+                chosen["review_authorization"] = "organization_member_approved"
+                chosen["review_approval_id"] = approval["approval_id"]
+                chosen["review_approval_response_comment_id"] = approval["response_comment_id"]
+                chosen["review_approval_responder"] = approval["responder"]
             try:
                 proceed = restore_prior_ledger(chosen, task)
             except (LedgerError, OSError, subprocess.TimeoutExpired) as exc:
