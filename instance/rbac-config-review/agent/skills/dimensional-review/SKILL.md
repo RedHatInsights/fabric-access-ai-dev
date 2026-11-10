@@ -112,11 +112,12 @@ If a selected guide is missing or unreadable, mark that dimension as failed and 
 
 Print the local source table and dispatch counts before launching. For example:
 
-| Dimension | Guide | Status |
-|-----------|-------|--------|
-| correctness | reviewers/correctness.md | LOCAL |
-| security | reviewers/security.md | LOCAL |
-| ... | ... | ... |
+| Dimension | Guide | Preference | Worker | Status |
+|-----------|-------|------------|--------|--------|
+| correctness | reviewers/correctness.md | terra | review-terra | LOCAL |
+| code-quality | reviewers/code-quality.md | luna | review-luna | LOCAL |
+| security | reviewers/security.md | terra | review-terra | LOCAL |
+| ... | ... | ... | ... | ... |
 
 All selected reviewer guides loaded locally
 
@@ -133,11 +134,26 @@ For each selected dimension, prepend the full local reviewer guide to a shared r
 
 ### 3.3 rbac-config-review Workflow Dispatch (OpenCode)
 
-This vendored copy runs inside the `rbac-config-review` instance's `review-runner` agent on OpenCode. Each selected pass in `review_plan.passes` includes a `model_preference` and `review_agent`, resolved from `dimensions.yaml`'s `config.model_routing`. The Luna profile runs in the current `review-runner` session; the Terra profile runs in the configured `review-terra` subagent. The separate `review-verifier` remains reserved for the later evidence-refutation pass.
+This vendored copy runs inside the `rbac-config-review` instance's
+`review-runner` agent on OpenCode. The instance default is Terra. The review
+plan resolves every pass to both a `model_preference` and a `review_agent`:
+Terra-preference passes use the read-only `review-terra` subagent, while Luna-
+preference passes use the read-only `review-luna` subagent. A missing
+preference uses the catalog's Terra default. The separate `review-verifier`
+subagent remains on Terra for evidence refutation.
 
-Run dimensions **sequentially** in review-plan order. For `review_agent: current`, perform the dimension pass in the current session. For a named subagent such as `review-terra`, invoke that agent with the single dimension's guide and the same pinned review context. Wait for its result before starting the next dimension. Do not silently fall back to Luna if a configured subagent fails or is unavailable; record that dimension as failed and continue according to the workflow's failure handling. This preserves independent dimension results while applying each configured model profile.
-
-Dynamic dimensions without `model_preference` use the catalog's configured default model profile. Unknown profiles fail during skill preparation rather than running under a different model.
+Run applicable dimensions **sequentially in review-plan order**. For each
+pass, use the `review_agent` already resolved in the manifest, send the same
+pinned PR context and dimension-specific guide, and wait for exactly one JSON
+result before moving to the next pass. A preference chooses the model worker;
+it does not change dimension applicability, review criteria, or the output
+schema. Do not silently fall back to another model if the selected worker is
+unavailable: mark that dimension failed, report the reason, and continue with
+the remaining passes. CONTEXT/DETECT/MERGE, deduplication, and consensus
+scoring are unchanged; Step 5 uses the review-only workflow's GitHub
+publication. Dynamic dimensions without `model_preference` use the catalog's
+Terra default. Unknown preferences fail during skill preparation instead of
+silently running under another model.
 
 Each dimension's review pass must include:
 
@@ -237,7 +253,7 @@ All thresholds are defined in the sibling `dimensions.yaml` under `config:`:
 ## Adding a New Dimension
 
 1. Create a focused reviewer guide at reviewers/<dimension-name>.md. Keep it specific to that review concern.
-2. Add a dimension entry to dimensions.yaml with its name, category, language and optional file-pattern match rules, model_preference if useful, and the following source fields:
+2. Add a dimension entry to dimensions.yaml with its name, category, language and optional file-pattern match rules, a `model_preference` (`terra` or `luna`; omitted means Terra), and the following source fields:
        source:
          path: reviewers/<dimension-name>.md
          plugin: dimensional-review:<dimension-name>

@@ -198,7 +198,7 @@ def model_route(item: dict, catalog: dict) -> dict:
         raise SkillError("dimensions.yaml config.model_routing must be a mapping")
     default = routing.get("default")
     agents = routing.get("agents")
-    if not isinstance(default, str) or not isinstance(agents, dict):
+    if not isinstance(default, str) or not isinstance(agents, dict) or default not in agents:
         raise SkillError("dimensions.yaml config.model_routing needs default and agents")
     preference = item.get("model_preference", default)
     if not isinstance(preference, str) or preference not in agents:
@@ -216,17 +216,23 @@ def prepare(manifest: dict, config: dict, output_dir: Path, focus: list[str] | N
     catalog = yaml.safe_load((SKILL_DIR / "dimensions.yaml").read_text())
     if not isinstance(catalog, dict):
         raise SkillError("Invalid dimensional review catalog")
+    catalog_config = catalog.get("config")
+    routing = catalog_config.get("model_routing") if isinstance(catalog_config, dict) else None
+    default_preference = routing.get("default") if isinstance(routing, dict) else None
+    if not isinstance(default_preference, str):
+        raise SkillError("Invalid default model preference or model routing configuration")
     chosen_level = level or catalog["review_levels"]["default"]
     changed = json.loads(Path(manifest["impact_path"]).read_text())["changed_files"]
     repo_key = manifest["pr"].get("repo_key")
     required = config.get("repositories", {}).get(repo_key, {}).get("skills", [])
     selected = select(catalog, changed, chosen_level, focus, required)
+    routed = [(item, model_route(item, catalog)) for item in selected]
     revisions: dict[tuple[str, str], str] = {}
     passes = []
-    for item in selected:
-        route = model_route(item, catalog)
+    for item, route in routed:
         if item.get("type") == "dynamic":
-            passes.append({**generate_skill(item, manifest, output_dir, revisions), **route})
+            pass_info = generate_skill(item, manifest, output_dir, revisions)
+            passes.append({**pass_info, **route})
             continue
         source = item["source"]
         guide = (SKILL_DIR / source["path"]).resolve()
@@ -236,7 +242,8 @@ def prepare(manifest: dict, config: dict, output_dir: Path, focus: list[str] | N
                        "source_skill": source.get("plugin"), "source_repo": source.get("repo"),
                        **route})
     output_dir.mkdir(parents=True, exist_ok=True)
-    plan = {"mode": "dimensions", "level": chosen_level, "passes": passes,
+    plan = {"mode": "dimensions", "level": chosen_level,
+            "default_model_preference": default_preference, "passes": passes,
             "plan_path": str(output_dir / "review-plan.json")}
     Path(plan["plan_path"]).write_text(json.dumps(plan, indent=2))
     return plan
