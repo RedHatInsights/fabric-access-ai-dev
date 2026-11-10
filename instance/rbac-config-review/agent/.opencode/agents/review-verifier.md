@@ -1,7 +1,7 @@
 ---
 description: Tries to refute proposed PR review findings using pinned source evidence.
 mode: subagent
-model: rehor-openai/gpt-6.1-terra
+model: rehor-openai/gpt-6-luna
 request:
   body:
     reasoning:
