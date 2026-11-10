@@ -163,8 +163,9 @@ Each item under `dimensions` describes one review pass. Common fields are:
   `review-terra` subagent and `luna` runs in the read-only `review-luna`
   subagent. A missing preference uses the configured Terra default.
   `build_context.py` resolves each selected pass to `review_agent` in
-  `review_plan`; passes run sequentially, and an unavailable worker is recorded
-  as a failure instead of silently switching models. The configured aliases
+  `review_plan`; passes run in batches of at most four concurrent workers, and
+  an unavailable worker is recorded as a failure instead of silently
+  switching models. The configured aliases
   are `luna` → `rehor-openai/gpt-6-luna` and `terra` →
   `rehor-openai/gpt-6.1-terra` in the
   [OpenCode deployment config](https://github.com/RedHatInsights/fabric-access-ai-dev/blob/main/instance/rbac-config-review/opencode-deployment.json).
@@ -221,8 +222,9 @@ enabled for a repository through its `skills` list.
 4. Add the repository's `skills` unconditionally. A focused run (`--focus`)
    selects the focused dimensions plus repository skills; the focus list
    replaces ordinary automatic level selection for that run.
-5. Remove duplicates and run each selected pass sequentially. A verifier then
-   challenges proposed findings before publication.
+5. Remove duplicates and run selected passes in plan-ordered batches of at most
+   four concurrent workers. A verifier then challenges proposed findings
+   before publication.
 
 ## How a review runs
 
@@ -300,9 +302,10 @@ GitHub PR label selected by `review-context.yaml: review_label`.
 | `luna` | `review-luna` | `rehor-openai/gpt-6-luna` |
 
 The primary `review-runner` uses Terra for orchestration. Dimension passes are
-dispatched sequentially to `review-terra` or `review-luna` according to the
-resolved model preference. The separate `review-verifier` subagent also uses
-Terra to refute proposed findings. See the [runner config](agent/.opencode/agents/review-runner.md),
+dispatched in batches of at most four concurrent workers to `review-terra` or
+`review-luna` according to the resolved model preference. Results are recorded
+by dimension before the next batch. The separate `review-verifier` subagent
+also uses Terra to refute proposed findings. See the [runner config](agent/.opencode/agents/review-runner.md),
 [Terra reviewer config](agent/.opencode/agents/review-terra.md),
 [Luna reviewer config](agent/.opencode/agents/review-luna.md),
 [verifier config](agent/.opencode/agents/review-verifier.md), and

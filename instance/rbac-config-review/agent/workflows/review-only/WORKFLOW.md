@@ -75,7 +75,9 @@ the applicable built-in dimensions, including documentation and observability.
 Terra is the default model for the primary `review-runner` and for dimensions
 without an explicit preference. Each dimension's `model_preference` selects a
 read-only worker: Terra uses `review-terra`, and Luna uses `review-luna`.
-`review_plan` records the resolved worker, and dimensions run sequentially.
+`review_plan` records the resolved worker. Dimensions run in plan-ordered
+batches of at most four concurrent workers; each batch is recorded before the
+next starts.
 `review-verifier` separately checks findings on Terra. If a preferred worker
 fails, that dimension is recorded as failed instead of being silently rerun on
 another model.
@@ -286,14 +288,15 @@ sequenceDiagram
         R->>R: build_context.py → manifest.json + impact.json
     end
     rect rgb(248, 215, 218)
-        loop Selected dimensions, sequentially
-            alt preference is terra
-                R->>T: Run pass with pinned context
-                T->>R: One dimension JSON result
-            else preference is luna
-                R->>L: Run pass with pinned context
-                L->>R: One dimension JSON result
+        loop Batches of up to four dimensions
+            par Terra-preference passes
+                R->>T: Run assigned passes with pinned context
+                T->>R: Dimension JSON results
+            and Luna-preference passes
+                R->>L: Run assigned passes with pinned context
+                L->>R: Dimension JSON results
             end
+            R->>R: Record results by dimension
         end
         R->>R: Merge dimension results + explanatory-answer
         R->>M: Check for material missing context

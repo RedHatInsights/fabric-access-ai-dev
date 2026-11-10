@@ -142,15 +142,19 @@ preference passes use the read-only `review-luna` subagent. A missing
 preference uses the catalog's Terra default. The separate `review-verifier`
 subagent remains on Terra for evidence refutation.
 
-Run applicable dimensions **sequentially in review-plan order**. For each
-pass, use the `review_agent` already resolved in the manifest, send the same
-pinned PR context and dimension-specific guide, and wait for exactly one JSON
-result before moving to the next pass. A preference chooses the model worker;
-it does not change dimension applicability, review criteria, or the output
-schema. Do not silently fall back to another model if the selected worker is
-unavailable: mark that dimension failed, report the reason, and continue with
-the remaining passes. CONTEXT/DETECT/MERGE, deduplication, and consensus
-scoring are unchanged; Step 5 uses the review-only workflow's GitHub
+Run applicable dimensions in **bounded parallel batches of at most four**,
+keeping the review-plan order when forming each batch. Dispatch the independent
+worker calls in a batch concurrently, using each pass's `review_agent`, pinned
+PR context, and dimension-specific guide. Wait for every result in a batch
+before starting the next batch. Associate every result with its dimension by
+the result's `dimension` field, not by arrival order, and record each result
+before continuing. This keeps high-coverage reviews within the runtime session
+window without reducing the selected dimensions. A preference chooses the
+model worker; it does not change dimension applicability, review criteria, or
+the output schema. Do not silently fall back to another model if the selected
+worker is unavailable: mark that dimension failed, report the reason, and
+continue with the remaining passes. CONTEXT/DETECT/MERGE, deduplication, and
+consensus scoring are unchanged; Step 5 uses the review-only workflow's GitHub
 publication. Dynamic dimensions without `model_preference` use the catalog's
 Terra default. Unknown preferences fail during skill preparation instead of
 silently running under another model.
@@ -268,7 +272,11 @@ Built-in reviewer guides remain inside this skill's reviewers/ directory. Dynami
 
 ## Rules
 
-1. Run each dimension review sequentially using its `review_agent` from the generated review plan, per **3.3 rbac-config-review Workflow Dispatch (OpenCode)**. The `review-verifier` is reserved for the workflow's evidence-refutation pass.
+1. Run dimension reviews in batches of at most four concurrent workers using
+   each pass's `review_agent` from the generated review plan, per **3.3
+   rbac-config-review Workflow Dispatch (OpenCode)**. Wait for the full batch
+   and record its results before starting the next batch. The
+   `review-verifier` is reserved for the workflow's evidence-refutation pass.
 2. Reviewers are read-only: do not modify the target repository, post PR comments, or persist learnings unless the user explicitly selected an output/action that authorizes it.
 3. In this instance, only `workflows/review-only/AGENTS.md` step 7 posts to a PR, using the validated JSON publication and inline-comment files after `review_evidence.py` validation. Do not create separate review reports.
 4. If a required read, agent dispatch, or output write is blocked, report the blocker and do not claim that the affected work completed.

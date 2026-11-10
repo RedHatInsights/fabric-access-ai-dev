@@ -139,8 +139,10 @@ artifacts. Keep uncompleted command IDs for the new cycle.
 
    Load the dimensional-review skill
    (`agent/skills/dimensional-review/SKILL.md`) with `--skip-learn` and run
-   exactly the listed passes sequentially, using their guide paths and
-   `review_agent` assignments. The plan has applied the configured level,
+   exactly the listed passes in batches of at most four concurrent workers,
+   using their guide paths and `review_agent` assignments. Keep plan order
+   when forming batches, wait for every result before starting the next batch,
+   and associate each result by its dimension name. The plan has applied the configured level,
    applicability, each dimension's `default` flag, and model routing.
    Entries in the current repository's `skills` list are always included,
    even when disabled by default, excluded by the level, or inapplicable by
@@ -156,9 +158,10 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    truth; do not override them based on your own model choice. A missing
    preference resolves to Terra during plan preparation. The preference
    selects the worker only; it does not change dimension criteria or the JSON
-   schema. Run passes sequentially and wait for each result. If a selected
-   worker is unavailable, mark that pass failed and continue without silently
-   switching models. Keep `review-verifier` on Terra for the separate
+   schema. Dispatch the workers in a batch concurrently and record each result
+   before moving to the next batch. If a selected worker is unavailable, mark
+   that pass failed and continue without silently switching models. Keep
+   `review-verifier` on Terra for the separate
    refutation step. Run CONTEXT with this manifest, then EXECUTE and MERGE per
    the skill.
    Feed the
