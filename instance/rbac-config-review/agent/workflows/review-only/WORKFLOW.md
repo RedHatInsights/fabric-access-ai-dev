@@ -172,8 +172,10 @@ instance can all have tasks in the same memory server. `review_queue.py`'s
 `load_tasks()` filters strictly on
 `source_type == "github" and external_key.startswith("review-only:github:")`
 — so even a task for the exact same PR number created by a different
-instance is invisible to this one. There is no author-based or label-based
-task filtering; the `external_key` prefix *is* the isolation boundary.
+instance is invisible to this one. It includes archived records to keep their
+unique keys reserved; a labeled PR with an archived task is skipped until the
+existing task is unarchived. There is no author-based or label-based task
+filtering; the `external_key` prefix *is* the isolation boundary.
 
 ### Memory: task state vs. the shared RAG store
 
@@ -390,9 +392,19 @@ publishers reject recognized credential patterns and some common personal or
 payment identifiers without echoing their values. This guard covers common
 token/key formats, credential assignments, email addresses, SSNs, and
 payment-card numbers; it is not a general secret or personal-data detector,
-so review text must still avoid sensitive details. If an older status review
-has no payload and its legacy ledger file is gone, preflight stops before
-starting a model session; that review needs a one-time ledger restore.
+so review text must still avoid sensitive details. At preflight, the tracked
+GitHub status review is checked first. If it has no ledger payload, preflight
+checks a matching saved publication and the legacy local ledger. If none can
+be restored, it posts one PR comment with a stable recovery ID asking the PR
+author whether to start a fresh review. Preflight returns `skip` while
+waiting, so no model session starts. Only that PR author can approve by
+replying exactly `Review bot: yes <recovery-id>`; an exact
+`Review bot: no <recovery-id>` declines. A fresh review starts at update count
+0 and cannot preserve the old finding IDs. An empty bot-owned pending review
+for the current head with no review comments can be reused after approval. If
+the empty draft targets an older head, omit its tracked review ID and publish
+a new status review. Pending reviews with content or inline comments still
+require manual reconciliation.
 
 ## Explaining a review finding
 

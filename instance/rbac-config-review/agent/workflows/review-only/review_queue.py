@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
+import re
 import subprocess
 import sys
+from datetime import datetime
+from pathlib import Path
 from urllib.parse import urlencode
 
 from common import INSTANCE_ID, MEMORY_URL, http_get, load_project_repos, output_result
 from review_config import ReviewConfigError, github_repo_url, load_config
 from review_ledger import (
+    EmptyPendingReview,
     LedgerError,
     LedgerPayloadMissing,
     decode_body,
@@ -32,11 +37,11 @@ def task_key(repo: str, number: int) -> str:
 
 
 def load_tasks() -> list[dict]:
-    """Page through task state; a failed memory read must not imply no reviews."""
+    """Load all task states so archived keys suppress duplicate task creation."""
     tasks: list[dict] = []
     offset = 0
     while True:
-        params = {"exclude_status": "archived", "limit": 100, "offset": offset}
+        params = {"limit": 100, "offset": offset}
         if INSTANCE_ID:
             params["instance_id"] = INSTANCE_ID
         data = http_get(f"{MEMORY_URL}/api/tasks?{urlencode(params)}")
@@ -95,45 +100,118 @@ def _metadata(task: dict) -> dict:
     return meta if isinstance(meta, dict) else {}
 
 
-def restore_prior_ledger(chosen: dict, task: dict | None) -> None:
-    """Restore prior review state from GitHub before the model session starts."""
+def _parse_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else None
+
+
+def _ledger_recovery_id(chosen: dict, meta: dict) -> str:
+    key = "|".join(str(value or "") for value in (
+        chosen["repo"], chosen["number"], meta.get("review_id"),
+        meta.get("last_reviewed_sha"), meta.get("last_reviewed_base_sha"),
+        chosen["head_sha"], chosen["base_sha"],
+    ))
+    return "LR-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
+
+
+def _request_ledger_recovery(chosen: dict, meta: dict) -> bool:
+    """Ask the PR author before discarding history when every ledger copy is gone."""
+    recovery_id = _ledger_recovery_id(chosen, meta)
+    marker = f"<!-- dev-review-bot:ledger-recovery:{recovery_id} -->"
+    comments = fetch_comments(chosen["repo"], chosen["number"])
+    bot_login = _bot_login()
+    requests = []
+    for comment in comments:
+        user = comment.get("user") or {}
+        body = comment.get("body")
+        login = user.get("login") if isinstance(user, dict) else None
+        if (isinstance(login, str) and login.casefold() == bot_login.casefold()
+                and isinstance(body, str) and marker in body):
+            created = _parse_timestamp(comment.get("created_at"))
+            if created is not None:
+                requests.append((created, comment))
+
+    if not requests:
+        author = chosen.get("pr_author")
+        if not isinstance(author, str) or not author.strip():
+            raise RuntimeError("Cannot ask about ledger recovery because the PR author is unknown")
+        body = (
+            f"**Review history needs recovery ({recovery_id}).**\n\n"
+            "I could not find a usable ledger in the status review, saved publication, or local ledger. "
+            "A fresh review will restart the finding history and may assign new finding IDs. "
+            f"Should I run a fresh re-review for @{author}?\n\n"
+            f"Reply exactly `Review bot: yes {recovery_id}` to approve, or "
+            f"`Review bot: no {recovery_id}` to leave this PR paused.\n\n{marker}"
+        )
+        result = subprocess.run(
+            ["gh", "api", f"repos/{chosen['repo']}/issues/{chosen['number']}/comments",
+             "--method", "POST", "--field", f"body={body}"],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        if result.returncode:
+            raise RuntimeError(f"Cannot ask PR author about ledger recovery: {result.stderr.strip()[:300]}")
+        chosen["ledger_recovery_state"] = "asked"
+        return False
+
+    request_at, _request_comment = min(requests, key=lambda item: item[0])
+    pr_author = chosen.get("pr_author")
+    if not isinstance(pr_author, str) or not pr_author.strip():
+        chosen["ledger_recovery_state"] = "waiting"
+        return False
+    expected = {
+        f"review bot: yes {recovery_id}": True,
+        f"review bot: no {recovery_id}": False,
+    }
+    answers = []
+    for comment in comments:
+        user = comment.get("user") or {}
+        created = _parse_timestamp(comment.get("created_at"))
+        body = comment.get("body")
+        if (not isinstance(user, dict) or user.get("type") != "User"
+                or not isinstance(user.get("login"), str)
+                or user["login"].casefold() != pr_author.casefold()
+                or created is None or created <= request_at or not isinstance(body, str)):
+            continue
+        decision = expected.get(body.strip().casefold())
+        if decision is not None:
+            answers.append((created, decision))
+    if not answers:
+        chosen["ledger_recovery_state"] = "waiting"
+        return False
+    _answer_at, approved = max(answers, key=lambda item: item[0])
+    chosen["ledger_recovery_state"] = "approved" if approved else "declined"
+    return approved
+
+
+def restore_prior_ledger(chosen: dict, task: dict | None) -> bool:
+    """Restore the status-review ledger, then saved copies, before any model run."""
     if chosen.get("kind") not in {"review", "resume", "feedback_check"}:
-        return
+        return True
     if task is None:
         chosen["update_count"] = 0
-        return
+        return True
     meta = _metadata(task)
-    pending = meta.get("pending_publication")
-    pending_body = pending.get("publication_body") if isinstance(pending, dict) else None
-    if isinstance(pending_body, str):
-        try:
-            pending_ledger = decode_body(pending_body, chosen["repo"], chosen["number"])
-        except LedgerPayloadMissing:
-            # Older pending publications have no embedded payload; fall back
-            # to the last posted review or its legacy local ledger.
-            pending_ledger = None
-        if (pending_ledger is not None
-                and pending_ledger["head_sha"] == chosen["head_sha"]
-                and pending_ledger["base_sha"] == chosen["base_sha"]):
-            chosen["ledger_path"] = write_cycle_ledger(
-                chosen["repo_key"], chosen["number"], chosen["head_sha"],
-                chosen["base_sha"], pending_ledger["findings"],
-            )
-            chosen["update_count"] = pending_ledger["update_count"]
-            return
     had_review = bool(meta.get("review_id") or meta.get("last_reviewed_sha")
                       or meta.get("update_count", 0) or task.get("status") in {"pr_open", "pr_changes"})
     if not had_review:
         chosen["update_count"] = 0
-        return
+        return True
 
     payload = None
+    empty_pending: EmptyPendingReview | None = None
     review_id = meta.get("review_id")
     if isinstance(review_id, int) and not isinstance(review_id, bool) and review_id > 0:
         try:
             payload = restore_from_review(
-                chosen["repo"], chosen["number"], review_id, _bot_login()
+                chosen["repo"], chosen["number"], review_id, _bot_login(), chosen["head_sha"]
             )
+        except EmptyPendingReview as exc:
+            empty_pending = exc
         except LedgerPayloadMissing:
             # Upgrade path for existing reviews: use an old local ledger once,
             # then the next published status comment carries the durable copy.
@@ -141,19 +219,39 @@ def restore_prior_ledger(chosen: dict, task: dict | None) -> None:
     elif review_id is not None:
         raise LedgerError("Tracked review ID is invalid")
 
+    # The published status review is authoritative. An interrupted publication
+    # is the next recoverable copy, followed by the legacy local ledger.
+    if payload is None:
+        pending = meta.get("pending_publication")
+        pending_body = pending.get("publication_body") if isinstance(pending, dict) else None
+        if isinstance(pending_body, str):
+            try:
+                pending_ledger = decode_body(pending_body, chosen["repo"], chosen["number"])
+            except LedgerPayloadMissing:
+                pending_ledger = None
+            if (pending_ledger is not None
+                    and pending_ledger["head_sha"] == chosen["head_sha"]
+                    and pending_ledger["base_sha"] == chosen["base_sha"]):
+                payload = pending_ledger
+
     if payload is None:
         legacy_path = meta.get("ledger_path")
-        if not isinstance(legacy_path, str) or not Path(legacy_path).is_file():
-            raise LedgerError(
-                "Prior review has no embedded ledger and its legacy local ledger is unavailable"
-            )
-        try:
-            ledger = public_ledger(json.loads(Path(legacy_path).read_text()))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise LedgerError(f"Could not read the legacy ledger: {exc}") from exc
-        update_count = meta.get("update_count", 0)
-        if not isinstance(update_count, int) or isinstance(update_count, bool) or update_count < 0:
-            raise LedgerError("Legacy review update_count is invalid")
+        if isinstance(legacy_path, str) and Path(legacy_path).is_file():
+            try:
+                ledger = public_ledger(json.loads(Path(legacy_path).read_text()))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise LedgerError(f"Could not read the legacy ledger: {exc}") from exc
+            update_count = meta.get("update_count", 0)
+            if not isinstance(update_count, int) or isinstance(update_count, bool) or update_count < 0:
+                raise LedgerError("Legacy review update_count is invalid")
+        else:
+            if not _request_ledger_recovery(chosen, meta):
+                return False
+            chosen["update_count"] = 0
+            chosen["ledger_recovery_approved"] = True
+            if empty_pending is not None and not empty_pending.reusable:
+                chosen["ignore_review_id"] = True
+            return True
     else:
         ledger = payload["findings"]
         update_count = payload["update_count"]
@@ -162,6 +260,9 @@ def restore_prior_ledger(chosen: dict, task: dict | None) -> None:
         chosen["repo_key"], chosen["number"], chosen["head_sha"], chosen["base_sha"], ledger
     )
     chosen["update_count"] = update_count
+    if empty_pending is not None and not empty_pending.reusable:
+        chosen["ignore_review_id"] = True
+    return True
 
 
 def _bot_login() -> str:
@@ -192,6 +293,11 @@ def _api_items(endpoint: str) -> list[dict]:
 
 def _external_feedback_key(item: dict, since: str, through: str,
                            key_prefix: str, seen_ids: set[str], bot_login: str) -> str | None:
+    if key_prefix == "issue" and isinstance(item.get("body"), str):
+        # A negative ledger-recovery answer closes that request without making
+        # every later preflight treat the same control comment as new feedback.
+        if re.fullmatch(r"Review bot: no LR-[0-9a-f]{12}", item["body"].strip(), re.IGNORECASE):
+            return None
     user = item.get("user") or item.get("author") or {}
     login = user.get("login") if isinstance(user, dict) else None
     if (not isinstance(login, str) or not login.strip()
@@ -326,6 +432,7 @@ def candidate(pr: dict, repo_key: str, repo: str, task: dict | None,
         "head_sha": sha,
         "base_sha": base_sha,
         "head_branch": pr.get("headRefName", ""),
+        "pr_author": author,
         "updated_at": pr.get("updatedAt", ""),
     }
 
@@ -352,6 +459,10 @@ def pick_work(repos: dict, config: dict, tasks: list[dict]) -> tuple[dict | None
             key = task_key(repo, pr.get("number"))
             open_pr_keys.add(key)
             task = by_key.get(key)
+            if task and task.get("status") == "archived":
+                # Keep the unique task key reserved. Operators can unarchive
+                # this existing record when the PR should be reviewed again.
+                continue
             item = candidate(pr, repo_key, repo, task)
             if item is None and task and task.get("status") in {"done", "paused", "pr_open"}:
                 # updatedAt has second precision: a new command can share the
@@ -452,9 +563,18 @@ def main() -> None:
             return
         task = next((item for item in tasks if item.get("external_key") == chosen["task_key"]), None)
         try:
-            restore_prior_ledger(chosen, task)
+            proceed = restore_prior_ledger(chosen, task)
         except (LedgerError, OSError, subprocess.TimeoutExpired) as exc:
             output_result("error", f"{chosen['repo']}#{chosen['number']}: {exc}")
+            return
+        if not proceed:
+            state = chosen.get("ledger_recovery_state", "waiting")
+            details = {
+                "asked": "Asked the PR author whether to start a fresh review",
+                "waiting": "Waiting for the PR author's ledger-recovery decision",
+                "declined": "The PR author declined a fresh review",
+            }.get(state, "Waiting for the PR author's ledger-recovery decision")
+            output_result("skip", f"{chosen['repo']}#{chosen['number']}: {details}")
             return
         chosen.pop("priority")
         output_result("start", json.dumps({"work": chosen, "discovery_errors": errors}))

@@ -32,6 +32,14 @@ class LedgerPayloadMissing(LedgerError):
     """The tracked review predates durable ledger payloads."""
 
 
+class EmptyPendingReview(LedgerPayloadMissing):
+    """A bot-owned pending review is empty and can safely receive a fresh summary."""
+
+    def __init__(self, message: str, *, reusable: bool = True):
+        super().__init__(message)
+        self.reusable = reusable
+
+
 def _text(value: object, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise LedgerError(f"{field} must be non-empty text")
@@ -267,7 +275,8 @@ def decode_body(body: object, repo: str, pr: int) -> dict:
     return {**payload, "findings": ledger}
 
 
-def restore_from_review(repo: str, pr: int, review_id: int, bot_login: str) -> dict:
+def restore_from_review(repo: str, pr: int, review_id: int, bot_login: str,
+                        expected_head: str | None = None) -> dict:
     if (not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo)
             or not isinstance(pr, int) or isinstance(pr, bool) or pr < 1
             or not isinstance(review_id, int) or isinstance(review_id, bool) or review_id < 1):
@@ -286,7 +295,30 @@ def restore_from_review(repo: str, pr: int, review_id: int, bot_login: str) -> d
     if not isinstance(author, str) or author.casefold() != bot_login.casefold():
         raise LedgerError("Tracked review was not authored by this bot account")
     if review.get("state") == "PENDING":
-        raise LedgerError("Tracked review is still pending and cannot restore the ledger")
+        if not isinstance(review.get("body"), str) or review["body"].strip():
+            raise LedgerError("Tracked pending review has content and cannot safely restore the ledger")
+        comments_result = subprocess.run(
+            ["gh", "api", f"repos/{repo}/pulls/{pr}/reviews/{review_id}/comments",
+             "--paginate", "--slurp"],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        if comments_result.returncode:
+            raise LedgerError(comments_result.stderr.strip() or "Could not inspect pending review comments")
+        try:
+            comment_pages = json.loads(comments_result.stdout)
+        except json.JSONDecodeError as exc:
+            raise LedgerError("GitHub returned invalid pending-review comments") from exc
+        if (not isinstance(comment_pages, list)
+                or any(not isinstance(page, list) for page in comment_pages)):
+            raise LedgerError("GitHub returned invalid pending-review comments")
+        if any(comment_pages):
+            raise LedgerError("Tracked pending review has comments and cannot safely be reused")
+        if expected_head is not None and review.get("commit_id") != expected_head:
+            raise EmptyPendingReview(
+                "Tracked pending review targets an older commit and cannot be reused",
+                reusable=False,
+            )
+        raise EmptyPendingReview("Tracked review is an empty pending draft; start a fresh ledger")
     return decode_body(review.get("body"), repo, pr)
 
 
