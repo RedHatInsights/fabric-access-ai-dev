@@ -8,6 +8,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import gh_pr_status
 from labeled_prs import own_tasks
 
+gh_pr_status.configure_review_bot_feedback(
+    "platex-rehor-bot",
+    ("dev-review-bot", "fabric-access-finding", "fabric-access-review"),
+)
 _orig_get_tasks = gh_pr_status.get_tasks
 gh_pr_status.get_tasks = lambda: own_tasks(_orig_get_tasks())
 gh_pr_status.main()
