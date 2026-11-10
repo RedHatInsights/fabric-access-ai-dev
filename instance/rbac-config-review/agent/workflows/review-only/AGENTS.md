@@ -36,8 +36,10 @@ bot_status_update with this instance ID at cycle start and end.
   it is this workflow's persisted record of every finding ever
   confirmed for this task and its current status, not just this cycle's.
 - `seen_rereview_comment_ids` records processed command comment IDs;
-  `pending_publication` records a validated but unfinished publication. Treat
-  missing fields as an empty list and null, respectively, for existing tasks.
+  `seen_feedback_comment_ids` records human conversation/review comment IDs
+  seen at the timestamp boundary; `pending_publication` records a validated
+  but unfinished publication. Treat missing fields as empty lists and null,
+  respectively, for existing tasks.
 
 ## PR lifecycle-only work
 
@@ -148,6 +150,32 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    would not be persisted because this bot cannot write to shared memory, and
    it is not part of the validated review body.
 
+   After the dimensions finish, ask `missing-context-detector` in `detect`
+   mode to check whether missing information could materially change a review
+   conclusion or requested action. Give it the same pinned context and the
+   dimension results. It must not assume a defect. Save its JSON as
+   `context-questions.json`; use an empty questions array when context is
+   sufficient. Each question must be one direct question with an impact, a
+   realistic scenario, and cited pinned references. If the detector cannot complete,
+   record the gap and do not claim that missing context was checked.
+
+   Also find author answers to earlier context questions in the cycle window
+   with `context_questions.py answers --repo <owner>/<repo> --pr <number>
+   --since <last_seen_updated_at> --through <preflight updated_at>`. Use
+   `last_reviewed_at`, or `1970-01-01T00:00:00Z`, if the prior watermark is
+   missing. If there are no answers, write `{"responses":[]}` and do not call
+   the detector in `assess_answer` mode. Verify the PR author's organization
+   membership before evaluation. For each new answer, load the
+   `explanatory-answer` skill and provide its ordered answer / why-or-how /
+   reasoning / optional example / implication structure to
+   `missing-context-detector` in `assess_answer` mode, supplying the original
+   question, answer, and this cycle's pinned context. Save the exact result in
+   `context-responses.json`. Each response needs an impact and a realistic
+   scenario. A follow-up question must be posted in its own comment, separate
+   from the answer explanation.
+   Do not treat an answer as a defect by itself; return only the evidence-based
+   next action, no-change decision, or one focused follow-up question.
+
    Record skipped or failed passes and their reasons in task state. If no
    pass completes, stop without publishing a clean review.
    When `manifest.format` is `custom`, persist each completed pass named in
@@ -164,20 +192,29 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    {"findings":[{"id":"F1",
    "category":"cross_repo|contract|deploy|invariant|local",
    "source_dimensions":["correctness"],
+   "severity":"blocking|suggestion|nit",
    "location":{"repo":"owner/repo","file":"path","line":1,
    "side":"added|removed"},
    "claim":"...","trigger":"specific input or code path","impact":"...",
-   "evidence":{"explanation":"...","refs":[{"repo":"owner/repo",
-   "sha":"40-character pinned SHA","file":"path","line":1}]},
-   "suggested_fix":"..."}]}. An optional `diagram` contains raw Mermaid
-   source without code fences. Use it only when a compact graph materially
-   clarifies cause/effect or interaction
-   already established by pinned evidence. Omit it for direct mismatches that
-   prose explains clearly. Use only source revisions in the manifest.
+   "scenario":["step 1","step 2"],
+   "evidence":{"explanation":"... [R1].","refs":[{"id":"R1",
+   "repo":"owner/repo","sha":"40-character pinned SHA","file":"path","line":1}]},
+   "suggested_fix":"..."}]}. Keep PR findings in prose; do not add diagrams
+   to the compact summary or inline threads. Use only source revisions in the
+   manifest.
+   Map reviewer `critical` or `high` severity to `blocking`, `medium` to
+   `suggestion`, and `low` or `info` to `nit`. Use `question` only for a
+   missing-context comment, never for an assumed defect. `scenario` must be a
+   realistic ordered sequence that reproduces the behavior through the changed
+   code. Do not use hypothetical steps unsupported by pinned context. Give
+   each evidence reference an `R1`, `R2`, ... ID and place that ID beside the
+   statement it supports in `evidence.explanation`; cite each ID exactly once.
+   The renderer turns each in-text ID into a direct pinned-source link.
+
    Assign a unique ID to every finding (`F1`, `F2`, ...). IDs must be unique
    across the task ledger: keep prior IDs for carried findings and allocate
    the next unused ID to each new finding. Use that same ID in the summary
-   heading and the corresponding inline comment; do not renumber between them.
+   line and corresponding inline comment; do not renumber between them.
    For removed lines, use the base SHA in evidence refs and side="removed"
    in the location; the validator checks the pinned PR diff. All locations
    must be changed lines.
@@ -188,10 +225,9 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    both summary and inline comments. Existing ledger entries without it must
    say `**Dimension:** not recorded in prior review`; do not invent an origin.
    Avoid duplicate comments already present on the PR.
-   The evidence gate renders an accepted diagram in the GitHub review summary.
-   Keep inline comments in prose because narrow threads can clip diagram
-   labels. For `format: custom`, include the fenced Mermaid block only in
-   the identified summary part for that finding.
+   Keep summaries and inline comments in prose. For explanation answers outside
+   the finding format, use the explanatory-answer skill's optional diagram only
+   when it materially improves understanding.
    If a prior ledger has `open` entries, also propose exactly one re-check
    per open entry, in a second JSON file under the snapshot directory:
    {"verifications":[{"finding_id":"F1","status":"addressed|still_open|uncertain",
@@ -206,9 +242,7 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    fixed belongs under "uncertain".
 4. Ask the review-verifier subagent to try to refute every proposed finding
    using the pinned sources. Give it the manifest path, proposed JSON, and
-   relevant code excerpts. It must also check that an optional diagram is
-   plausible Mermaid and adds no actor, branch, or outcome beyond the pinned
-   evidence. Save its JSON response under the snapshot directory
+   relevant code excerpts. Save its JSON response under the snapshot directory
    as {"verdicts":[{"finding_id":"F1","status":"confirmed|refuted|uncertain",
    "refutation_check":"...","reason":"..."}]}. If the verifier is
    unavailable or returns invalid output, stop without posting.
@@ -225,10 +259,18 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    --verdicts <verdicts.json> --publication-output <publication.json>
    --ledger-output <ledger.json path under this cycle's snapshot directory>
    --inline-comments-output <inline-comments.json>
+   --context-questions <context-questions.json>
+   --context-question-comments-output <context-question-comments.json>
+   --context-responses <context-responses.json>
+   --context-response-comments-output <context-response-comments.json>
    Otherwise run the same command plus:
    --ledger <prior ledger_path> --verifications <verifications.json>
    --verification-verdicts <verification-verdicts.json>
    --update-count <task metadata's current update_count, or 0 if absent>
+   --context-questions <context-questions.json>
+   --context-question-comments-output <context-question-comments.json>
+   --context-responses <context-responses.json>
+   --context-response-comments-output <context-response-comments.json>
    Either way it validates pinned code references, changed-file locations,
    the seven-finding limit, and one verdict per finding, and writes the
    task's ledger.json (initial ledger on the first review, merged ledger on
@@ -237,78 +279,94 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    and reports the update_count (0 on the first review).
 
    For `manifest.format == "standard"`, use the generated publication JSON and
+   inline comments. The summary has a `Review N` heading (without `#N`) and one
+   compact status line with plain-text finding IDs, severity, dimension,
+   resolution state, and an `[inline comment]` link for each finding. Keep
+   scenarios, evidence, and fixes in the
    inline comments. Their heading and bold labels follow this workflow's usual
-   format. For `manifest.format == "custom"`, first run the same command
+   format. `manifest.format == "custom"` keeps the status summary compact as
+   well; its selected skills control the detailed inline comment layout.
+   First run the same command
    with `--skill-results <skill-results.json> --prepare-custom <verified.json>`.
    It writes only confirmed findings, updated ledger, review number, recorded
    formatting-skill results, and their pinned guide paths; it does not write a
    review. Read each of those guides and results, and use each skill's requested
    layout to compose `custom-format.json` from only the verified JSON. Keep
-   every skill's headings, required sections, verdict rules, and wording conventions;
-   do not add the standard labels, boilerplate, or re-review footer.
+   skill-specific wording and structure in inline comments. The summary still
+   contains only `Review N` and the one-line list of plain-text finding IDs,
+   severity, dimension, resolution status, and `[inline comment]` links. Do not put finding detail in the
+   summary.
    If a selected guide does not specify an output layout, stop and report that
    custom formatting cannot be determined; do not invent a layout.
-   For multiple formatting skills, retain a separate section for each skill.
-   A skill's verdict and findings must reflect only that skill's completed pass
-   and confirmed findings attributed to it. Place findings from other or
-   unknown dimensions in a clearly separate section without presenting them as
-   that skill's findings. A merged finding attributed to multiple skills is
-   included once, under one of those skills, with its original ID. Follow each
-   guide's instructions for empty sections rather than inventing findings.
-   Include the review number in the skill's first Markdown heading and the
-   same `[F1]` ID wherever a finding is mentioned.
+   Each skill's inline findings must reflect only completed passes and confirmed
+   findings attributed to it. Format a merged finding using one of its source
+   skills, once, with its original ID. Every new finding gets exactly one
+   inline comment. Findings from dimensions outside `format_skills` use the
+   standard inline layout automatically. Put detailed scenarios, evidence, and
+   fixes in the inline comment.
 
    The custom JSON shape is
-   `{"summary_parts":[{"skill":"skill-name","text":"## Skill review #1"},{"skill":"skill-name","finding_id":"F1","text":"... [F1] ..."}],"inline_comments":[{"finding_id":"F1","text":"... [F1] ..."}]}`.
-   Tag each skill's heading and any finding presented within its section with
-   `skill`. Do not tag findings from other or unknown dimensions with that skill.
-   Include one identified summary part per ledger finding, including carried
-   status. Include `**Dimension:** <names>` in each identified summary part
-   and each inline entry, even when the selected skill uses its own layout.
-   Add inline entries only when the selected skill calls for inline
-   comments; otherwise use an empty list. Other summary parts can supply the
-   skill's headings and verdict. Do not include rejected findings or bot markers.
-   Ask `review-verifier` to read `verified.json` and every listed guide and
-   recorded pass, then compare the custom JSON for unsupported claims,
-   incorrect statuses or attribution, and deviations from each guide's actual
-   heading, sections, verdict rules, and inline format. Save its JSON verdict:
+   `{"inline_comments":[{"finding_id":"F1","skill":"skill-name","text":"... [F1] ..."}]}`.
+   Include one inline entry for each new finding whose source dimensions
+   include a formatting skill; findings from other dimensions are rendered in
+   the standard layout by the evidence gate. Inline comments must
+   include `[F1]`, `**Dimension:**`, `**Severity:**`, `**Location:**`,
+   `**Trigger:**`, `**Scenario:**` with every ordered scenario step,
+   `**Impact:**`, `**Evidence:**` with pinned references beside the claims, and
+   `**Suggested fix:**`. Do not include rejected findings or bot markers. Ask
+   `review-verifier` to read
+   `verified.json` and every listed guide and recorded pass, then compare the
+   custom inline comments for unsupported claims, incorrect attribution, and
+   deviations from each guide's inline format. Save its JSON verdict:
    `{"status":"confirmed|refuted|uncertain","refutation_check":"...","reason":"...","skills":[{"name":"skill-name","status":"confirmed|refuted|uncertain","refutation_check":"...","reason":"..."}]}`.
    Include exactly one verdict per formatting skill; a missing, refuted, or
    uncertain verdict blocks publication. Rerun the same evidence command without
    `--prepare-custom`, keeping `--skill-results` and adding
    `--custom-format <custom-format.json> --custom-verdict <verdict.json>`.
    It validates IDs, anchors, review number, and the formatting verdict, then
-   writes the publication JSON and inline comments in the skill's layout. Never
+   writes the compact publication JSON and the inline comments in each skill's
+   layout. Never
    hand-edit the validated output or post an unvalidated draft.
 6. Before posting, persist `pending_publication` with this head/base, the
-   validated publication JSON, inline comments, output ledger and manifest paths, the
-   returned update_count, the cycle watermark, and the command IDs processed
-   in that window. Leave the task in progress. Re-read the PR head and base
+   validated publication JSON, inline comments, context question and response
+   comments, output ledger and manifest paths, the returned update_count, the
+   cycle watermark, the command IDs, and preflight's `feedback_comment_ids`
+   processed in that window.
+   Leave the task in progress. Re-read the PR head and base
    SHAs immediately before posting. If either
    changed, save progress and stop; preflight will select the new pair next
    cycle.
-7. Post or update exactly one GitHub review summary per task from the validated
-   JSON payload:
-   `python3 workflows/review-only/post_review.py --repo <owner>/<repo>
-   --pr <number> --head-sha <head_sha> --base-sha <base_sha>
-   --publication <publication.json>`.
-   If task metadata already has a `review_id`, also pass `--review-id <review_id>`.
-   The script verifies the live PR revision, recovers a uniquely matching
-   summary review by its marker on a first publication retry, and uses GitHub's
-   comment-review API. Never approve, request changes, or post a second summary
-   when a tracked review exists. Read `review_id` and `review_url` from its JSON output.
-   Before inline publishing, update task metadata to keep status=in_progress and
-   save review_id and review URL. Keep `pending_publication` until all inline
-   comments are published so a retry reuses the same validated payload and count.
-   Then run `python3 workflows/review-only/post_inline_comments.py --repo <owner>/<repo>
-   --pr <number> --head-sha <head_sha> --comments <inline-comments.json>`.
-   It posts each confirmed finding at its changed line, carrying the same ID
-   used in the summary. The standard format uses all bold finding labels,
-   including `Dimension`;
-   custom format uses the selected skill's layout. It updates an existing
-   same-head comment with the same ID instead of duplicating it. GitHub may
-   create separate review records for inline comments; keep tracking the summary
-   review's ID. If this step fails, leave the task in progress.
+7. Publish inline findings first so the summary can link each real thread.
+   Run `python3 workflows/review-only/post_inline_comments.py --repo <owner>/<repo>
+   --pr <number> --head-sha <head_sha> --comments <inline-comments.json>
+   --ledger <ledger.json> --comment-links-output <comment-links.json>`.
+   It posts each confirmed finding at its changed line and returns URLs for
+   current or carried finding threads. The standard format uses all bold
+   finding labels, including `Dimension` and `Scenario`; custom format keeps
+   the selected skill's inline layout and includes those required fields. It
+   updates an existing same-head comment with the same ID instead of
+   duplicating it. If inline publication fails, leave the task in progress and
+   do not publish a summary with missing links.
+
+   Post validated context questions and answer responses as separate top-level
+   PR comments using `context_questions.py publish --repo <owner>/<repo>
+   --pr <number> --head-sha <head_sha> --comments <context-comment-file>`.
+   Each question has its own comment and Q-ID; the publisher is idempotent by
+   hidden marker. Do not include questions in the finding count.
+
+   Then post or update exactly one GitHub review summary from the validated
+   payload with `post_review.py --repo <owner>/<repo> --pr <number>
+   --head-sha <head_sha> --base-sha <base_sha> --publication <publication.json>
+   --comment-links <comment-links.json>`. If task metadata already has a
+   `review_id`, also pass `--review-id <review_id>`. The script verifies the
+   live PR revision, recovers a uniquely matching summary review on a first
+   publication retry, and uses GitHub's comment-review API. Never approve,
+   request changes, or post a second summary when a tracked review exists. Read
+   `review_id` and `review_url` from its JSON output, then save them in task
+   metadata. Keep `pending_publication` until findings, context comments, and
+   summary are all published so a retry reuses the same validated payload and
+   count. GitHub may create separate review records for inline comments; keep
+   tracking the summary review's ID.
    Every published summary and inline comment must carry the hidden marker
    `<!-- dev-review-bot:... -->`. The evidence renderer writes these markers;
    publishers also migrate legacy `fabric-access-*` markers when resuming a
@@ -319,7 +377,9 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    pending update_count (0 on its first review), ledger_path, reviewed SHAs,
    and the cycle watermark as `last_seen_updated_at`. Clear `paused_reason`.
    Merge this cycle's processed command IDs into `seen_rereview_comment_ids`
-   and set `pending_publication` to null in the same task update. Set
+   and preflight's `feedback_comment_ids` into `seen_feedback_comment_ids`,
+   retaining the newest 1,000 IDs. Set `pending_publication` to null in the
+   same task update. Set
    `last_addressed` to the current time, including when the review found
    nothing actionable. The task becomes `done` only through PR lifecycle
    handling after GitHub confirms the merge. `memory_store`/`memory_delete`
@@ -331,10 +391,35 @@ artifacts. Keep uncompleted command IDs for the new cycle.
 ## Feedback check
 
 For kind="feedback_check", fetch PR conversation and review threads newer
-than last_seen_updated_at. A member can request another full review, even on
-the same commit, by posting a **new top-level PR conversation comment** whose
-entire text is `/review-bot re-review` (case-insensitive, surrounding whitespace
-allowed). Edits to old comments and inline replies are not commands.
+than last_seen_updated_at. Also find answers to outstanding context questions
+with `context_questions.py answers --repo <owner>/<repo> --pr <number>
+--since <last_seen_updated_at> --through <preflight updated_at>`. Accept only
+answers from the PR author, and verify that author's organization membership
+before asking the detector to evaluate them. Rebuild the manifest for the
+current head/base pair with `build_context.py --repo-key <repo_key>
+--pr <number> --head-sha <head_sha> --base-sha <base_sha>`, load the
+explanatory-answer skill, and provide its
+ordered answer / why-or-how / reasoning / optional example / implication
+structure together with the original question, answer, and pinned context to
+`missing-context-detector` in `assess_answer` mode. Render its JSON with
+`context_questions.py render-responses --manifest <manifest.json>
+--responses <context-responses.json> --output <context-response-comments.json>`
+then publish with `context_questions.py publish --repo <owner>/<repo>
+--pr <number> --head-sha <head_sha> --comments <context-response-comments.json>`.
+A follow-up question gets a new Q-ID and a separate comment with its own
+marker; no-change responses say that no code change is indicated. Save
+processed answer comment IDs with the cycle watermark.
+
+Preflight inspects issue comments, review comments, and submitted reviews
+deterministically before starting this session. It selects `feedback_check`
+only when it finds an unseen human-authored item in the window; updates caused
+only by this bot's comments do not start an AI cycle. Store the returned
+`feedback_comment_ids` so same-second comment timestamps are not replayed.
+
+A member can request another full review, even on the same commit, by posting
+a **new top-level PR conversation comment** whose entire text is
+`/review-bot re-review` (case-insensitive, surrounding whitespace allowed).
+Edits to old comments and inline replies are not commands.
 Before acting on any new comment or review thread, including an ordinary
 correction or acceptance, verify its author's organization membership using
 the core `check_org_member` / `store_org_member` procedure. Ignore non-members
@@ -362,9 +447,11 @@ look for new findings, and update the same summary with the next review number.
 
 Otherwise, compare authorized corrections or acceptances with current code.
 `memory_store` is denied — put useful feedback in task state only. Record
-all checked command IDs in `seen_rereview_comment_ids` and advance
-last_seen_updated_at to preflight's updated_at; set `last_addressed` to the
-current time even if there was nothing actionable. Keep a paused task paused
+all checked command IDs in `seen_rereview_comment_ids`, merge the work item's
+`feedback_comment_ids` into `seen_feedback_comment_ids` (retain the newest
+1,000 IDs), and advance last_seen_updated_at to preflight's updated_at; set
+`last_addressed` to the current time even if there was nothing actionable.
+Keep a paused task paused
 unless `pr_lifecycle` is `closed_unmerged` and the PR is open again; in that
 case set it to `pr_open`. For other open PR tasks, keep status `pr_open`.
 No review is posted for ordinary feedback. If a request was received while

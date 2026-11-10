@@ -48,11 +48,13 @@ def snapshot(tmp_path):
 def finding():
     return {
         "id": "F1", "category": "cross_repo",
+        "severity": "blocking",
         "location": {"repo": "org/rbac", "file": "api/permissions.py", "line": 1},
         "claim": "Old permission disappears", "trigger": "HBI sends inventory.read_hosts",
         "impact": "The RBAC check rejects HBI requests", "suggested_fix": "Retain an alias",
-        "evidence": {"explanation": "HBI still sends the old permission", "refs": [{
-            "repo": "org/hbi", "sha": "c" * 40, "file": "client.py", "line": 1,
+        "scenario": ["HBI sends inventory.read_hosts", "RBAC checks the renamed permission"],
+        "evidence": {"explanation": "HBI still sends the old permission [R1]", "refs": [{
+            "id": "R1", "repo": "org/hbi", "sha": "c" * 40, "file": "client.py", "line": 1,
         }]},
     }
 
@@ -78,9 +80,10 @@ def test_evidence_gate_accepts_pinned_related_code_and_confirmed_verdict(tmp_pat
         "reason": "No fallback exists at the pinned revision",
     }]})
     body = evidence.render_review(manifest, accepted)
-    assert body.startswith("## Review #1\n")
-    assert "`/review-bot re-review`" in body
-    assert "org/hbi/blob/" + "c" * 40 + "/client.py#L1" in body
+    assert body.startswith("## Review 1\n")
+    assert "Findings (1 total; 1 open, 0 addressed)" in body
+    inline = evidence.render_inline_comments(accepted)[0]["body"]
+    assert "org/hbi/blob/" + "c" * 40 + "/client.py#L1" in inline
     assert "dev-review-bot:fabric-access-review:" + "a" * 40 + ":" + "b" * 40 in body
 
 

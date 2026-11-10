@@ -87,6 +87,68 @@ def _metadata(task: dict) -> dict:
     return meta if isinstance(meta, dict) else {}
 
 
+def _bot_login() -> str:
+    configured = os.environ.get("GH_USER_NAME", "").strip()
+    if configured:
+        return configured
+    result = subprocess.run(
+        ["gh", "api", "user", "--jq", ".login"],
+        capture_output=True, text=True, timeout=15, check=False,
+    )
+    if result.returncode or not result.stdout.strip():
+        raise RuntimeError("Cannot identify the GitHub bot account")
+    return result.stdout.strip()
+
+
+def _api_items(endpoint: str) -> list[dict]:
+    result = subprocess.run(
+        ["gh", "api", endpoint, "--paginate", "--slurp"],
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    if result.returncode:
+        raise RuntimeError(f"Cannot inspect PR feedback: {result.stderr.strip()[:300]}")
+    pages = json.loads(result.stdout)
+    if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
+        raise ValueError("GitHub returned invalid PR feedback pages")
+    return [item for page in pages for item in page if isinstance(item, dict)]
+
+
+def _external_feedback_key(item: dict, since: str, through: str,
+                           key_prefix: str, seen_ids: set[str], bot_login: str) -> str | None:
+    user = item.get("user") or item.get("author") or {}
+    login = user.get("login") if isinstance(user, dict) else None
+    if (not isinstance(login, str) or not login.strip()
+            or user.get("type") == "Bot"
+            or login.casefold() == bot_login.casefold()):
+        return None
+    timestamp = (item.get("updated_at") or item.get("created_at")
+                 or item.get("submitted_at"))
+    ident = item.get("id")
+    if (not isinstance(timestamp, str) or not since <= timestamp <= through
+            or not isinstance(ident, int) or isinstance(ident, bool) or ident <= 0):
+        return None
+    key = f"{key_prefix}:{ident}"
+    return None if key in seen_ids else key
+
+
+def external_feedback_ids(repo: str, number: int, since: str, through: str,
+                          seen_ids: set[str]) -> list[str]:
+    """Return same-window human feedback IDs, excluding bot-only PR updates."""
+    found: list[str] = []
+    bot_login = _bot_login()
+    sources = [
+        ("issue", fetch_comments(repo, number, since)),
+        ("review-comment", _api_items(f"repos/{repo}/pulls/{number}/comments?per_page=100")),
+        ("review", _api_items(f"repos/{repo}/pulls/{number}/reviews?per_page=100")),
+    ]
+    for prefix, items in sources:
+        for item in items:
+            key = _external_feedback_key(item, since, through, prefix, seen_ids, bot_login)
+            if key:
+                found.append(key)
+    return found
+
+
 def _task_pr(task: dict, repos: dict) -> tuple[str, str, int] | None:
     key = task.get("external_key", "")
     if not key.startswith(TASK_PREFIX):
@@ -223,7 +285,26 @@ def pick_work(repos: dict, config: dict, tasks: list[dict]) -> tuple[dict | None
                 if probe and probe["kind"] == "feedback_check" and since and through and since <= through:
                     boundary_probes.append((probe, meta, since, through))
             if item:
-                found.append(item)
+                meta = _metadata(task or {})
+                seen_feedback = meta.get("seen_feedback_comment_ids") or []
+                if (not isinstance(seen_feedback, list)
+                        or any(not isinstance(ident, str) for ident in seen_feedback)):
+                    errors.append(f"{repo}#{pr['number']}: Invalid seen_feedback_comment_ids")
+                    continue
+                since = meta.get("last_seen_updated_at") or meta.get("last_reviewed_at") or "1970-01-01T00:00:00Z"
+                try:
+                    feedback_ids = external_feedback_ids(
+                        repo, pr["number"], since, item["updated_at"], set(seen_feedback)
+                    ) if task and item["kind"] in {"review", "feedback_check"} else []
+                    if item["kind"] != "feedback_check" or feedback_ids:
+                        item["feedback_comment_ids"] = feedback_ids
+                        found.append(item)
+                except (RuntimeError, subprocess.TimeoutExpired, ValueError, json.JSONDecodeError) as exc:
+                    if item["kind"] == "feedback_check":
+                        errors.append(f"{repo}#{pr['number']}: {exc}")
+                        continue
+                    item["feedback_comment_ids"] = []
+                    found.append(item)
     for task in tasks:
         status = task.get("status")
         meta = _metadata(task)
@@ -257,7 +338,15 @@ def pick_work(repos: dict, config: dict, tasks: list[dict]) -> tuple[dict | None
                 if not isinstance(seen_ids, list) or any(type(ident) is not int or ident <= 0 for ident in seen_ids):
                     raise ValueError("Invalid seen_rereview_comment_ids")
                 comments = fetch_comments(probe["repo"], probe["number"], since)
-                if rereview_requests(comments, since, through, set(seen_ids)):
+                seen_feedback = meta.get("seen_feedback_comment_ids") or []
+                if (not isinstance(seen_feedback, list)
+                        or any(not isinstance(ident, str) for ident in seen_feedback)):
+                    raise ValueError("Invalid seen_feedback_comment_ids")
+                feedback_ids = external_feedback_ids(
+                    probe["repo"], probe["number"], since, through, set(seen_feedback)
+                )
+                if rereview_requests(comments, since, through, set(seen_ids)) or feedback_ids:
+                    probe["feedback_comment_ids"] = feedback_ids
                     found.append(probe)
                     break
             except (RuntimeError, subprocess.TimeoutExpired, ValueError) as exc:

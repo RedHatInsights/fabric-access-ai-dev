@@ -173,6 +173,7 @@ def test_main_respects_capacity_for_rereview(monkeypatch):
     monkeypatch.setattr(queue, "load_project_repos", lambda: REPOS)
     monkeypatch.setattr(queue, "load_tasks", lambda: active + [done])
     monkeypatch.setattr(queue, "list_prs", lambda *_args: [PR])
+    monkeypatch.setattr(queue, "external_feedback_ids", lambda *_args: [])
     monkeypatch.setattr(queue, "output_result", lambda status, content: results.append((status, content)))
     queue.main()
     assert results[0][0] == "skip"
@@ -191,10 +192,13 @@ def test_same_second_request_is_discovered_once_even_without_an_updated_timestam
                "user": {"login": "alice", "type": "User"}}
     monkeypatch.setattr(queue, "list_prs", lambda *_args: [PR])
     monkeypatch.setattr(queue, "fetch_comments", lambda *_args: [comment])
+    monkeypatch.setattr(queue, "external_feedback_ids",
+                        lambda _repo, _number, _since, _through, seen: [] if "issue:101" in seen else ["issue:101"])
     chosen, errors = queue.pick_work(REPOS, {"review_label": "dev-bot-review"}, [task])
     assert not errors
     assert chosen["kind"] == "feedback_check"
     task["metadata"]["seen_rereview_comment_ids"] = [101]
+    task["metadata"]["seen_feedback_comment_ids"] = ["issue:101"]
     assert queue.pick_work(REPOS, {"review_label": "dev-bot-review"}, [task]) == (None, [])
 
 
