@@ -15,7 +15,7 @@ import post_review  # noqa: E402
 
 HEAD, BASE = "a" * 40, "b" * 40
 REPO, PR = "org/repo", 42
-BODY = f"## Review #1\n\n<!-- dev-review-bot:fabric-access-review:{HEAD}:{BASE} -->\n"
+BODY = f"## Review 1\n\n<!-- dev-review-bot:fabric-access-review:{HEAD}:{BASE} -->\n"
 
 
 def publication(tmp_path):

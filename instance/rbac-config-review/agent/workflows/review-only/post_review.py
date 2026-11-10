@@ -41,7 +41,7 @@ def api(endpoint: str, method: str = "GET", payload: dict | None = None,
 
 
 def publish(repo: str, pr: int, head: str, base: str, publication: Path,
-            review_id: int | None = None) -> dict:
+            review_id: int | None = None, comment_links: Path | None = None) -> dict:
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) or pr < 1:
         raise ValueError("Repository or PR number is invalid")
     if not all(re.fullmatch(r"[0-9a-f]{40}", sha) for sha in (head, base)):
@@ -56,6 +56,22 @@ def publish(repo: str, pr: int, head: str, base: str, publication: Path,
             or body.count(marker) + body.count(legacy_marker) != 1):
         raise ValueError("Publication is missing its validated revision marker")
     body = body.replace(legacy_marker, marker)
+    links = {}
+    if comment_links:
+        links = json.loads(comment_links.read_text())
+        if not isinstance(links, dict) or any(
+            not isinstance(ident, str) or not re.fullmatch(r"F[1-9]\d*", ident)
+            or not isinstance(url, str) or not url.startswith("https://github.com/")
+            for ident, url in links.items()
+        ):
+            raise ValueError("Finding comment links must map finding IDs to GitHub URLs")
+
+    def replace_finding_link(match: re.Match[str]) -> str:
+        label, ident = match.group(1), match.group(2)
+        url = links.get(ident)
+        return f"[{label}]({url})" if url else f"{label} (comment unavailable)"
+
+    body = re.sub(r"\[([^\]]+)\]\(review-comment:(F[1-9]\d*)\)", replace_finding_link, body)
 
     pr_state = api(f"repos/{repo}/pulls/{pr}")
     if (not isinstance(pr_state, dict) or pr_state.get("state") != "open"
@@ -108,10 +124,12 @@ def main() -> None:
     parser.add_argument("--base-sha", required=True)
     parser.add_argument("--publication", required=True, type=Path)
     parser.add_argument("--review-id", type=int)
+    parser.add_argument("--comment-links", type=Path,
+                        help="Finding comment URLs created or found by post_inline_comments.py")
     args = parser.parse_args()
     try:
         print(json.dumps(publish(args.repo, args.pr, args.head_sha, args.base_sha,
-                                 args.publication, args.review_id)))
+                                 args.publication, args.review_id, args.comment_links)))
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
         parser.exit(1, f"Review publication failed: {exc}\n")
 

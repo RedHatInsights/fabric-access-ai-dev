@@ -21,6 +21,19 @@ def add_payload_fields(command: list[str], payload: dict) -> None:
         command.extend(["--field", f"{key}={rendered}"])
 
 
+def has_ordered_scenario(body: str) -> bool:
+    marker = "**Scenario:**"
+    if marker not in body:
+        return False
+    scenario = body.split(marker, 1)[1].split("**Impact:**", 1)[0]
+    matches = re.findall(r"(?m)^(\d+)\.\s+(.+)$", scenario)
+    numbers = [int(number) for number, _step in matches]
+    steps = [step for _number, step in matches]
+    return (len(steps) >= 2 and numbers == list(range(1, len(steps) + 1))
+            and all(scenario.find(step) < scenario.find(next_step)
+                    for step, next_step in zip(steps, steps[1:])))
+
+
 def api(endpoint: str, method: str, payload: dict | None = None) -> object:
     command = ["gh", "api", endpoint]
     if payload is None:
@@ -58,6 +71,9 @@ def main() -> None:
     parser.add_argument("--pr", required=True, type=int)
     parser.add_argument("--head-sha", required=True)
     parser.add_argument("--comments", required=True, type=Path)
+    parser.add_argument("--ledger", type=Path, help="Ledger used to link carried findings in the status summary")
+    parser.add_argument("--comment-links-output", type=Path,
+                        help="Write finding ID to GitHub comment URL mappings")
     args = parser.parse_args()
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.repo):
         parser.error("--repo must be owner/repository")
@@ -67,8 +83,21 @@ def main() -> None:
     comments = json.loads(args.comments.read_text())
     if not isinstance(comments, list):
         parser.error("--comments must contain a JSON array")
-    if not comments:
-        print(json.dumps({"posted": 0, "updated": 0, "unchanged": 0}))
+    link_ids = ({comment.get("id") for comment in comments if isinstance(comment, dict)}
+                if args.comment_links_output else set())
+    if args.ledger and args.comment_links_output:
+        ledger = json.loads(args.ledger.read_text())
+        if not isinstance(ledger, list) or any(not isinstance(item, dict) for item in ledger):
+            parser.error("--ledger must contain a JSON array of findings")
+        link_ids.update(item.get("id") for item in ledger if isinstance(item.get("id"), str))
+    if any(not isinstance(ident, str) or not re.fullmatch(r"F[1-9]\d*", ident) for ident in link_ids):
+        parser.error("Finding links need IDs in the F1, F2, ... format")
+    if not comments and not link_ids:
+        if args.comment_links_output:
+            args.comment_links_output.write_text("{}")
+            print(json.dumps({"posted": 0, "updated": 0, "unchanged": 0, "comment_urls": {}}))
+        else:
+            print(json.dumps({"posted": 0, "updated": 0, "unchanged": 0}))
         return
 
     for comment in comments:
@@ -84,14 +113,17 @@ def main() -> None:
         if format_name == "custom":
             if f"[{ident}]" not in body:
                 parser.error(f"Custom inline comment {ident} must include its finding ID")
-            if "**Dimension:** " not in body:
-                parser.error(f"Custom inline comment {ident} must state its dimension")
+            labels = ("Severity", "Dimension", "Location", "Trigger", "Scenario", "Impact", "Evidence", "Suggested fix")
+            if any(f"**{label}:**" not in body for label in labels):
+                parser.error(f"Custom inline comment {ident} must include all bold finding labels and a real scenario")
         else:
             if not body.startswith(f"**[{ident}]** "):
                 parser.error(f"Inline comment {ident} must start with its finding ID")
-            labels = ("Dimension", "Location", "Trigger", "Impact", "Evidence", "Suggested fix")
+            labels = ("Severity", "Dimension", "Location", "Trigger", "Scenario", "Impact", "Evidence", "Suggested fix")
             if any(f"**{label}:**" not in body for label in labels):
                 parser.error(f"Inline comment {ident} must include all bold finding labels")
+        if not has_ordered_scenario(body):
+            parser.error(f"Inline comment {ident} must include an ordered, multi-step scenario")
         marker = f"<!-- dev-review-bot:fabric-access-finding:{ident} -->"
         legacy_marker = f"<!-- fabric-access-finding:{ident} -->"
         if body.count(marker) + body.count(legacy_marker) != 1:
@@ -109,6 +141,9 @@ def main() -> None:
         parser.error("Inline comment finding IDs must be unique")
     if current_head(args.repo, args.pr) != args.head_sha:
         raise RuntimeError("PR head changed before inline comments could be posted")
+    if not comments and not link_ids:
+        print(json.dumps({"posted": 0, "updated": 0, "unchanged": 0, "comment_urls": {}}))
+        return
     endpoint = f"repos/{args.repo}/pulls/{args.pr}/comments"
     existing = api(endpoint, "GET")
     if not isinstance(existing, list):
@@ -154,7 +189,24 @@ def main() -> None:
         existing.append(created)
         posted += 1
 
-    print(json.dumps({"posted": posted, "updated": updated, "unchanged": unchanged}))
+    comment_urls = {}
+    for ident in sorted(link_ids):
+        marker = f"<!-- dev-review-bot:fabric-access-finding:{ident} -->"
+        legacy_marker = f"<!-- fabric-access-finding:{ident} -->"
+        matches = [item for item in existing if marker in (item.get("body") or "")
+                   or legacy_marker in (item.get("body") or "")]
+        matches.sort(key=lambda item: item.get("updated_at") or item.get("created_at") or "", reverse=True)
+        if matches and isinstance(matches[0].get("html_url"), str):
+            comment_urls[ident] = matches[0]["html_url"]
+    missing_links = sorted(link_ids - comment_urls.keys())
+    if args.comment_links_output and missing_links:
+        raise RuntimeError("No inline comment URL found for finding(s): " + ", ".join(missing_links))
+    if args.comment_links_output:
+        args.comment_links_output.write_text(json.dumps(comment_urls, indent=2))
+        print(json.dumps({"posted": posted, "updated": updated, "unchanged": unchanged,
+                          "comment_urls": comment_urls}))
+    else:
+        print(json.dumps({"posted": posted, "updated": updated, "unchanged": unchanged}))
 
 
 if __name__ == "__main__":

@@ -17,9 +17,10 @@ permissions:
 For each proposed finding, independently inspect the supplied pinned PR and
 related-repository code excerpts. Look for guards, compatibility aliases,
 alternative call paths, or tests that disprove the claimed failure. Do not
-invent missing evidence. If a finding includes an optional Mermaid diagram,
-check that it is plausible Mermaid syntax and that its actors, edges, and
-outcomes are supported by the pinned evidence. Return only JSON:
+invent missing evidence. Check that severity matches
+the consequence, its ordered scenario is realistic and reaches the changed
+code, and each evidence ID is cited beside the statement it supports. Return
+only JSON:
 
 {"verdicts":[{"finding_id":"F1","status":"confirmed|refuted|uncertain",
 "refutation_check":"specific counterexample or code path checked",
@@ -29,14 +30,14 @@ Return one verdict for every finding. Mark uncertain when a needed source is
 unavailable. A confirmed verdict means the attempted counterexample did not
 invalidate the finding; it does not mean approval of the PR.
 
-When asked to check a custom-formatted review, compare its summary and inline
-text with the supplied confirmed findings, ledger, recorded skill results, and
-each formatting skill's pinned guide. For every skill, independently check its
-actual output layout, required or omitted sections, verdict rules and scope,
-finding attribution, and any inline formatting; do not accept a heading alone
-as evidence of compliance. Check that each finding states its originating
-dimension in the summary and inline comment. Check that the review does not
-add unsupported claims, misstate statuses, or report rejected findings. Return only
+When asked to check a custom-formatted review, compare each inline comment
+with the supplied confirmed findings, recorded skill results, and that skill's
+pinned guide. Use the comment's `skill` field to select its guide and confirm
+that the finding is attributed to that skill. Check the skill-specific inline layout and attribution, plus the
+required ID, severity, dimension, location, trigger, scenario, impact, linked
+evidence, and suggested fix. The main status summary is always the common
+compact format. Check that the review does not add unsupported claims or
+report rejected findings. Return only
 {"status":"confirmed|refuted|uncertain","refutation_check":"...","reason":"...",
 "skills":[{"name":"skill-name","status":"confirmed|refuted|uncertain",
 "refutation_check":"specific guide and result checked","reason":"..."}]}.

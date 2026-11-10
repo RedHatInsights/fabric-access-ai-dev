@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -16,39 +17,24 @@ class EvidenceError(ValueError):
     pass
 
 
-_MERMAID_HEADER = re.compile(r"^(?:flowchart|graph|sequenceDiagram|stateDiagram-v2)\b")
-_MAX_DIAGRAM_CHARS = 1500
-
-
-def validate_diagram(value: object) -> str | None:
-    """Validate optional Mermaid source before embedding it in GitHub Markdown."""
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise EvidenceError("finding.diagram must be Mermaid source text")
-    diagram = value.strip()
-    if (not diagram or len(diagram) > _MAX_DIAGRAM_CHARS or "```" in diagram
-            or any(ord(char) < 32 and char not in "\n\t" for char in diagram)):
-        raise EvidenceError("finding.diagram is empty, too long, or contains unsafe Markdown/control characters")
-    first_line = next((line.strip() for line in diagram.splitlines() if line.strip()), "")
-    if not _MERMAID_HEADER.match(first_line):
-        raise EvidenceError("finding.diagram must start with Mermaid flowchart, graph, sequenceDiagram, or stateDiagram-v2")
-    return diagram
-
-
-def diagram_markdown(finding: dict) -> str | None:
-    """Wrap stored Mermaid source for GitHub's Markdown renderer."""
-    diagram = finding.get("diagram")
-    if not diagram:
-        return None
-    fence = chr(96) * 3
-    return f"{fence}mermaid\n{diagram}\n{fence}"
+_SEVERITIES = {"blocking", "suggestion", "nit", "question"}
+_REFERENCE_ID = re.compile(r"R[1-9]\d*")
 
 
 def required_text(value: object, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise EvidenceError(f"{field} must be non-empty text")
     return value.strip()
+
+
+def contains_in_order(text: str, values: list[str]) -> bool:
+    cursor = 0
+    for value in values:
+        cursor = text.find(value, cursor)
+        if cursor < 0:
+            return False
+        cursor += len(value)
+    return True
 
 
 def dimension_label(finding: dict) -> str:
@@ -94,6 +80,193 @@ def validate_ref(ref: object, manifest: dict) -> dict:
     return {"repo": repo, "sha": sha, "file": file, "line": line, "text": selected}
 
 
+def validate_scenario(value: object, field: str) -> list[str]:
+    if (not isinstance(value, list) or not 2 <= len(value) <= 8
+            or any(not isinstance(step, str) or not step.strip() for step in value)):
+        raise EvidenceError(f"{field} must contain 2 to 8 concrete sequential steps")
+    return [step.strip() for step in value]
+
+
+def validate_evidence(value: object, manifest: dict, field: str) -> dict:
+    if not isinstance(value, dict) or not isinstance(value.get("refs"), list):
+        raise EvidenceError(f"{field} must contain an explanation and references")
+    explanation = required_text(value.get("explanation"), f"{field}.explanation")
+    refs = []
+    for ref in value["refs"]:
+        if not isinstance(ref, dict) or not isinstance(ref.get("id"), str) or not _REFERENCE_ID.fullmatch(ref["id"]):
+            raise EvidenceError(f"Each {field} reference needs an id such as R1")
+        validated_ref = validate_ref(ref, manifest)
+        refs.append({**validated_ref, "id": ref["id"],
+                     "url": _ref_url(manifest["pr"], validated_ref)})
+    ref_ids = {ref["id"] for ref in refs}
+    cited_ids = set(re.findall(r"\[(R[1-9]\d*)\]", explanation))
+    if not refs or len(ref_ids) != len(refs) or cited_ids != ref_ids:
+        raise EvidenceError(f"{field}.explanation must cite each unique reference ID in its text")
+    return {**value, "explanation": explanation, "refs": refs}
+
+
+def context_question_id(question: str) -> str:
+    normalized = re.sub(r"\s+", " ", question.strip()).casefold()
+    return "Q-" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12]
+
+
+def validate_context_questions(data: object, manifest: dict, update_count: int = 0) -> list[dict]:
+    if not isinstance(data, dict) or not isinstance(data.get("questions"), list):
+        raise EvidenceError("Expected context questions array")
+    if len(data["questions"]) > 5:
+        raise EvidenceError("At most five context questions may be asked in one review")
+    questions = []
+    ids: set[str] = set()
+    for item in data["questions"]:
+        if not isinstance(item, dict):
+            raise EvidenceError("Context question must be an object")
+        question = required_text(item.get("question"), "question.question")
+        if question.count("?") != 1 or not question.endswith("?"):
+            raise EvidenceError("Each context question must contain exactly one direct question")
+        revision = manifest.get("pr", {})
+        scope = str(revision.get("head_sha", "")) + ":" + str(revision.get("base_sha", "")) + ":" + str(update_count)
+        ident = context_question_id(scope + " " + question)
+        if ident in ids:
+            raise EvidenceError("Context questions must be unique")
+        ids.add(ident)
+        questions.append({
+            "id": ident,
+            "question": question,
+            "why_needed": required_text(item.get("why_needed"), "question.why_needed"),
+            "impact": required_text(item.get("impact"), "question.impact"),
+            "scenario": validate_scenario(item.get("scenario"), "question.scenario"),
+            "evidence": validate_evidence(item.get("evidence"), manifest, "question.evidence"),
+        })
+    return questions
+
+
+def render_context_question_comments(questions: list[dict]) -> list[dict]:
+    comments = []
+    for question in questions:
+        ident = question["id"]
+        body = "\n\n".join([
+            f"**Question {ident}:** {question['question']}",
+            "**Severity:** question",
+            "**Dimension:** missing-context-detector",
+            f"**Why I need this context:** {question['why_needed']}",
+            "**Scenario:**\n" + "\n".join(
+                f"{index}. {step}" for index, step in enumerate(question["scenario"], 1)
+            ),
+            f"**Impact:** {question['impact']}",
+            f"**Evidence:** {link_evidence(question['evidence']['explanation'], question['evidence']['refs'])}",
+            f"Please reply with `Answer {ident}: ...`. This is a context request; no defect is assumed.",
+            f"<!-- dev-review-bot:missing-context:{ident} -->",
+        ])
+        comments.append({"id": ident, "body": body})
+    return comments
+
+
+def validate_context_responses(data: object, manifest: dict) -> list[dict]:
+    if not isinstance(data, dict) or not isinstance(data.get("responses"), list):
+        raise EvidenceError("Expected context responses array")
+    responses = []
+    answer_keys: set[tuple[str, int]] = set()
+    for item in data["responses"]:
+        if not isinstance(item, dict):
+            raise EvidenceError("Context response must be an object")
+        question_id = required_text(item.get("question_id"), "response.question_id")
+        answer_id = item.get("answer_id")
+        if (not re.fullmatch(r"Q-[0-9a-f]{12}", question_id)
+                or not isinstance(answer_id, int) or isinstance(answer_id, bool) or answer_id <= 0):
+            raise EvidenceError("Context response needs a question ID and positive answer comment ID")
+        key = (question_id, answer_id)
+        if key in answer_keys:
+            raise EvidenceError("Duplicate context response")
+        answer_keys.add(key)
+        decision = item.get("decision")
+        if decision not in {"action_required", "no_change", "needs_more_context"}:
+            raise EvidenceError("Unsupported context answer decision")
+        severity = item.get("severity")
+        if severity not in _SEVERITIES:
+            raise EvidenceError("Context response severity must be blocking, suggestion, nit, or question")
+        instruction = item.get("instruction")
+        if decision == "action_required":
+            instruction = required_text(instruction, "response.instruction")
+            if severity not in {"blocking", "suggestion", "nit"}:
+                raise EvidenceError("An action-required response needs blocking, suggestion, or nit severity")
+        elif decision == "no_change":
+            instruction = "No code change is indicated by this answer."
+            if severity != "question":
+                raise EvidenceError("A no-change response must use question severity")
+        else:
+            instruction = required_text(item.get("follow_up_question"), "response.follow_up_question")
+            if instruction.count("?") != 1 or not instruction.endswith("?") or severity != "question":
+                raise EvidenceError("A follow-up response must contain one question and question severity")
+        responses.append({
+            "question_id": question_id,
+            "answer_id": answer_id,
+            "decision": decision,
+            "severity": severity,
+            "summary": required_text(item.get("summary"), "response.summary"),
+            "why_or_how": required_text(item.get("why_or_how"), "response.why_or_how"),
+            "impact": required_text(item.get("impact"), "response.impact"),
+            "example": (required_text(item["example"], "response.example")
+                        if item.get("example") is not None else None),
+            "instruction": instruction,
+            "scenario": validate_scenario(item.get("scenario"), "response.scenario"),
+            "evidence": validate_evidence(item.get("evidence"), manifest, "response.evidence"),
+        })
+    return responses
+
+
+def render_context_response_comments(responses: list[dict]) -> list[dict]:
+    comments = []
+    for response in responses:
+        question_id, answer_id = response["question_id"], response["answer_id"]
+        parts = [
+            f"**Answer ({question_id}):** {response['summary']}",
+            f"**Why or how:** {response['why_or_how']}",
+            f"**Reasoning:** {link_evidence(response['evidence']['explanation'], response['evidence']['refs'])}",
+            f"**Impact:** {response['impact']}",
+        ]
+        if response["example"]:
+            parts.append(f"**Example:** {response['example']}")
+        if response["decision"] == "needs_more_context":
+            follow_up_id = context_question_id(question_id + " " + response["instruction"])
+            parts.extend([
+                "**Implication:** The answer does not resolve the review question; more context is needed.",
+                f"**Severity:** {response['severity']}",
+                "**Dimension:** missing-context-detector",
+                "**Scenario:**\n" + "\n".join(
+                    f"{index}. {step}" for index, step in enumerate(response["scenario"], 1)
+                ),
+            ])
+        else:
+            parts.extend([
+                f"**Implication:** {response['instruction']}",
+                f"**Severity:** {response['severity']}",
+                "**Dimension:** missing-context-detector",
+                "**Scenario:**\n" + "\n".join(
+                    f"{index}. {step}" for index, step in enumerate(response["scenario"], 1)
+                ),
+            ])
+        parts.append(f"<!-- dev-review-bot:context-response:{question_id}:{answer_id} -->")
+        body = "\n\n".join(parts)
+        comments.append({"id": f"{question_id}:{answer_id}", "body": body})
+        if response["decision"] == "needs_more_context":
+            comments.append({
+                "id": follow_up_id,
+                "body": "\n\n".join([
+                    f"**Question {follow_up_id}:** {response['instruction']}",
+                    "**Severity:** question",
+                    "**Dimension:** missing-context-detector",
+                    f"**Impact:** {response['impact']}",
+                    "**Scenario:**\n" + "\n".join(
+                        f"{index}. {step}" for index, step in enumerate(response["scenario"], 1)
+                    ),
+                    f"**Evidence:** {link_evidence(response['evidence']['explanation'], response['evidence']['refs'])}",
+                    f"Please reply with `Answer {follow_up_id}: ...`. This is a context request; no defect is assumed.",
+                    f"<!-- dev-review-bot:missing-context:{follow_up_id} -->",
+                ]),
+            })
+    return comments
+
+
 def validate_findings(data: object, manifest: dict, impact: dict) -> list[dict]:
     if not isinstance(data, dict) or not isinstance(data.get("findings"), list):
         raise EvidenceError("Expected findings array")
@@ -114,6 +287,9 @@ def validate_findings(data: object, manifest: dict, impact: dict) -> list[dict]:
         category = required_text(finding.get("category"), "finding.category")
         if category not in {"cross_repo", "contract", "deploy", "invariant", "local"}:
             raise EvidenceError(f"Unsupported finding category: {category}")
+        severity = required_text(finding.get("severity"), "finding.severity")
+        if severity not in _SEVERITIES - {"question"}:
+            raise EvidenceError("Finding severity must be blocking, suggestion, or nit")
         if manifest.get("review_plan") or manifest.get("format") == "custom":
             dimensions = finding.get("source_dimensions")
             planned = {item["name"] for item in manifest.get("review_plan", {}).get("passes", [])}
@@ -123,7 +299,7 @@ def validate_findings(data: object, manifest: dict, impact: dict) -> list[dict]:
                 raise EvidenceError("Findings need unique source_dimensions from the review plan")
         for field in ("claim", "trigger", "impact", "suggested_fix"):
             required_text(finding.get(field), f"finding.{field}")
-        diagram = validate_diagram(finding.get("diagram"))
+        scenario = validate_scenario(finding.get("scenario"), "finding.scenario")
         location = finding.get("location")
         if not isinstance(location, dict):
             raise EvidenceError("finding.location must be an object")
@@ -143,16 +319,13 @@ def validate_findings(data: object, manifest: dict, impact: dict) -> list[dict]:
         location_sha = manifest["pr"]["base_sha"] if side == "removed" else manifest["pr"]["head_sha"]
         location_ref = validate_ref({**location, "sha": location_sha}, manifest)
         location_ref["side"] = side
-        evidence = finding.get("evidence")
-        if not isinstance(evidence, dict) or not isinstance(evidence.get("refs"), list):
-            raise EvidenceError("finding.evidence.refs must be an array")
-        required_text(evidence.get("explanation"), "finding.evidence.explanation")
-        refs = [validate_ref(ref, manifest) for ref in evidence["refs"]]
-        if not refs:
-            raise EvidenceError("Every finding needs a pinned code reference")
+        evidence = validate_evidence(finding.get("evidence"), manifest, "finding.evidence")
+        refs = evidence["refs"]
         if category == "cross_repo" and not any(ref["repo"] != manifest["pr"]["repo"] for ref in refs):
             raise EvidenceError("Cross-repository finding needs a related-repository code reference")
-        validated.append({**finding, "diagram": diagram, "location": location_ref, "refs": refs})
+        validated.append({**finding, "severity": severity, "scenario": [step.strip() for step in scenario],
+                          "location": location_ref, "refs": refs,
+                          "evidence": evidence})
     return validated
 
 
@@ -184,11 +357,15 @@ def render_inline_comments(findings: list[dict]) -> list[dict]:
         side = "RIGHT" if location["side"] == "added" else "LEFT"
         body_parts = [
             f"**[{finding['id']}]** {finding['claim']}",
+            f"**Severity:** {finding['severity']}",
             f"**Dimension:** {dimension_label(finding)}",
             f"**Location:** `{location['file']}:{location['line']}`",
             f"**Trigger:** {finding['trigger']}",
+            "**Scenario:**\n" + "\n".join(
+                f"{index}. {step}" for index, step in enumerate(finding["scenario"], 1)
+            ),
             f"**Impact:** {finding['impact']}",
-            f"**Evidence:** {finding['evidence']['explanation']}",
+            f"**Evidence:** {link_evidence(finding['evidence']['explanation'], finding['refs'])}",
         ]
         body_parts.extend([
             f"**Suggested fix:** {finding['suggested_fix']}",
@@ -207,35 +384,8 @@ def render_inline_comments(findings: list[dict]) -> list[dict]:
 
 def render_review(manifest: dict, findings: list[dict]) -> str:
     pr = manifest["pr"]
-    lines = ["## Review #1", ""]
-    if not findings:
-        lines.append("No confirmed actionable findings from the checked scope.")
-    for finding in findings:
-        loc = finding["location"]
-        lines.extend([
-            f"### [{finding['id']}] {finding['claim']}", "",
-            f"**Dimension:** {dimension_label(finding)}", "",
-            f"**Location:** `{loc['file']}:{loc['line']}`", "",
-            f"**Trigger:** {finding['trigger']}", "",
-            f"**Impact:** {finding['impact']}", "",
-            f"**Evidence:** {finding['evidence']['explanation']}", "",
-        ])
-        for ref in finding["refs"]:
-            if ref["repo"] == pr["repo"] and ref["sha"] == pr["base_sha"]:
-                url = f"https://github.com/{pr['repo']}/compare/{pr['base_sha']}...{pr['head_sha']}"
-                label = f"{ref['repo']}:{ref['file']}:{ref['line']} (removed in PR diff)"
-            else:
-                url = f"https://github.com/{ref['repo']}/blob/{ref['sha']}/{quote(ref['file'], safe='/')}#L{ref['line']}"
-                label = f"{ref['repo']}:{ref['file']}:{ref['line']}"
-            lines.append(
-                f"- [{label}]({url})"
-            )
-        diagram = diagram_markdown(finding)
-        if diagram:
-            lines.extend(["", diagram])
-        lines.extend(["", f"**Suggested fix:** {finding['suggested_fix']}", ""])
-    lines.extend(["", "To request another review, comment `/review-bot re-review` on this PR.", ""])
-    lines.append(f"<!-- dev-review-bot:fabric-access-review:{pr['head_sha']}:{pr['base_sha']} -->")
+    lines = ["## Review 1", "", compact_status_line(findings)]
+    lines.extend(["", f"<!-- dev-review-bot:fabric-access-review:{pr['head_sha']}:{pr['base_sha']} -->"])
     return "\n".join(lines) + "\n"
 
 
@@ -340,75 +490,49 @@ def apply_ledger_updates(ledger: list[dict], new_findings: list[dict],
     return updated
 
 
-def _ref_link(pr: dict, ref: dict) -> str:
+def _ref_url(pr: dict, ref: dict) -> str:
     if ref["repo"] == pr["repo"] and ref["sha"] == pr["base_sha"]:
-        url = f"https://github.com/{pr['repo']}/compare/{pr['base_sha']}...{pr['head_sha']}"
-        return f"[{ref['repo']}:{ref['file']}:{ref['line']} (removed in PR diff)]({url})"
-    url = f"https://github.com/{ref['repo']}/blob/{ref['sha']}/{quote(ref['file'], safe='/')}#L{ref['line']}"
-    return f"[{ref['repo']}:{ref['file']}:{ref['line']}]({url})"
+        return f"https://github.com/{pr['repo']}/compare/{pr['base_sha']}...{pr['head_sha']}"
+    return f"https://github.com/{ref['repo']}/blob/{ref['sha']}/{quote(ref['file'], safe='/')}#L{ref['line']}"
 
 
-def _render_finding_block(pr: dict, finding: dict) -> list[str]:
-    loc = finding["location"]
-    lines = [
-        f"### [{finding['id']}] {finding['claim']}", "",
-        f"**Dimension:** {dimension_label(finding)}", "",
-        f"**Location:** `{loc['file']}:{loc['line']}`", "",
-        f"**Trigger:** {finding['trigger']}", "",
-        f"**Impact:** {finding['impact']}", "",
-        f"**Evidence:** {finding['evidence']['explanation']}", "",
-    ]
-    lines.extend(f"- {_ref_link(pr, ref)}" for ref in finding["refs"])
-    diagram = diagram_markdown(finding)
-    if diagram:
-        lines.extend(["", diagram])
-    lines.extend(["", f"**Suggested fix:** {finding['suggested_fix']}", ""])
-    return lines
+def _ref_link(pr: dict, ref: dict) -> str:
+    label = f"{ref['repo']}:{ref['file']}:{ref['line']}"
+    if ref["repo"] == pr["repo"] and ref["sha"] == pr["base_sha"]:
+        label += " (removed in PR diff)"
+    return f"[{label}]({_ref_url(pr, ref)})"
+
+
+def link_evidence(explanation: str, refs: list[dict]) -> str:
+    """Replace in-text evidence IDs with links to the cited pinned lines."""
+    by_id = {ref["id"]: f"[{ref['repo']}:{ref['file']}:{ref['line']}]({ref['url']})" for ref in refs}
+    for ref in refs:
+        token = f"[{ref['id']}]"
+        explanation = explanation.replace(token, by_id[ref["id"]])
+    return explanation
+
+
+def compact_status_line(findings: list[dict]) -> str:
+    """Render the findings and resolution state without repeating inline detail."""
+    if not findings:
+        return "Findings: 0 confirmed."
+    open_count = sum(item.get("status", "open") == "open" for item in findings)
+    addressed_count = sum(item.get("status") == "addressed" for item in findings)
+    links = []
+    for item in findings:
+        ident = item["id"]
+        severity = item.get("severity") or "not recorded"
+        status = item.get("status", "open")
+        dimension = dimension_label(item)
+        links.append(f"{ident} · {severity} · {dimension} · {status} ([inline comment](review-comment:{ident}))")
+    return (f"Findings ({len(findings)} total; {open_count} open, "
+            f"{addressed_count} addressed): " + "; ".join(links))
 
 
 def render_ledger(manifest: dict, ledger: list[dict], new_findings: list[dict], update_count: int) -> str:
-    """Render the single persistent review body: previously-flagged status, then new findings."""
+    """Render one compact status comment; finding details live in inline threads."""
     pr = manifest["pr"]
-    short_sha = pr["head_sha"][:12]
-    lines = [f"## Review #{update_count + 1}", "", f"Reviewed through `{short_sha}`.", ""]
-    carried = [entry for entry in ledger if entry["id"] not in {f["id"] for f in new_findings}]
-    lines.append("## Previously Flagged")
-    lines.append("")
-    if not carried:
-        lines.extend(["None yet.", ""])
-    for entry in carried:
-        label = "✅ Addressed" if entry["status"] == "addressed" else "⚠️ Still open"
-        lines.append(f"### [{entry['id']}] {entry['claim']} — {label}")
-        lines.append("")
-        lines.append(f"**Dimension:** {dimension_label(entry)}")
-        lines.append("")
-        lines.append(f"**Location:** `{entry['location']['file']}:{entry['location']['line']}`")
-        lines.append("")
-        lines.append(f"**Trigger:** {entry['trigger']}")
-        lines.append("")
-        lines.append(f"**Impact:** {entry['impact']}")
-        lines.append("")
-        lines.append(f"**Evidence:** {entry['evidence']['explanation']}")
-        lines.extend(f"- {_ref_link(pr, ref)}" for ref in entry["refs"])
-        diagram = diagram_markdown(entry)
-        if diagram:
-            lines.extend(["", diagram])
-        lines.extend(["", f"**Suggested fix:** {entry['suggested_fix']}", ""])
-        if entry["status"] == "addressed" and entry.get("status_evidence"):
-            lines.append(f"**Status evidence:** {entry['status_evidence']['explanation']}")
-            lines.extend(f"- {_ref_link(pr, ref)}" for ref in entry["status_evidence"]["refs"])
-        elif entry.get("status_note"):
-            lines.append(f"**Status:** {entry['status_note']}")
-        else:
-            lines.append("**Status:** No change detected in this region since it was last checked.")
-        lines.append("")
-    lines.append("## New Findings")
-    lines.append("")
-    if not new_findings:
-        lines.extend(["No new confirmed findings in this revision.", ""])
-    for finding in new_findings:
-        lines.extend(_render_finding_block(pr, finding))
-    lines.extend(["", "To request another review, comment `/review-bot re-review` on this PR.", ""])
+    lines = [f"## Review {update_count + 1}", "", compact_status_line(ledger), ""]
     lines.append(f"<!-- dev-review-bot:fabric-access-review:{pr['head_sha']}:{pr['base_sha']} -->")
     return "\n".join(lines) + "\n"
 
@@ -469,54 +593,16 @@ def validate_format_verdict(data: object, format_skills: list[dict]) -> None:
 
 def render_custom(manifest: dict, ledger: list[dict], new_findings: list[dict],
                   update_count: int, data: object) -> tuple[str, list[dict]]:
-    """Validate skill-formatted text against confirmed findings and their anchors."""
-    if not isinstance(data, dict) or not isinstance(data.get("summary_parts"), list):
-        raise EvidenceError("Custom format needs a summary_parts array")
+    """Validate skill-formatted inline comments; keep the status summary compact."""
+    if not isinstance(data, dict):
+        raise EvidenceError("Custom format must be an object")
     entries = {entry["id"]: entry for entry in ledger}
     added = {finding["id"]: finding for finding in new_findings}
-    seen: set[str] = set()
-    skill_sections: set[str] = set()
     format_skills = set(manifest.get("format_skills", []))
-    parts = []
-    for part in data["summary_parts"]:
-        if not isinstance(part, dict):
-            raise EvidenceError("Custom summary part must be an object")
-        text = required_text(part.get("text"), "custom summary text")
-        if "fabric-access-" in text:
-            raise EvidenceError("Custom text must not contain bot markers")
-        mentions = set(re.findall(r"\bF[1-9]\d*\b", text))
-        if not mentions <= entries.keys():
-            raise EvidenceError("Custom summary mentions an unconfirmed finding")
-        ident = part.get("finding_id")
-        skill = part.get("skill")
-        if skill is not None:
-            if not isinstance(skill, str) or skill not in format_skills:
-                raise EvidenceError("Custom section refers to an unselected formatting skill")
-            if ident is None:
-                if not re.search(r"^#{1,6}\s+\S", text, re.MULTILINE):
-                    raise EvidenceError("A skill section must contain a Markdown heading")
-                skill_sections.add(skill)
-        if ident is not None:
-            if not isinstance(ident, str) or ident not in entries or ident in seen or f"[{ident}]" not in text:
-                raise EvidenceError("Custom summary needs one identified part per ledger finding")
-            if skill is not None and skill not in entries[ident].get("source_dimensions", []):
-                raise EvidenceError("Finding does not originate from the formatting skill")
-            if f"**Dimension:** {dimension_label(entries[ident])}" not in text:
-                raise EvidenceError("Custom summary finding must state its dimension")
-            diagram = diagram_markdown(entries[ident])
-            if diagram and diagram not in text:
-                raise EvidenceError(f"Custom summary finding {ident} must include its Mermaid diagram")
-            seen.add(ident)
-        parts.append(text)
-    if seen != set(entries):
-        raise EvidenceError("Custom summary must cover every ledger finding exactly once")
-    if skill_sections != format_skills:
-        raise EvidenceError("Custom summary needs a section for every formatting skill")
-    body = "\n\n".join(parts)
-    heading = re.search(r"^#{1,6}\s+.+$", body, re.MULTILINE)
-    if not heading or not re.search(rf"(?<!\w)#{update_count + 1}(?!\d)", heading.group()):
-        raise EvidenceError("Custom review heading must include the review number")
-
+    custom_expected = {
+        ident for ident, finding in added.items()
+        if format_skills.intersection(finding.get("source_dimensions", []))
+    }
     inline = data.get("inline_comments")
     if not isinstance(inline, list):
         raise EvidenceError("Custom format needs an inline_comments array")
@@ -526,11 +612,27 @@ def render_custom(manifest: dict, ledger: list[dict], new_findings: list[dict],
         if not isinstance(item, dict):
             raise EvidenceError("Custom inline comment must be an object")
         ident = item.get("finding_id")
+        skill = item.get("skill")
         text = required_text(item.get("text"), "custom inline text")
-        if not isinstance(ident, str) or ident not in added or ident in inline_ids or f"[{ident}]" not in text:
-            raise EvidenceError("Custom inline comments must identify each confirmed new finding once")
+        if not isinstance(ident, str) or ident not in custom_expected or ident in inline_ids or f"[{ident}]" not in text:
+            raise EvidenceError("Custom inline comments must identify each selected-skill finding once")
+        if (not isinstance(skill, str) or skill not in format_skills
+                or skill not in added[ident].get("source_dimensions", [])):
+            raise EvidenceError("Custom inline comment must name one selected source skill for the finding")
         if f"**Dimension:** {dimension_label(added[ident])}" not in text:
             raise EvidenceError("Custom inline comment must state its dimension")
+        finding = added[ident]
+        labels = ("Severity", "Dimension", "Location", "Trigger", "Scenario", "Impact", "Evidence", "Suggested fix")
+        if any(f"**{label}:**" not in text for label in labels):
+            raise EvidenceError("Custom inline comment must include all bold finding labels and a real scenario")
+        if f"**Severity:** {finding['severity']}" not in text:
+            raise EvidenceError("Custom inline comment must use the validated severity")
+        if not contains_in_order(text, finding["scenario"]):
+            raise EvidenceError("Custom inline comment must include every scenario step in order")
+        if any(text.count(f"[{ref['id']}]") != 1 for ref in finding["refs"]):
+            raise EvidenceError("Custom inline comment must cite each evidence ID once beside its supporting claim")
+        if all("id" in ref and "url" in ref for ref in finding["refs"]):
+            text = link_evidence(text, finding["refs"])
         if ("fabric-access-" in text or "<!-- dev-review-bot:" in text
                 or not set(re.findall(r"\bF[1-9]\d*\b", text)) <= entries.keys()):
             raise EvidenceError("Custom inline comment contains a marker or unconfirmed finding")
@@ -539,10 +641,18 @@ def render_custom(manifest: dict, ledger: list[dict], new_findings: list[dict],
         comments.append({
             "id": ident, "path": location["file"], "line": location["line"],
             "side": "RIGHT" if location["side"] == "added" else "LEFT",
-            "format": "custom",
+            "format": "custom", "skill": skill,
             "body": text + f"\n\n<!-- dev-review-bot:fabric-access-finding:{ident} -->",
         })
+    if inline_ids != custom_expected:
+        raise EvidenceError("Custom format needs one custom inline comment per finding from a selected skill")
+    custom_by_id = {comment["id"]: comment for comment in comments}
+    for finding in new_findings:
+        if finding["id"] not in custom_expected:
+            custom_by_id[finding["id"]] = render_inline_comments([finding])[0]
+    comments = [custom_by_id[finding["id"]] for finding in new_findings]
     pr = manifest["pr"]
+    body = f"## Review {update_count + 1}\n\n{compact_status_line(ledger)}"
     body += f"\n\n<!-- dev-review-bot:fabric-access-review:{pr['head_sha']}:{pr['base_sha']} -->\n"
     return body, comments
 
@@ -558,10 +668,18 @@ def main() -> None:
     parser.add_argument("--ledger-output", type=Path, help="Where to write the updated ledger.json")
     parser.add_argument("--inline-comments-output", type=Path,
                         help="Where to write inline comments rendered from confirmed findings")
+    parser.add_argument("--context-questions", type=Path,
+                        help="Questions returned by missing-context-detector")
+    parser.add_argument("--context-question-comments-output", type=Path,
+                        help="Where to write validated one-question-per-comment payloads")
+    parser.add_argument("--context-responses", type=Path,
+                        help="Evaluations of author answers returned by missing-context-detector")
+    parser.add_argument("--context-response-comments-output", type=Path,
+                        help="Where to write validated feedback comments for author answers")
     parser.add_argument("--prepare-custom", type=Path,
                         help="Write confirmed findings and ledger for skill-based formatting")
     parser.add_argument("--custom-format", type=Path,
-                        help="Skill-formatted summary parts and inline comments")
+                        help="Skill-formatted inline comments")
     parser.add_argument("--custom-verdict", type=Path,
                         help="Independent verification of the custom formatting")
     parser.add_argument("--skill-results", type=Path,
@@ -570,6 +688,20 @@ def main() -> None:
     try:
         manifest = json.loads(args.manifest.read_text())
         impact = json.loads(Path(manifest["impact_path"]).read_text())
+        if bool(args.context_questions) != bool(args.context_question_comments_output):
+            raise EvidenceError("--context-questions and --context-question-comments-output must be used together")
+        if bool(args.context_responses) != bool(args.context_response_comments_output):
+            raise EvidenceError("--context-responses and --context-response-comments-output must be used together")
+        if args.context_questions:
+            questions = validate_context_questions(json.loads(args.context_questions.read_text()), manifest, args.update_count or 0)
+            args.context_question_comments_output.write_text(
+                json.dumps(render_context_question_comments(questions), indent=2)
+            )
+        if args.context_responses:
+            responses = validate_context_responses(json.loads(args.context_responses.read_text()), manifest)
+            args.context_response_comments_output.write_text(
+                json.dumps(render_context_response_comments(responses), indent=2)
+            )
         findings = validate_findings(json.loads(args.findings.read_text()), manifest, impact)
         accepted = confirmed(findings, json.loads(args.verdicts.read_text()))
         if args.ledger is None:

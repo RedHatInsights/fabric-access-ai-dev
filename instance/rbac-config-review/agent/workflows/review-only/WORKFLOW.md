@@ -6,14 +6,17 @@ deployed). Each cycle it reviews at most one GitHub PR labeled in
 never edits, commits, pushes, approves, requests changes, or merges — it keeps
 one GitHub review summary per PR and edits it in place each cycle. It also
 posts one idempotent inline thread per actionable finding, using the same
-finding ID in the summary and inline comment.
+finding ID in the summary and inline comment. The summary uses one compact
+status line with plain-text finding IDs and `[inline comment]` links to each
+thread; scenarios, evidence, and fixes
+stay in the inline comments.
 
 To request a fresh pass without changing the PR, an organization member can
 post a new top-level PR comment containing only `/review-bot re-review`.
 The PR must still carry the configured review label. The bot verifies the
 commenter's membership, reuses the existing finding ledger and summary, and
 increments the review number in the summary heading. The first pass is
-`Review #1`; multiple requests received before the next pass are coalesced.
+`Review 1`; multiple requests received before the next pass are coalesced.
 
 ## Stages
 
@@ -26,7 +29,7 @@ flowchart LR
         A["Preflight<br/>(review_queue.py)"] --> B["Context<br/>(build_context.py)"]
         B --> C["Review<br/>(Terra/Luna by dimension)"]
         C --> D["Verify<br/>(review-verifier)"]
-        D --> E["Publish<br/>(review_evidence.py + post_inline_comments.py)"]
+        D --> E["Publish<br/>(inline threads, then compact status summary)"]
     end
     E --> GH2["GitHub review summary + inline threads"]
     E -.-> Memory
@@ -34,16 +37,17 @@ flowchart LR
     classDef script fill:#e2e3e5,stroke:#6c757d,color:#000;
     classDef ai fill:#f8d7da,stroke:#a94442,color:#000;
     class A,B,E script;
-    class C,D ai;
+    class C,T,D,M ai;
 ```
 
 Gray = deterministic script, $0, no model call. Red = an LLM reasons over
-pinned context and can be wrong. Only `C`/`D` spend tokens; `A`/`B`/`E` are
-plain Python and run every cycle regardless of whether anything needs review.
+pinned context and can be wrong. `C`, `T`, `D`, and `M` spend tokens during a review;
+`A`, `B`, and `E` are plain Python. Preflight checks comments before a feedback
+cycle so bot-authored updates alone do not start a model session.
 
 | Piece | File | Script or AI | Role |
 |---|---|---|---|
-| Queue | `preflight/01-review-queue.py` → `review_queue.py` | Script | Picks one labeled PR needing review/feedback, or one tracked PR needing lifecycle reconciliation; enforces per-instance task isolation (`review-only:github:` prefix) |
+| Queue | `preflight/01-review-queue.py` → `review_queue.py` | Script | Picks one labeled PR needing review/feedback, or one tracked PR needing lifecycle reconciliation; checks for unseen human comments before a feedback session |
 | Config validation | `review_config.py` | Script | Loads and strictly validates `review-context.yaml` (GitHub URL shape, `.md`-only doc links, unique ids) |
 | Context builder | `build_context.py` | Script | Checks out the PR head read-only, clones related repos at a pinned SHA, fetches configured Markdown docs at a pinned commit, writes `manifest.json` |
 | Skill preparation | `review_skills.py` | Script | Selects dimensions, reads selected recipe YAML at a pinned commit, and generates per-run review skills |
@@ -52,9 +56,11 @@ plain Python and run every cycle regardless of whether anything needs review.
 | Model routing | `review_skills.py` + `dimensions.yaml` | Script | Resolves each pass's model preference to the configured Terra or Luna subagent in `review_plan` |
 | Review criteria | `skills/dimensional-review/SKILL.md` | **AI** (review-terra / review-luna) | Multi-dimension review over pinned context using the configured model profile; results are deduped and consensus-scored |
 | Review workers | `.opencode/agents/review-terra.md`, `review-luna.md` | **AI** (subagents) | Read-only workers for dimensions routed to Terra or Luna |
-| Explanation quality | `skills/explanatory-answer/SKILL.md` | **AI** (selected review worker) | General guidance for direct answers, causal reasoning, evidence, and optional Mermaid diagrams; this workflow maps it to finding fields |
+| Context questions and answers | `context_questions.py` | Script | Posts one marked question per comment and finds PR-author answers for the detector to assess |
+| Missing-context detector | `.opencode/agents/missing-context-detector.md` | **AI** (subagent) | Asks only material questions, then evaluates author answers against pinned context |
+| Explanation quality | `skills/explanatory-answer/SKILL.md` | **AI** (review-runner) | General guidance for direct answers, causal reasoning, evidence, and optional Mermaid diagrams; this workflow maps it to finding fields |
 | Verifier | `.opencode/agents/review-verifier.md` | **AI** (subagent) | Independently tries to refute every proposed finding using only pinned sources |
-| Evidence gate | `review_evidence.py` | Script | Rejects any finding whose location/reference isn't a real pinned line; caps at seven findings; requires one verdict per finding; validates optional Mermaid sources and renders them in the review summary |
+| Evidence gate | `review_evidence.py` | Script | Rejects findings without real pinned locations/references; caps at seven; requires one verdict per finding; renders the compact status summary |
 | Inline publisher | `post_inline_comments.py` | Script | Posts or updates one anchored comment per confirmed finding on the current PR head, deduplicated by finding ID |
 
 Built-in dimensions have `default: true`; the GitHub KISS recipe is
@@ -88,14 +94,14 @@ dimensions without duplicates. Unknown or duplicate skill names are
 configuration errors.
 
 Set `format: custom` beside a repository's `skills` to use those skills'
-report layouts for its review summary and any inline comments they specify.
-Each selected skill must complete and its actual result is saved. The runner
-formats confirmed findings using each skill's pinned guide, with a separate
-section per skill; findings from other dimensions remain clearly separate.
-An independent verifier checks each guide's layout, verdict, and attribution
-before the evidence gate writes the review. IDs and the review number remain
-present; standard labels and the standard footer are not added. Repositories
-without this setting use the standard format.
+layout for detailed inline comments. Each selected skill must complete and its
+actual result is saved. The runner formats each new confirmed finding from a
+selected formatting skill using its pinned guide; other findings use the
+standard inline layout. The evidence gate enforces the required ID,
+severity, dimension, location, trigger, scenario, impact, evidence, and
+suggested-fix fields. The status summary stays compact and identical across
+formats. An independent verifier checks each skill's inline layout and
+attribution before publication.
 
 ## The task queue: review_queue.py
 
@@ -114,7 +120,7 @@ legacy-state reconciliation:
    |---|---|---|
    | `resume` | Task status is `in_progress`/`pr_changes` — a review cycle was interrupted | 0 (highest) |
    | `review` | No task yet, or current head/base SHA differs from `last_reviewed_sha`/`last_reviewed_base_sha` | 1 |
-   | `feedback_check` | SHA unchanged (including `pr_open` or a paused task), but `updatedAt` is newer than `last_seen_updated_at`; authorized commands start a fresh review | 2 |
+   | `feedback_check` | SHA unchanged and preflight finds an unseen human issue/review comment since `last_seen_updated_at`; authorized commands start a fresh review | 2 |
    | `merge_complete` | GitHub confirms a tracked PR has merged | 0 |
    | `closed_unmerged` | GitHub confirms a tracked PR closed without merging | 0 |
    | `reconcile_open` | A legacy `done` task is still open, or a closed-unmerged PR was reopened | 3 |
@@ -133,14 +139,17 @@ legacy-state reconciliation:
 Requests are matched exactly from new top-level comments, bounded by the
 preflight timestamp, and deduplicated using comment IDs in task state. The
 runner verifies org membership before acting on commands or ordinary feedback;
-ordinary feedback does not trigger a review.
+ordinary feedback does not trigger a full review. Before starting a feedback
+session, preflight checks issue comments, review comments, and submitted reviews
+for unseen human-authored activity. Bot-authored updates alone do not invoke the
+model. Same-second feedback IDs are saved to prevent replay.
 Requests arriving after a review starts are left for a later cycle. A validated
 but unfinished publication is recorded in task state so retries reuse its body
 and number rather than counting another review.
 When the queue otherwise has no work, it also checks comments at the stored
 timestamp boundary: GitHub's second-precision `updatedAt` can be unchanged by
-a request made in that same second. This costs a comment API call per idle,
-already-reviewed labeled PR until a request is found.
+a request made in that same second. This uses GitHub API calls but does not
+start an AI session when the PR only has bot comments.
 
 ### What identifies a task
 
@@ -263,6 +272,7 @@ sequenceDiagram
     participant L as review-luna
     participant T as review-terra
     participant V as review-verifier
+    participant M as missing-context-detector
     participant GH as GitHub
 
     Q->>R: one PR (review / resume / feedback_check / lifecycle-only)
@@ -281,14 +291,16 @@ sequenceDiagram
             end
         end
         R->>R: Merge dimension results + explanatory-answer
+        R->>M: Check for material missing context
+        M->>R: One question per comment, or no questions
         R->>V: findings + pinned context
         V->>R: verdicts.json (confirmed/refuted/uncertain)
     end
     rect rgb(226, 227, 229)
-        R->>R: review_evidence.py → publication.json + inline-comments.json + ledger.json
+        R->>R: review_evidence.py → compact publication + inline/context comments + ledger
     end
-    R->>GH: create/update one review summary
-    R->>GH: post/update inline threads using stable finding IDs
+    R->>GH: post/update inline threads and context questions
+    R->>GH: create/update one compact status summary with inline links
     R->>Q: task_update (status=pr_open, reviewed SHA, review_id, update_count)
 ```
 
@@ -311,13 +323,16 @@ verifier/evidence steps:
     {
       "id": "F1",
       "category": "cross_repo|contract|deploy|invariant|local",
+      "source_dimensions": ["correctness"],
+      "severity": "blocking|suggestion|nit",
       "location": {"repo": "owner/repo", "file": "path", "line": 1, "side": "added|removed"},
       "claim": "...",
       "trigger": "specific input or code path",
       "impact": "...",
+      "scenario": ["step 1", "step 2"],
       "evidence": {
-        "explanation": "...",
-        "refs": [{"repo": "owner/repo", "sha": "40-character pinned SHA", "file": "path", "line": 1}]
+        "explanation": "... [R1].",
+        "refs": [{"id": "R1", "repo": "owner/repo", "sha": "40-character pinned SHA", "file": "path", "line": 1}]
       },
       "suggested_fix": "..."
     }
@@ -349,12 +364,11 @@ From a task's second cycle onward, `review_evidence.py` also takes a prior
 `refs` is required only for `"addressed"` — review-verifier must also confirm
 those (same adversarial check as new findings) before the ledger entry closes.
 `"still_open"`/`"uncertain"` need no verdict. One re-check per currently-open
-entry is required; the merged result becomes the new `ledger.json`, and the
-posted review body gets two sections — *Previously Flagged* (carried entries,
-✅ addressed or ⚠️ still open) and *New Findings* (this cycle's) — plus an
-`Review #N` heading, starting at 1. Each heading uses the finding's stable ID;
-new inline comments start with that same ID and state the originating dimension
-alongside the other bold finding labels.
+entry is required; the merged result becomes the new `ledger.json`. The posted
+review body has a `Review N` heading and one compact status line with each
+finding's stable ID, severity, dimension, resolution state, and inline-thread
+link. Detailed explanations stay in the inline comments. Review numbers omit
+the `#` prefix so GitHub does not treat them as issue links.
 
 ## Explaining a review finding
 
@@ -362,11 +376,8 @@ The general `explanatory-answer` skill supplies the writing approach. This
 workflow's finding schema maps a direct answer to `claim`, the circumstance to
 `trigger`, the why and reasoning to `evidence.explanation` with pinned
 `evidence.refs`, the consequence to `impact`, and the correction to
-`suggested_fix`. Re-check explanations use the same causal chain. If a
-diagram materially clarifies that chain, the finding's optional `diagram`
-contains raw Mermaid source; the evidence gate renders it in the review
-summary. Inline comments keep the explanation in prose so narrow threads do
-not clip diagram labels.
+`suggested_fix`. Re-check explanations use the same causal chain. PR findings
+use prose because the summary is compact and inline threads have limited width.
 
 For example, [PR #3567](https://github.com/project-kessel/insights-rbac/pull/3567#discussion_r4511659742)
 has a documentation mismatch:
@@ -385,125 +396,49 @@ has a documentation mismatch:
 
 ## Example comments
 
-Both generated by actually running `render_review`/`render_ledger`, not
-hand-written. F1's fields below follow the workflow mapping: `claim` is the
-direct assertion, `trigger` is the concrete input, `impact` is the
-specific consequence, and `evidence` cites a pinned line.
-
-**First cycle** (`render_review` — no ledger yet):
+A compact status summary (the publisher replaces `review-comment:F1` with the
+GitHub URL of the inline thread; finding IDs remain plain text):
 
 ```markdown
-## Review #1
+## Review 2
 
-### [F1] Old permission name disappears while HBI still sends it
+Findings (2 total; 1 open, 1 addressed): F1 · blocking · correctness · open ([inline comment](review-comment:F1)); F2 · nit · documentation · addressed ([inline comment](review-comment:F2))
 
-**Dimension:** cross-repo-dependencies
-
-**Location:** `api/permissions.py:1`
-
-**Trigger:** HBI calls check_permission("inventory.read_hosts") on every host-read request
-
-**Impact:** HBI requests to the inventory API are rejected with 403 after this PR merges
-
-**Evidence:** HBI's client.py still sends the old permission string
-
-- [RedHatInsights/insights-host-inventory:client.py:1](https://github.com/RedHatInsights/insights-host-inventory/blob/c3c3.../client.py#L1)
-
-**Suggested fix:** Keep inventory.read_hosts as an accepted alias until HBI migrates
-
-To request another review, comment `/review-bot re-review` on this PR.
-
-<!-- dev-review-bot:fabric-access-review:a1a1...:b2b2... -->
+<!-- dev-review-bot:fabric-access-review:<head_sha>:<base_sha> -->
 ```
 
-The corresponding inline comment starts with the same identifier:
+The linked inline comment carries the evidence needed to act:
 
 ```markdown
-**[F1]** Old permission name disappears while HBI still sends it
+**[F1]** The response field name does not match the handler.
 
-**Dimension:** cross-repo-dependencies
+**Severity:** blocking
 
-**Location:** `api/permissions.py:1`
+**Dimension:** api-contract
 
-**Trigger:** HBI calls check_permission("inventory.read_hosts") on every host-read request
+**Location:** `api/response.py:42`
 
-**Impact:** HBI requests to the inventory API are rejected with 403 after this PR merges
+**Trigger:** A client reads the replacement field after the handler rejects a V1 request.
 
-**Evidence:** HBI's client.py still sends the old permission string
+**Scenario:**
+1. Send a V1 request to the changed handler.
+2. Read the replacement field from the response using the documented name.
 
-**Suggested fix:** Keep inventory.read_hosts as an accepted alias until HBI migrates
+**Impact:** The client cannot select the supported V2 operation.
+
+**Evidence:** The handler emits `use_instead` at [api/response.py:42](https://github.com/org/repo/blob/<sha>/api/response.py#L42), while the linked documentation names another field at [docs/api.md:12](https://github.com/org/repo/blob/<sha>/docs/api.md#L12).
+
+**Suggested fix:** Document the field emitted by the handler.
 
 <!-- dev-review-bot:fabric-access-finding:F1 -->
 ```
 
-**Follow-up cycle, same comment edited in place** (`render_ledger` — F1 got
-fixed, F2 is still open, and F3 is new this cycle — the mixed case that
-shows what the status comment is actually for):
+A context question is a separate top-level comment with one direct question,
+severity `question`, dimension `missing-context-detector`, a realistic scenario,
+and pinned evidence. It does not appear in the finding count.
 
-```markdown
-## Review #4
-
-Reviewed through `d4d4d4d4d4d4`.
-
-## Previously Flagged
-
-### [F1] Old permission name disappears while HBI still sends it — ✅ Addressed
-
-**Dimension:** cross-repo-dependencies
-
-**Location:** `api/permissions.py:1`
-
-**Trigger:** HBI calls check_permission("inventory.read_hosts") on every host-read request
-
-**Impact:** HBI requests to the inventory API are rejected with 403 after this PR merges
-
-**Evidence:** HBI's client.py still sends the old permission string
-- [RedHatInsights/insights-host-inventory:client.py:1](https://github.com/RedHatInsights/insights-host-inventory/blob/c3c3.../client.py#L1)
-
-**Suggested fix:** Keep inventory.read_hosts as an accepted alias until HBI migrates
-
-**Status evidence:** Commit adds ALIAS = "inventory.read_hosts" alongside the new permission name
-- [project-kessel/insights-rbac:api/permissions.py:2](https://github.com/project-kessel/insights-rbac/blob/d4d4.../api/permissions.py#L2)
-
-### [F2] Unbounded retry loop with no backoff — ⚠️ Still open
-
-**Dimension:** performance
-
-**Location:** `api/permissions.py:4`
-
-**Trigger:** The sync worker retries after a transient failure
-
-**Impact:** Sustained failures can keep the worker retrying indefinitely
-
-**Evidence:** The retry loop has no backoff or max-attempts check
-- [project-kessel/insights-rbac:api/permissions.py:4](https://github.com/project-kessel/insights-rbac/blob/d4d4.../api/permissions.py#L4)
-
-**Suggested fix:** Add bounded retries with backoff
-
-**Status:** sync() still retries with no backoff or max-attempts check
-
-## New Findings
-
-### [F3] New ALIAS constant is not validated against the active permission schema
-
-**Dimension:** correctness
-
-**Location:** `api/permissions.py:2`
-
-**Trigger:** A consumer requests inventory.read_hosts after the alias list changes again
-
-**Impact:** Silently grants or denies access inconsistently with the documented schema
-
-**Evidence:** ALIAS is a bare string with no schema validation nearby
-
-- [project-kessel/insights-rbac:api/permissions.py:2](https://github.com/project-kessel/insights-rbac/blob/d4d4.../api/permissions.py#L2)
-
-**Suggested fix:** Validate ALIAS entries against the permission schema at startup
-
-<!-- dev-review-bot:fabric-access-review:d4d4...:b2b2... -->
-```
-
-These two are the PR review comment (GitHub). Separately, `bot_status_update`
+The summary and inline thread are the PR review comments (GitHub). Separately,
+`bot_status_update`
 ("Use bot_status_update with this instance ID at cycle start and end",
 AGENTS.md) drives the dashboard banner, not a PR comment — `state`
 (`working`/`idle`/`error`), `message`, `external_key?`, `repo?`,
@@ -515,7 +450,7 @@ bot_status_update(instance_id="fabric-access-review", state="working",
   repo="insights-rbac")
 ...
 bot_status_update(instance_id="fabric-access-review", state="idle",
-  message="Posted Review #3")
+  message="Posted Review 3")
 ```
 
 or, when preflight found nothing to do that cycle:
@@ -528,9 +463,13 @@ bot_status_update(instance_id="fabric-access-review", state="idle",
 ## Guardrails
 
 - **review-runner** permissions deny `edit`, all subagents except
-  `review-terra`, `review-luna`, and `review-verifier`, `webfetch`, `websearch`, and the shell patterns
+  `missing-context-detector`, `review-terra`, `review-luna`, and
+  `review-verifier`, `webfetch`, `websearch`, and the shell patterns
   `git push*`, `git commit*`, `gh pr merge*`, `gh pr edit*`, `gh pr
   review*--approve*`.
+- **missing-context-detector** permissions deny `edit`, `shell`, all subagents,
+  `webfetch`, and `websearch`; it evaluates context and answers against pinned
+  sources.
 - **review-terra** permissions deny `edit`, `shell`, all subagents,
   `webfetch`, and `websearch`; it reviews only the supplied dimension guide and
   pinned sources.
@@ -541,9 +480,11 @@ bot_status_update(instance_id="fabric-access-review", state="idle",
   that same review via `PUT .../reviews/<review_id>` instead of posting a new
   one — there is at most one review summary per PR. The inline publisher
   upserts comments by finding ID for the current head, so retries do not
-  duplicate a thread. In standard format, summary headings use `### [F1]` and
-  matching inline comments start with `**[F1]**`. Custom formats keep the same
-  IDs in the selected skill's layout. GitHub may create separate review records for inline
+  duplicate a thread. Summary headings use `Review N` (without `#N`), and its
+  compact status line keeps finding IDs unlinked and adds a separate inline
+  comment link for each thread. Inline
+  comments start with the same ID; custom formats preserve their selected
+  skill's detailed layout. GitHub may create separate review records for inline
   comments; the tracked `review_id` remains the summary review's ID. A
   `<!-- dev-review-bot:fabric-access-review:<head_sha>:<base_sha> -->`
   marker in the summary records which revision it reflects. `feedback_check`

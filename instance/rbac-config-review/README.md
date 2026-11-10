@@ -11,7 +11,7 @@ it does not edit files, commit, push, approve, request changes, or merge PRs.
 |---|---|
 | [`agent/instance.yaml`](agent/instance.yaml) | Selects the scheduled workflow, runtime, provider, and model. |
 | [`opencode-deployment.json`](opencode-deployment.json) | Defines the Rehor provider and available Luna and Terra models. |
-| [`agent/.opencode/agents/`](agent/.opencode/agents/) | Configures the runner, Terra reviewer, and verifier models and permissions. |
+| [`agent/.opencode/agents/`](agent/.opencode/agents/) | Configures the runner, review workers, missing-context detector, and verifier models and permissions. |
 | [`agent/project-repos.json`](agent/project-repos.json) | Allowlist of repositories whose GitHub PR queues are scanned. |
 | [`agent/review-context.yaml`](agent/review-context.yaml) | GitHub label to watch and per-repository context, required skills, and comment format. |
 | [`agent/skills/dimensional-review/dimensions.yaml`](agent/skills/dimensional-review/dimensions.yaml) | Review levels, dimensions, applicability rules, and dynamic recipe sources. |
@@ -64,10 +64,10 @@ The per-repository settings are:
   language/file applicability. For instance, adding `goose-kiss-review` runs
   that optional review recipe for this repository.
 - **`format`** (optional): `standard` (the default) uses the bot's standard
-  finding layout. `custom` requires at least one entry in `skills`; every skill
-  in that list is also expected to define a usable output layout for the review
-  summary and inline comments, and must complete for publication to proceed.
-  Use `custom` with skills whose output structure should control the comments.
+  inline finding layout. `custom` requires at least one entry in `skills`; the
+  selected skills define the detailed inline layout for findings attributed to
+  them and must complete for publication. Other findings use the standard
+  inline layout. Both formats use the same compact status summary.
 
 The loader validates the label, repository mappings, dimension names, unique
 IDs, and URL shapes before polling GitHub. Related repository links must be
@@ -82,6 +82,46 @@ In the current configuration, `project-repos.json` scans `insights-rbac`,
 `rbac-config`; linked documents are configured for `insights-rbac`. The other
 allowlisted repositories can still be reviewed, but do not get those extra
 context sources unless entries are added for them.
+
+## Comment writing and context questions
+
+Write comments for developers working on this project: direct, technically
+precise, and easy to scan. Use short sentences and standard terminology. This
+applies to status comments, inline findings, context questions, and answer
+follow-ups. The status comment is one compact line with the finding count,
+plain-text finding IDs, severity, dimension, resolution state, and an inline
+comment link for each finding.
+Detailed scenarios, evidence, and fixes belong in those inline comments.
+
+Every finding and feedback comment that describes behavior includes a realistic
+sequence of steps that reproduces it. Cite pinned evidence inline beside the
+claim it supports. Review headings use `Review N` without a `#` before the
+number. Use these severity values: `blocking` for issues that should
+stop merge, `suggestion` for meaningful non-blocking improvements, `nit` for
+small polish items, and `question` for missing-context requests.
+
+When an author asks for an explanation or asks “how”, the review agent must
+load [`agent/skills/explanatory-answer/SKILL.md`](agent/skills/explanatory-answer/SKILL.md)
+before replying. Answer directly, explain the mechanism in order, connect facts
+to the conclusion with references, and state the implication or next step when
+useful. Add an example or diagram only when it materially improves the answer.
+Replies to context-question answers follow the same order: Answer, Why or how,
+Reasoning, optional Example, and Implication. Evidence links sit beside the
+claims they support.
+
+The `missing-context-detector` subagent asks only when missing information
+could change the review conclusion or requested action; it must not assume a
+defect. It posts one question per PR comment with an impact, a realistic
+scenario, a hidden marker, and a Q-ID.
+The PR author answers with `Answer Q-ID: ...`. On the next feedback check, the
+bot checks the answer, verifies the author's organization membership, and
+uses the explanatory-answer skill for “how” or explanation questions. It posts
+one marked response stating the next action or that no change is needed.
+If more context is still needed, it posts the answer explanation and the new
+focused question as separate comments.
+Preflight checks PR issue/review comments before starting a feedback session;
+bot-authored comments alone do not launch a model run. It stores comment IDs at
+the timestamp boundary so the same answer is not processed twice.
 
 ## `dimensions.yaml`
 

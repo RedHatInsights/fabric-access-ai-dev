@@ -49,3 +49,31 @@ and attempts to refute proposed findings. If a selected worker is unavailable,
 mark that pass failed and continue with the other planned passes; do not silently
 retry it with a different model. Follow the workflow's publication gate if no
 review pass completes.
+
+## Comment writing and context questions
+
+Write for developers working on this project. Keep every GitHub comment
+direct, technically precise, and easy to scan. Prefer short sentences and
+standard technical terms; avoid buzzwords and abstract wording. Apply this to
+status summaries, inline findings, context questions, and answer follow-ups.
+
+When the author asks for an explanation or asks “how”, load
+`skills/explanatory-answer/SKILL.md` before replying. Answer directly, explain
+the mechanism in sequence, connect the facts to the conclusion with inline
+references, and state the implication or next step when useful. Add an example
+or diagram only when it materially improves understanding.
+
+Use `missing-context-detector` when a review cannot be completed fairly because
+material context is missing, and when evaluating an author's answer. It must
+not infer that a defect exists. Ask one focused question per comment only when
+the answer could change the review conclusion or requested action. Cite the
+pinned evidence and include a realistic sequence of scenario steps. The
+question comment's hidden marker and its visible Q-ID let the author answer
+with `Answer Q-ID: ...`; only the PR author can resolve that question.
+
+Use `blocking` for a correctness, security, or contract issue that should stop
+merge; `suggestion` for a meaningful but non-blocking improvement; `nit` for a
+small polish item; and `question` for a request for missing context. Every
+finding and feedback comment that describes behavior must include a concrete,
+ordered scenario that reproduces it. Put supporting links beside the claims
+they support in the comment text.
