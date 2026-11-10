@@ -429,6 +429,19 @@ reply, using `explanatory-answer`; the reply carries a hidden
 `dev-review-bot:fabric-access-explanation:<source-comment-id>` marker and does
 not start a new review.
 
+For longer replies, use this structure and omit optional sections when they
+add no value. A simple answer may need only the first line:
+
+```markdown
+**Answer:** <direct response>
+**Why or how:** <mechanism in a clear sequence>
+**Reasoning:** <pinned facts and evidence supporting the answer>
+**Example:** <only when useful>
+**Implication:** <what follows or what to do, when relevant>
+
+<!-- dev-review-bot:fabric-access-explanation:<source-comment-id> -->
+```
+
 For example, [PR #3567](https://github.com/project-kessel/insights-rbac/pull/3567#discussion_r4511659742)
 has a documentation mismatch:
 

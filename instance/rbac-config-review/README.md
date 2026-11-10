@@ -105,12 +105,19 @@ small polish items, and `question` for missing-context requests.
 
 When an author asks for an explanation or asks “how”, the review agent must
 load [`agent/skills/explanatory-answer/SKILL.md`](agent/skills/explanatory-answer/SKILL.md)
-before replying. Answer directly, explain the mechanism in order, connect facts
-to the conclusion with references, and state the implication or next step when
-useful. Add an example or diagram only when it materially improves the answer.
-Replies to context-question answers follow the same order: Answer, Why or how,
-Reasoning, optional Example, and Implication. Evidence links sit beside the
-claims they support.
+before replying. For longer replies, use these headings in order; omit optional
+sections when they add no value:
+
+1. **Answer** — direct response.
+2. **Why or how** — mechanism in a clear sequence.
+3. **Reasoning** — connect pinned facts to the conclusion; cite evidence.
+4. **Example** — include only when it helps.
+5. **Implication** — say what follows or what to do, when relevant.
+
+A simple answer may use only **Answer**. Evidence links sit beside the claims
+they support. Every explanation reply includes the hidden marker
+`<!-- dev-review-bot:fabric-access-explanation:<source-comment-id> -->` so a
+retry can detect an answer already posted.
 
 The `missing-context-detector` subagent asks only when missing information
 could change the review conclusion or requested action; it must not assume a

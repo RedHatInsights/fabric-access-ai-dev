@@ -209,12 +209,21 @@ artifacts. Keep uncompleted command IDs for the new cycle.
 
    For another verified human comment that asks why or how a finding occurs,
    or asks what it means, load `explanatory-answer` and answer from the current
-   pinned manifest and the finding's inline thread. State the answer first,
-   then explain the mechanism and reasoning; include an example only if it
-   helps, and give the implication when relevant. If the needed context is
-   missing, ask one focused question instead of guessing. Reply in the inline
-   thread when the question is inline; for a top-level question, post one
-   top-level reply. Add
+   pinned manifest and the finding's inline thread. For a longer reply, use
+   these headings in order:
+
+   ```markdown
+   **Answer:** <direct response>
+   **Why or how:** <mechanism in a clear sequence>
+   **Reasoning:** <connect pinned facts to the answer; cite evidence>
+   **Example:** <only when useful>
+   **Implication:** <what follows or what to do, when relevant>
+   ```
+
+   Omit optional sections when they add nothing; a simple question may need
+   only `**Answer:**`. If the needed context is missing, ask one focused
+   question instead of guessing. Reply in the inline thread when the question
+   is inline; for a top-level question, post one top-level reply. Add
    `<!-- dev-review-bot:fabric-access-explanation:<source-comment-id> -->` and
    check for that marker in the same comment collection before posting so
    retries do not duplicate the answer. Explanation replies do not create
