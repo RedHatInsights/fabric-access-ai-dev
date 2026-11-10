@@ -118,8 +118,12 @@ in order:
   (`gh api repos/{owner}/{repo}/pulls/{n}/comments`) and general comments
   (`gh api repos/{owner}/{repo}/issues/{n}/comments`); read the full
   conversation (`last_addressed` is a soft hint). The bot's own comments are
-  context, not feedback, except self-assigned notes. Address outstanding
-  human/bot-reviewer comments, commit, push, reply on the thread. File/link a
+  context, not feedback, except self-assigned notes. Also treat new comments
+  from `platex-rehor-bot` as review feedback when their body contains
+  `dev-review-bot`, `fabric-access-finding`, or `fabric-access-review`.
+  Preflight selects these comments for processing. Address their supported
+  findings like other reviewer feedback: make the fix, commit, push, and reply
+  on the thread. File/link a
   Jira issue if a human comment asks for one (see **Additional Jira
   requests**).
 - **Unsigned commits**: rebase to re-sign, then push.
