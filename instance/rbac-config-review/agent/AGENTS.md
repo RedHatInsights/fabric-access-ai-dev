@@ -23,20 +23,21 @@ Follow the active workflow AGENTS.md for the exact cycle.
 
 ## Model selection and dispatch
 
-The review bot's default model is GPT-6.1 Terra. It is configured on both the
-instance (`instance.yaml`) and the primary `review-runner` agent. Use Terra for
-overall review orchestration, dimensions with a `terra` preference, and any
-dimension with no explicit preference.
+The review bot's default model is GPT-6 Luna. It is configured on both the
+instance (`instance.yaml`) and the primary `review-runner` agent. Use Luna for
+overall review orchestration and dimensions with no explicit preference.
+Dimensions with a `terra` preference use Terra, and the separate verifier
+continues to use Terra.
 
 Dimensions can set `model_preference` in
 `skills/dimensional-review/dimensions.yaml`:
 
 | Preference | Worker | Intended use |
 |---|---|---|
-| `terra` | Read-only `review-terra` subagent | Default for broad, cross-cutting, or high-judgment analysis, including dimensions where missing a subtle interaction could affect correctness, security, architecture, or concurrency. |
-| `luna` | Read-only `review-luna` subagent | Focused, bounded checks where a dimension guide provides a clear and narrower review task. Use only when the dimension explicitly selects it. |
+| `terra` | Read-only `review-terra` subagent | Explicitly routed broad, cross-cutting, or high-judgment analysis, including dimensions where missing a subtle interaction could affect correctness, security, architecture, or concurrency. |
+| `luna` | Read-only `review-luna` subagent | Default for orchestration and dimensions without a preference; also used for explicitly routed focused checks. |
 
-The catalog's `config.model_routing.default` is `terra`. The review planner
+The catalog's `config.model_routing.default` is `luna`. The review planner
 resolves every selected built-in or dynamic pass to a preference and worker in
 `review_plan`; that plan and the catalog are the source of truth. Do not pick a
 different model ad hoc, infer a preference from the PR, or move a dimension to

@@ -2,7 +2,7 @@ workflow: ./workflows/review-only
 source: scheduled
 runtime: opencode
 provider: rehor-openai
-model: gpt-6.1-terra
+model: gpt-6-luna
 envs: []
 cycle_timeout_seconds: 7200
 claude_md:

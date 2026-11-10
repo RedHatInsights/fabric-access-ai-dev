@@ -72,7 +72,7 @@ required. The generated skill gets the same pinned PR, related repositories,
 docs, and impact report as the built-in passes. Recipe extensions and test
 execution are not enabled by importing a recipe. The `high` level includes
 the applicable built-in dimensions, including documentation and observability.
-Terra is the default model for the primary `review-runner` and for dimensions
+Luna is the default model for the primary `review-runner` and for dimensions
 without an explicit preference. Each dimension's `model_preference` selects a
 read-only worker: Terra uses `review-terra`, and Luna uses `review-luna`.
 `review_plan` records the resolved worker. Dimensions run in plan-ordered
