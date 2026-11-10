@@ -81,7 +81,7 @@ def test_evidence_gate_accepts_pinned_related_code_and_confirmed_verdict(tmp_pat
     assert body.startswith("## Review #1\n")
     assert "`/review-bot re-review`" in body
     assert "org/hbi/blob/" + "c" * 40 + "/client.py#L1" in body
-    assert "fabric-access-review:" + "a" * 40 + ":" + "b" * 40 in body
+    assert "dev-review-bot:fabric-access-review:" + "a" * 40 + ":" + "b" * 40 in body
 
 
 def test_evidence_gate_rejects_missing_consumer_or_unpinned_source(tmp_path):

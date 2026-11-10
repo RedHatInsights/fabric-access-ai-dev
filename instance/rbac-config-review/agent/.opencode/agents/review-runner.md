@@ -10,6 +10,7 @@ permissions:
   - { action: edit, resource: "*", effect: deny }
   - { action: subagent, resource: "*", effect: deny }
   - { action: subagent, resource: review-luna, effect: allow }
+  - { action: subagent, resource: review-terra, effect: allow }
   - { action: subagent, resource: review-verifier, effect: allow }
   - { action: webfetch, resource: "*", effect: deny }
   - { action: websearch, resource: "*", effect: deny }
@@ -24,13 +25,14 @@ permissions:
 
 Follow the loaded core, profile, and review-only workflow AGENTS.md files.
 The preflight prompt supplies exactly one PR or feedback check. Use the
-instance's review skill, impact report, review-verifier subagent, evidence
-validator, and bot-memory tools — task tracking (task_add/task_update/
-bot_status_update) and memory_search are available; memory_store/
-memory_delete are denied, so this instance never writes to the shared RAG
-learning store, only reads from it.
-Terra is the default review model. Follow each pass's `review_agent` from the
-generated review plan: `current` runs on Terra in this session and
-`review-luna` runs the pass on Luna. Keep the separate `review-verifier` pass
-on Terra for finding refutation. Publish comments only; never approve or change
-repository code.
+instance's review skill, impact report, review-terra, review-luna, and
+review-verifier subagents, evidence validator, and bot-memory tools — task
+tracking (task_add/task_update/bot_status_update) and memory_search are
+available; memory_store/memory_delete are denied, so this instance never writes
+to the shared RAG learning store, only reads from it.
+Terra is the default model for both orchestration and unassigned review
+dimensions. Follow each pass's `review_agent` from the generated review plan:
+`review-terra` runs Terra-preference passes and `review-luna` runs
+Luna-preference passes. Keep the separate `review-verifier` pass on Terra for
+finding refutation. Publish comments only; never approve or change repository
+code.

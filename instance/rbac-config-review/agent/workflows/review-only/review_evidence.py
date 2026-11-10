@@ -192,7 +192,7 @@ def render_inline_comments(findings: list[dict]) -> list[dict]:
         ]
         body_parts.extend([
             f"**Suggested fix:** {finding['suggested_fix']}",
-            f"<!-- fabric-access-finding:{finding['id']} -->",
+            f"<!-- dev-review-bot:fabric-access-finding:{finding['id']} -->",
         ])
         body = "\n\n".join(body_parts)
         comments.append({
@@ -235,7 +235,7 @@ def render_review(manifest: dict, findings: list[dict]) -> str:
             lines.extend(["", diagram])
         lines.extend(["", f"**Suggested fix:** {finding['suggested_fix']}", ""])
     lines.extend(["", "To request another review, comment `/review-bot re-review` on this PR.", ""])
-    lines.append(f"<!-- fabric-access-review:{pr['head_sha']}:{pr['base_sha']} -->")
+    lines.append(f"<!-- dev-review-bot:fabric-access-review:{pr['head_sha']}:{pr['base_sha']} -->")
     return "\n".join(lines) + "\n"
 
 
@@ -409,7 +409,7 @@ def render_ledger(manifest: dict, ledger: list[dict], new_findings: list[dict], 
     for finding in new_findings:
         lines.extend(_render_finding_block(pr, finding))
     lines.extend(["", "To request another review, comment `/review-bot re-review` on this PR.", ""])
-    lines.append(f"<!-- fabric-access-review:{pr['head_sha']}:{pr['base_sha']} -->")
+    lines.append(f"<!-- dev-review-bot:fabric-access-review:{pr['head_sha']}:{pr['base_sha']} -->")
     return "\n".join(lines) + "\n"
 
 
@@ -531,7 +531,8 @@ def render_custom(manifest: dict, ledger: list[dict], new_findings: list[dict],
             raise EvidenceError("Custom inline comments must identify each confirmed new finding once")
         if f"**Dimension:** {dimension_label(added[ident])}" not in text:
             raise EvidenceError("Custom inline comment must state its dimension")
-        if "fabric-access-" in text or not set(re.findall(r"\bF[1-9]\d*\b", text)) <= entries.keys():
+        if ("fabric-access-" in text or "<!-- dev-review-bot:" in text
+                or not set(re.findall(r"\bF[1-9]\d*\b", text)) <= entries.keys()):
             raise EvidenceError("Custom inline comment contains a marker or unconfirmed finding")
         inline_ids.add(ident)
         location = added[ident]["location"]
@@ -539,10 +540,10 @@ def render_custom(manifest: dict, ledger: list[dict], new_findings: list[dict],
             "id": ident, "path": location["file"], "line": location["line"],
             "side": "RIGHT" if location["side"] == "added" else "LEFT",
             "format": "custom",
-            "body": text + f"\n\n<!-- fabric-access-finding:{ident} -->",
+            "body": text + f"\n\n<!-- dev-review-bot:fabric-access-finding:{ident} -->",
         })
     pr = manifest["pr"]
-    body += f"\n\n<!-- fabric-access-review:{pr['head_sha']}:{pr['base_sha']} -->\n"
+    body += f"\n\n<!-- dev-review-bot:fabric-access-review:{pr['head_sha']}:{pr['base_sha']} -->\n"
     return body, comments
 
 

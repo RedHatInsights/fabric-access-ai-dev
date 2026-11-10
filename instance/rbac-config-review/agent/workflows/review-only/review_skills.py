@@ -15,7 +15,8 @@ import yaml
 
 from review_config import github_recipe_url, load_config
 
-SKILL_DIR = Path(__file__).resolve().parents[2] / "skills" / "dimensional-review"
+AGENT_DIR = Path(__file__).resolve().parents[2]
+SKILL_DIR = AGENT_DIR / "skills" / "dimensional-review"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 TEMPLATE = re.compile(r"{{\s*([a-z][a-z0-9_]*)\s*}}")
@@ -188,15 +189,26 @@ def select(catalog: dict, changed_files: list[str], level: str, focus: list[str]
     return selected
 
 
-def resolve_model_route(item: dict, default_preference: str, model_routing: dict) -> dict:
-    preference = item.get("model_preference", default_preference)
-    if not isinstance(preference, str) or preference not in model_routing:
-        raise SkillError(f"Unknown model preference for {item['name']}: {preference}")
-    route = model_routing[preference]
-    review_agent = route.get("review_agent") if isinstance(route, dict) else None
-    if not isinstance(review_agent, str) or not review_agent:
-        raise SkillError(f"Model preference {preference} has no review agent")
-    return {"model_preference": preference, "review_agent": review_agent}
+def model_route(item: dict, catalog: dict) -> dict:
+    catalog_config = catalog.get("config")
+    if not isinstance(catalog_config, dict):
+        raise SkillError("dimensions.yaml config must be a mapping")
+    routing = catalog_config.get("model_routing")
+    if not isinstance(routing, dict):
+        raise SkillError("dimensions.yaml config.model_routing must be a mapping")
+    default = routing.get("default")
+    agents = routing.get("agents")
+    if not isinstance(default, str) or not isinstance(agents, dict) or default not in agents:
+        raise SkillError("dimensions.yaml config.model_routing needs default and agents")
+    preference = item.get("model_preference", default)
+    if not isinstance(preference, str) or preference not in agents:
+        raise SkillError(f"Unsupported model preference for {item['name']}: {preference}")
+    agent = agents[preference]
+    if not isinstance(agent, str) or not (agent == "current" or NAME.fullmatch(agent)):
+        raise SkillError(f"Invalid review agent for model preference {preference}")
+    if agent != "current" and not (AGENT_DIR / ".opencode" / "agents" / f"{agent}.md").is_file():
+        raise SkillError(f"Configured review agent is unavailable: {agent}")
+    return {"model_preference": preference, "review_agent": agent}
 
 
 def prepare(manifest: dict, config: dict, output_dir: Path, focus: list[str] | None = None,
@@ -205,23 +217,16 @@ def prepare(manifest: dict, config: dict, output_dir: Path, focus: list[str] | N
     if not isinstance(catalog, dict):
         raise SkillError("Invalid dimensional review catalog")
     catalog_config = catalog.get("config")
-    default_preference = (
-        catalog_config.get("default_model_preference")
-        if isinstance(catalog_config, dict) else None
-    )
-    model_routing = (
-        catalog_config.get("model_routing") if isinstance(catalog_config, dict) else None
-    )
-    if (not isinstance(default_preference, str) or not isinstance(model_routing, dict)
-            or default_preference not in model_routing):
+    routing = catalog_config.get("model_routing") if isinstance(catalog_config, dict) else None
+    default_preference = routing.get("default") if isinstance(routing, dict) else None
+    if not isinstance(default_preference, str):
         raise SkillError("Invalid default model preference or model routing configuration")
     chosen_level = level or catalog["review_levels"]["default"]
     changed = json.loads(Path(manifest["impact_path"]).read_text())["changed_files"]
     repo_key = manifest["pr"].get("repo_key")
     required = config.get("repositories", {}).get(repo_key, {}).get("skills", [])
     selected = select(catalog, changed, chosen_level, focus, required)
-    routed = [(item, resolve_model_route(item, default_preference, model_routing))
-              for item in selected]
+    routed = [(item, model_route(item, catalog)) for item in selected]
     revisions: dict[tuple[str, str], str] = {}
     passes = []
     for item, route in routed:

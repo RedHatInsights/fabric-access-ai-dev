@@ -10,6 +10,8 @@ it does not edit files, commit, push, approve, request changes, or merge PRs.
 | File | Purpose |
 |---|---|
 | [`agent/instance.yaml`](agent/instance.yaml) | Selects the scheduled workflow, runtime, provider, and model. |
+| [`opencode-deployment.json`](opencode-deployment.json) | Defines the Rehor provider and available Luna and Terra models. |
+| [`agent/.opencode/agents/`](agent/.opencode/agents/) | Configures the runner, Terra reviewer, and verifier models and permissions. |
 | [`agent/project-repos.json`](agent/project-repos.json) | Allowlist of repositories whose GitHub PR queues are scanned. |
 | [`agent/review-context.yaml`](agent/review-context.yaml) | GitHub label to watch and per-repository context, required skills, and comment format. |
 | [`agent/skills/dimensional-review/dimensions.yaml`](agent/skills/dimensional-review/dimensions.yaml) | Review levels, dimensions, applicability rules, and dynamic recipe sources. |
@@ -116,24 +118,24 @@ Each item under `dimensions` describes one review pass. Common fields are:
   run.
 - **`source.path`**: local reviewer guide for a built-in dimension. The
   `plugin` and `repo` fields identify its source attribution.
-- **`model_preference`** (optional): selects the model worker for a pass.
-  `terra` runs in the primary `review-runner` session, and `luna` runs in the
-  read-only `review-luna` subagent. A missing preference uses the catalog's
-  Terra default. `build_context.py` resolves each selected pass to
-  `review_agent` in `manifest.json`; the workflow dispatches passes sequentially
-  and records worker failures instead of silently switching models. The
-  configured aliases are `luna` → `rehor-openai/gpt-6-luna` and `terra` →
+- **`model_preference`** (optional): routes the pass using
+  `config.model_routing` in `dimensions.yaml`. `terra` runs in the read-only
+  `review-terra` subagent and `luna` runs in the read-only `review-luna`
+  subagent. A missing preference uses the configured Terra default.
+  `build_context.py` resolves each selected pass to `review_agent` in
+  `review_plan`; passes run sequentially, and an unavailable worker is recorded
+  as a failure instead of silently switching models. The configured aliases
+  are `luna` → `rehor-openai/gpt-6-luna` and `terra` →
   `rehor-openai/gpt-6.1-terra` in the
   [OpenCode deployment config](https://github.com/RedHatInsights/fabric-access-ai-dev/blob/main/instance/rbac-config-review/opencode-deployment.json).
-  Terra is the default for broad or high-judgment review. Luna is used for
-  dimensions whose configured preference calls for a focused Luna pass. The
-  dimension list in `dimensions.yaml` is the source of those preferences:
-  correctness, architecture, security, concurrency, database schema, and
-  cross-repository dependencies currently use Terra; code quality,
-  documentation, observability, performance, error handling, test quality,
-  API contract, database queries, integrations, vulnerability, Go idioms,
-  React/PatternFly, and learning extraction use Luna. The opt-in KISS recipe
-  has no preference and therefore uses Terra.
+  Terra is the default for broad or high-judgment review. Luna is assigned to
+  narrower focused dimensions. The current assignments are: correctness,
+  architecture, security, concurrency, database schema, and cross-repository
+  dependencies use Terra; code quality, documentation, observability,
+  performance, error handling, test quality, API contract, database queries,
+  integrations, vulnerability, Go idioms, React/PatternFly, and learning
+  extraction use Luna. The opt-in KISS recipe has no preference and therefore
+  uses Terra.
 
 `language_extensions` maps changed-file suffixes to language names. Automatic
 selection uses changed paths, the chosen level, `default`, languages, file
@@ -141,9 +143,12 @@ patterns, and documentation-only rules. Built-in entries currently have
 `default: true`; `goose-kiss-review` is a dynamic entry with `default: false`.
 
 The catalog's `config` holds review-wide model routing, deduplication, and
-consensus settings. `default_model_preference` controls the worker for
-dimensions without an explicit preference, and `model_routing` maps each
-preference to an OpenCode agent. `consensus_threshold` is the number of
+consensus settings. `model_routing.default` selects the worker for dimensions
+without an explicit preference, and `model_routing.agents` maps each profile
+to an OpenCode agent. Here the default is Terra, with `terra: review-terra`
+and `luna: review-luna`. `review_skills.py` records the resolved profile and
+agent for each selected pass; an unknown profile stops plan generation instead
+of silently using another model. `consensus_threshold` is the number of
 dimensions that must agree for a consensus finding, and `dedup_jaccard` /
 `dedup_line_range` help group findings that describe the same issue. Consensus
 affects ranking; the workflow also filters for confidence, verifies proposed
@@ -208,6 +213,13 @@ the shared task-state service, so interrupted reviews can resume and later
 reviews can update the existing summary instead of creating duplicate review
 summaries.
 
+Task status follows the PR lifecycle: a review that has been published is
+`pr_open` while the PR awaits changes or merge. The queue checks tracked PRs
+for lifecycle changes; it sets `done` only after GitHub confirms a non-null
+`mergedAt`. A PR closed without merging is `paused`, and can return to
+`pr_open` if reopened. This also reconciles older tasks that were marked done
+immediately after publishing a review.
+
 Context preparation pins the PR and fetched references. Impact analysis finds
 candidate usages of changed identifiers in declared related repositories; a
 candidate is context for reviewers, not a finding by itself. Selected
@@ -242,12 +254,19 @@ review deployment settings are:
 `BOT_LABEL` is passed to the bot as a deployment label; it is separate from the
 GitHub PR label selected by `review-context.yaml: review_label`.
 
-The primary `review-runner` runs on Terra. Passes marked `luna` use the
-`review-luna` subagent on Luna; passes marked `terra` or with no preference
-use the primary. The separate `review-verifier` subagent also runs on Terra
-and is reserved for refuting proposed findings. See the [runner config](https://github.com/RedHatInsights/fabric-access-ai-dev/blob/main/instance/rbac-config-review/agent/.opencode/agents/review-runner.md),
-[Luna worker config](https://github.com/RedHatInsights/fabric-access-ai-dev/blob/main/instance/rbac-config-review/agent/.opencode/agents/review-luna.md),
-and [verifier config](https://github.com/RedHatInsights/fabric-access-ai-dev/blob/main/instance/rbac-config-review/agent/.opencode/agents/review-verifier.md).
+| Profile | Agent | Configured model |
+|---|---|---|
+| `terra` | `review-runner`, `review-terra`, `review-verifier` | `rehor-openai/gpt-6.1-terra` |
+| `luna` | `review-luna` | `rehor-openai/gpt-6-luna` |
+
+The primary `review-runner` uses Terra for orchestration. Dimension passes are
+dispatched sequentially to `review-terra` or `review-luna` according to the
+resolved model preference. The separate `review-verifier` subagent also uses
+Terra to refute proposed findings. See the [runner config](agent/.opencode/agents/review-runner.md),
+[Terra reviewer config](agent/.opencode/agents/review-terra.md),
+[Luna reviewer config](agent/.opencode/agents/review-luna.md),
+[verifier config](agent/.opencode/agents/review-verifier.md), and
+[OpenCode deployment config](opencode-deployment.json).
 
 See the root [project README](../../README.md) for the overall bot repository
 and deployment layout, and [the workflow guide](agent/workflows/review-only/WORKFLOW.md)

@@ -7,8 +7,18 @@ import argparse
 import json
 import re
 import subprocess
-import tempfile
 from pathlib import Path
+
+
+def add_payload_fields(command: list[str], payload: dict) -> None:
+    """Append scalar JSON fields for the runner's remote gh API bridge."""
+    for key, value in payload.items():
+        if not isinstance(key, str) or not key:
+            raise ValueError("GitHub API payload keys must be non-empty strings")
+        if not isinstance(value, (str, int, float, bool)) and value is not None:
+            raise ValueError("GitHub API payload fields must be scalar values")
+        rendered = value if isinstance(value, str) else json.dumps(value)
+        command.extend(["--field", f"{key}={rendered}"])
 
 
 def api(endpoint: str, method: str = "GET", payload: dict | None = None,
@@ -17,13 +27,9 @@ def api(endpoint: str, method: str = "GET", payload: dict | None = None,
     if paginate:
         command.extend(["--paginate", "--slurp"])
     if payload is not None:
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8") as request:
-            json.dump(payload, request)
-            request.flush()
-            command.extend(["--method", method, "--input", request.name])
-            result = subprocess.run(command, capture_output=True, text=True, check=False)
-    else:
-        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        command.extend(["--method", method])
+        add_payload_fields(command, payload)
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode:
         raise RuntimeError(result.stderr.strip() or f"gh api failed: {endpoint}")
     data = json.loads(result.stdout)
@@ -44,9 +50,12 @@ def publish(repo: str, pr: int, head: str, base: str, publication: Path,
         raise ValueError("Review ID must be positive")
     data = json.loads(publication.read_text())
     body = data.get("body") if isinstance(data, dict) else None
-    marker = f"<!-- fabric-access-review:{head}:{base} -->"
-    if not isinstance(body, str) or not body.strip() or body.count(marker) != 1:
+    marker = f"<!-- dev-review-bot:fabric-access-review:{head}:{base} -->"
+    legacy_marker = f"<!-- fabric-access-review:{head}:{base} -->"
+    if (not isinstance(body, str) or not body.strip()
+            or body.count(marker) + body.count(legacy_marker) != 1):
         raise ValueError("Publication is missing its validated revision marker")
+    body = body.replace(legacy_marker, marker)
 
     pr_state = api(f"repos/{repo}/pulls/{pr}")
     if (not isinstance(pr_state, dict) or pr_state.get("state") != "open"
@@ -65,7 +74,8 @@ def publish(repo: str, pr: int, head: str, base: str, publication: Path,
         matches = [item for item in reviews if isinstance(item, dict)
                    and isinstance(item.get("user"), dict)
                    and item["user"].get("login", "").casefold() == actor["login"].casefold()
-                   and marker in (item.get("body") or "")]
+                   and (marker in (item.get("body") or "")
+                        or legacy_marker in (item.get("body") or ""))]
         if len(matches) > 1:
             raise RuntimeError("Multiple bot reviews contain this revision marker")
         if matches:

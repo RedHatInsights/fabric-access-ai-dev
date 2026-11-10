@@ -43,14 +43,15 @@ plain Python and run every cycle regardless of whether anything needs review.
 
 | Piece | File | Script or AI | Role |
 |---|---|---|---|
-| Queue | `preflight/01-review-queue.py` → `review_queue.py` | Script | Picks one labeled PR needing `review`, `resume`, or `feedback_check`; enforces the 10-task capacity limit and per-instance task isolation (`review-only:github:` prefix) |
+| Queue | `preflight/01-review-queue.py` → `review_queue.py` | Script | Picks one labeled PR needing review/feedback, or one tracked PR needing lifecycle reconciliation; enforces per-instance task isolation (`review-only:github:` prefix) |
 | Config validation | `review_config.py` | Script | Loads and strictly validates `review-context.yaml` (GitHub URL shape, `.md`-only doc links, unique ids) |
 | Context builder | `build_context.py` | Script | Checks out the PR head read-only, clones related repos at a pinned SHA, fetches configured Markdown docs at a pinned commit, writes `manifest.json` |
 | Skill preparation | `review_skills.py` | Script | Selects dimensions, reads selected recipe YAML at a pinned commit, and generates per-run review skills |
 | Impact analysis | `impact_analysis.py` | Script | Deterministically (no LLM) extracts changed identifiers from the diff and `git grep`-matches them in related repos → `impact.json`'s `consumer_usages` (candidates, not confirmed breakage) |
 | Re-review request detection | `rereview_requests.py` | Script | Finds exact commands in top-level comments; the runner verifies each author's organization membership before acting |
-| Model routing | `review_skills.py` + `dimensions.yaml` | Script | Resolves each pass's model preference to the Terra primary or Luna subagent in `review_plan` |
-| Review criteria | `skills/dimensional-review/SKILL.md` | **AI** (review-runner / review-luna) | Multi-dimension review over pinned context, with Terra/Luna selected per dimension; results are deduped and consensus-scored |
+| Model routing | `review_skills.py` + `dimensions.yaml` | Script | Resolves each pass's model preference to the configured Terra or Luna subagent in `review_plan` |
+| Review criteria | `skills/dimensional-review/SKILL.md` | **AI** (review-terra / review-luna) | Multi-dimension review over pinned context using the configured model profile; results are deduped and consensus-scored |
+| Review workers | `.opencode/agents/review-terra.md`, `review-luna.md` | **AI** (subagents) | Read-only workers for dimensions routed to Terra or Luna |
 | Explanation quality | `skills/explanatory-answer/SKILL.md` | **AI** (selected review worker) | General guidance for direct answers, causal reasoning, evidence, and optional Mermaid diagrams; this workflow maps it to finding fields |
 | Verifier | `.opencode/agents/review-verifier.md` | **AI** (subagent) | Independently tries to refute every proposed finding using only pinned sources |
 | Evidence gate | `review_evidence.py` | Script | Rejects any finding whose location/reference isn't a real pinned line; caps at seven findings; requires one verdict per finding; validates optional Mermaid sources and renders them in the review summary |
@@ -63,13 +64,13 @@ required. The generated skill gets the same pinned PR, related repositories,
 docs, and impact report as the built-in passes. Recipe extensions and test
 execution are not enabled by importing a recipe. The `high` level includes
 the applicable built-in dimensions, including documentation and observability.
-Terra is the default model for the primary `review-runner`. Each dimension's
-`model_preference` selects its worker: `terra` uses that primary session, and
-`luna` uses the read-only `review-luna` subagent. Missing preferences resolve
-to Terra. `review_plan` records the resolved worker, and dimensions run
-sequentially; `review-verifier` separately checks findings on Terra. If a
-preferred worker fails, that dimension is recorded as failed instead of being
-silently rerun on another model.
+Terra is the default model for the primary `review-runner` and for dimensions
+without an explicit preference. Each dimension's `model_preference` selects a
+read-only worker: Terra uses `review-terra`, and Luna uses `review-luna`.
+`review_plan` records the resolved worker, and dimensions run sequentially.
+`review-verifier` separately checks findings on Terra. If a preferred worker
+fails, that dimension is recorded as failed instead of being silently rerun on
+another model.
 The high preset remains the default. For a documentation-only diff, dimensions
 marked `skip_documentation_only` do not run; the current catalog selects six
 passes instead of fourteen. Mixed code and documentation changes still select
@@ -98,23 +99,30 @@ without this setting use the standard format.
 
 ## The task queue: review_queue.py
 
-Runs every cycle, for $0, before any AI session. For every repo in
+Runs every cycle, before any AI session. For every repo in
 `project-repos.json`, it lists open PRs carrying `review_label` and classifies
-each one — a session only launches if a PR survives all of this:
+each one — a session only launches if a PR survives all of this. It also
+checks tracked tasks missing from the open labeled list for merge, closure, or
+legacy-state reconciliation:
 
 1. **Filters out**: drafts, PRs authored by the bot itself, and PRs missing a
    head/base SHA. A PR paused for its current SHA pair is checked only when
    there is newer feedback; an authorized command can explicitly retry it.
-2. **Classifies survivors** into exactly one of three kinds (first match
-   wins):
+2. **Classifies survivors** into one kind (first match wins):
 
    | Kind | Condition | Priority |
    |---|---|---|
-   | `resume` | Task status is `in_progress`/`pr_open`/`pr_changes` — a prior cycle was interrupted | 0 (highest) |
+   | `resume` | Task status is `in_progress`/`pr_changes` — a review cycle was interrupted | 0 (highest) |
    | `review` | No task yet, or current head/base SHA differs from `last_reviewed_sha`/`last_reviewed_base_sha` | 1 |
-   | `feedback_check` | SHA unchanged (including a paused task), but `updatedAt` is newer than `last_seen_updated_at`; authorized commands start a fresh review | 2 (lowest) |
+   | `feedback_check` | SHA unchanged (including `pr_open` or a paused task), but `updatedAt` is newer than `last_seen_updated_at`; authorized commands start a fresh review | 2 |
+   | `merge_complete` | GitHub confirms a tracked PR has merged | 0 |
+   | `closed_unmerged` | GitHub confirms a tracked PR closed without merging | 0 |
+   | `reconcile_open` | A legacy `done` task is still open, or a closed-unmerged PR was reopened | 3 |
 
-   Everything else (already reviewed, nothing newer) is excluded.
+   Everything else (already reviewed, nothing newer) is excluded. A posted
+   review moves the task to `pr_open`; lifecycle-only work marks it `done` only
+   after a live GitHub response includes `mergedAt`. Closed, unmerged PRs are
+   paused, not done.
 3. **Picks exactly one** candidate across every repo, sorted by
    `(priority, updatedAt, repo, number)` — one PR per cycle, oldest
    highest-priority first.
@@ -253,10 +261,11 @@ sequenceDiagram
     participant Q as Preflight
     participant R as review-runner
     participant L as review-luna
+    participant T as review-terra
     participant V as review-verifier
     participant GH as GitHub
 
-    Q->>R: one PR (review / resume / feedback_check)
+    Q->>R: one PR (review / resume / feedback_check / lifecycle-only)
     Note over Q,R: skipped entirely if no PR needs attention
     rect rgb(226, 227, 229)
         R->>R: build_context.py → manifest.json + impact.json
@@ -264,7 +273,8 @@ sequenceDiagram
     rect rgb(248, 215, 218)
         loop Selected dimensions, sequentially
             alt preference is terra
-                R->>R: Run pass in primary Terra session
+                R->>T: Run pass with pinned context
+                T->>R: One dimension JSON result
             else preference is luna
                 R->>L: Run pass with pinned context
                 L->>R: One dimension JSON result
@@ -279,8 +289,12 @@ sequenceDiagram
     end
     R->>GH: create/update one review summary
     R->>GH: post/update inline threads using stable finding IDs
-    R->>Q: task_update (last_reviewed_sha, review_id, update_count)
+    R->>Q: task_update (status=pr_open, reviewed SHA, review_id, update_count)
 ```
+
+Lifecycle-only work skips context generation and review publication. It
+rechecks the live PR state, then sets `done` only for a merged PR, `paused` for
+a closed unmerged PR, or `pr_open` when reconciling an open PR.
 
 Gray bands are script (no model call); the red band is where Terra or Luna
 reviews the selected dimensions and Terra's review-verifier tries to refute
@@ -399,7 +413,7 @@ specific consequence, and `evidence` cites a pinned line.
 
 To request another review, comment `/review-bot re-review` on this PR.
 
-<!-- fabric-access-review:a1a1...:b2b2... -->
+<!-- dev-review-bot:fabric-access-review:a1a1...:b2b2... -->
 ```
 
 The corresponding inline comment starts with the same identifier:
@@ -419,7 +433,7 @@ The corresponding inline comment starts with the same identifier:
 
 **Suggested fix:** Keep inventory.read_hosts as an accepted alias until HBI migrates
 
-<!-- fabric-access-finding:F1 -->
+<!-- dev-review-bot:fabric-access-finding:F1 -->
 ```
 
 **Follow-up cycle, same comment edited in place** (`render_ledger` — F1 got
@@ -486,7 +500,7 @@ Reviewed through `d4d4d4d4d4d4`.
 
 **Suggested fix:** Validate ALIAS entries against the permission schema at startup
 
-<!-- fabric-access-review:d4d4...:b2b2... -->
+<!-- dev-review-bot:fabric-access-review:d4d4...:b2b2... -->
 ```
 
 These two are the PR review comment (GitHub). Separately, `bot_status_update`
@@ -514,9 +528,12 @@ bot_status_update(instance_id="fabric-access-review", state="idle",
 ## Guardrails
 
 - **review-runner** permissions deny `edit`, all subagents except
-  `review-verifier`, `webfetch`, `websearch`, and the shell patterns
+  `review-terra`, `review-luna`, and `review-verifier`, `webfetch`, `websearch`, and the shell patterns
   `git push*`, `git commit*`, `gh pr merge*`, `gh pr edit*`, `gh pr
   review*--approve*`.
+- **review-terra** permissions deny `edit`, `shell`, all subagents,
+  `webfetch`, and `websearch`; it reviews only the supplied dimension guide and
+  pinned sources.
 - **review-verifier** permissions deny `edit`, `shell`, all subagents,
   `webfetch`, and `websearch` — it can only reason over the context it's
   given.
@@ -528,7 +545,7 @@ bot_status_update(instance_id="fabric-access-review", state="idle",
   matching inline comments start with `**[F1]**`. Custom formats keep the same
   IDs in the selected skill's layout. GitHub may create separate review records for inline
   comments; the tracked `review_id` remains the summary review's ID. A
-  `<!-- fabric-access-review:<head_sha>:<base_sha> -->`
+  `<!-- dev-review-bot:fabric-access-review:<head_sha>:<base_sha> -->`
   marker in the summary records which revision it reflects. `feedback_check`
   cycles do not touch `review_id` or inline threads unless an authorized
   re-review command starts the normal review path. Verified member feedback is

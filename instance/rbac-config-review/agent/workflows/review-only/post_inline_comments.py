@@ -7,8 +7,18 @@ import argparse
 import json
 import re
 import subprocess
-import tempfile
 from pathlib import Path
+
+
+def add_payload_fields(command: list[str], payload: dict) -> None:
+    """Append scalar JSON fields for the runner's remote gh API bridge."""
+    for key, value in payload.items():
+        if not isinstance(key, str) or not key:
+            raise ValueError("GitHub API payload keys must be non-empty strings")
+        if not isinstance(value, (str, int, float, bool)) and value is not None:
+            raise ValueError("GitHub API payload fields must be scalar values")
+        rendered = value if isinstance(value, str) else json.dumps(value)
+        command.extend(["--field", f"{key}={rendered}"])
 
 
 def api(endpoint: str, method: str, payload: dict | None = None) -> object:
@@ -17,11 +27,8 @@ def api(endpoint: str, method: str, payload: dict | None = None) -> object:
         command.extend(["--paginate", "--slurp"])
     else:
         command.extend(["--method", method])
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8") as request:
-            json.dump(payload, request)
-            request.flush()
-            command.extend(["--input", request.name])
-            result = subprocess.run(command, capture_output=True, text=True, check=False)
+        add_payload_fields(command, payload)
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
         if result.returncode:
             raise RuntimeError(result.stderr.strip() or f"gh api failed: {endpoint}")
         return json.loads(result.stdout) if result.stdout.strip() else {}
@@ -85,8 +92,11 @@ def main() -> None:
             labels = ("Dimension", "Location", "Trigger", "Impact", "Evidence", "Suggested fix")
             if any(f"**{label}:**" not in body for label in labels):
                 parser.error(f"Inline comment {ident} must include all bold finding labels")
-        if f"<!-- fabric-access-finding:{ident} -->" not in body:
+        marker = f"<!-- dev-review-bot:fabric-access-finding:{ident} -->"
+        legacy_marker = f"<!-- fabric-access-finding:{ident} -->"
+        if body.count(marker) + body.count(legacy_marker) != 1:
             parser.error(f"Inline comment {ident} is missing its idempotency marker")
+        comment["body"] = body.replace(legacy_marker, marker)
         if not isinstance(comment.get("path"), str) or not comment["path"]:
             parser.error(f"Inline comment {ident} needs a path")
         if not isinstance(comment.get("line"), int) or comment["line"] < 1:
@@ -106,10 +116,12 @@ def main() -> None:
     posted = updated = unchanged = 0
     for comment in comments:
         ident = comment["id"]
-        marker = f"<!-- fabric-access-finding:{ident} -->"
+        marker = f"<!-- dev-review-bot:fabric-access-finding:{ident} -->"
+        legacy_marker = f"<!-- fabric-access-finding:{ident} -->"
         candidates = [
             item for item in existing
-            if marker in (item.get("body") or "")
+            if (marker in (item.get("body") or "")
+                or legacy_marker in (item.get("body") or ""))
             and item.get("commit_id") == args.head_sha
             and item.get("path") == comment["path"]
         ]

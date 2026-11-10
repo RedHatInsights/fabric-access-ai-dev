@@ -228,7 +228,7 @@ def test_custom_format_uses_confirmed_findings_and_preserves_skill_layout(tmp_pa
     _, posted = evidence.render_custom(manifest, accepted["ledger"], accepted["findings"], 0, custom)
     assert posted[0]["line"] == 1
     assert posted[0]["body"].startswith("🟠 [F1] Keep the alias.")
-    assert "fabric-access-finding:F1" in posted[0]["body"]
+    assert "dev-review-bot:fabric-access-finding:F1" in posted[0]["body"]
     custom["inline_comments"][0]["text"] = "🟠 [F1] Keep the alias."
     with pytest.raises(evidence.EvidenceError, match="state its dimension"):
         evidence.render_custom(manifest, accepted["ledger"], accepted["findings"], 0, custom)

@@ -14,7 +14,9 @@ from rereview_requests import fetch_comments, requests as rereview_requests
 
 TASK_PREFIX = "review-only:github:"
 ACTIVE = {"in_progress", "pr_open", "pr_changes"}
+RESUMABLE = {"in_progress", "pr_changes"}
 PR_FIELDS = "number,title,url,headRefOid,baseRefOid,headRefName,isDraft,author,updatedAt"
+PR_STATE_FIELDS = "state,mergedAt,closedAt,headRefOid,baseRefOid,updatedAt,url,title,headRefName"
 
 
 def task_key(repo: str, number: int) -> str:
@@ -62,9 +64,82 @@ def list_prs(repo: str, label: str) -> list[dict]:
     return data
 
 
+def view_pr_state(repo: str, number: int) -> dict:
+    result = subprocess.run(
+        ["gh", "pr", "view", str(number), "--repo", repo, "--json", PR_STATE_FIELDS],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    if result.returncode:
+        raise RuntimeError(f"gh pr view {repo}#{number}: {result.stderr.strip()[:300]}")
+    data = json.loads(result.stdout)
+    if not isinstance(data, dict) or data.get("state") not in {"OPEN", "CLOSED", "MERGED"}:
+        raise RuntimeError(f"gh pr view {repo}#{number} returned an invalid state")
+    return data
+
+
+def _metadata(task: dict) -> dict:
+    meta = task.get("metadata") or {}
+    if isinstance(meta, str):
+        meta = json.loads(meta)
+    return meta if isinstance(meta, dict) else {}
+
+
+def _task_pr(task: dict, repos: dict) -> tuple[str, str, int] | None:
+    key = task.get("external_key", "")
+    if not key.startswith(TASK_PREFIX):
+        return None
+    target, separator, number = key[len(TASK_PREFIX):].rpartition("#")
+    if not separator or not number.isdigit():
+        return None
+    for repo_key, entry in repos.items():
+        try:
+            repo = github_repo_url(entry["upstream"])
+        except (KeyError, ReviewConfigError):
+            continue
+        if repo == target:
+            return repo_key, repo, int(number)
+    return None
+
+
+def lifecycle_work(task: dict, repo_key: str, repo: str, number: int, pr: dict) -> dict | None:
+    status = task.get("status")
+    meta = _metadata(task)
+    common = {
+        "priority": 0,
+        "task_key": task["external_key"],
+        "task_exists": True,
+        "task_active": status in ACTIVE,
+        "repo_key": repo_key,
+        "repo": repo,
+        "number": number,
+        "title": pr.get("title") or task.get("title", ""),
+        "url": pr.get("url") or f"https://github.com/{repo}/pull/{number}",
+        "head_sha": pr.get("headRefOid") or meta.get("last_reviewed_sha"),
+        "base_sha": pr.get("baseRefOid") or meta.get("last_reviewed_base_sha"),
+        "updated_at": pr.get("updatedAt", ""),
+    }
+    if pr.get("state") == "MERGED" or pr.get("mergedAt"):
+        if status == "done" and meta.get("merged_at"):
+            return None
+        return {**common, "kind": "merge_complete", "merged_at": pr.get("mergedAt")}
+    if pr.get("state") == "CLOSED":
+        if status == "paused" and meta.get("pr_lifecycle") == "closed_unmerged":
+            return None
+        return {**common, "kind": "closed_unmerged"}
+    if pr.get("state") == "OPEN":
+        if status == "done" and not meta.get("merged_at"):
+            return {**common, "kind": "reconcile_open", "priority": 3}
+        if status == "paused" and meta.get("pr_lifecycle") == "closed_unmerged":
+            return {**common, "kind": "reconcile_open", "priority": 3}
+    return None
+
+
 def candidate(pr: dict, repo_key: str, repo: str, task: dict | None,
               pending_rereview: bool = False) -> dict | None:
-    if pr.get("isDraft") or not isinstance(pr.get("number"), int):
+    if not isinstance(pr.get("number"), int):
         return None
     author = (pr.get("author") or {}).get("login", "")
     if author.lower() == os.environ.get("GH_USER_NAME", "").lower() and author:
@@ -73,20 +148,29 @@ def candidate(pr: dict, repo_key: str, repo: str, task: dict | None,
     base_sha = pr.get("baseRefOid")
     if not isinstance(sha, str) or not sha or not isinstance(base_sha, str) or not base_sha:
         return None
-    meta = (task or {}).get("metadata") or {}
-    if isinstance(meta, str):
-        meta = json.loads(meta)
+    meta = _metadata(task or {})
     status = (task or {}).get("status")
-    if status == "paused" and meta.get("paused_sha") == sha and meta.get("paused_base_sha") == base_sha:
-        if pr.get("updatedAt", "") <= meta.get("last_seen_updated_at", "") and not pending_rereview:
+    if pr.get("isDraft"):
+        if status == "done" and not meta.get("merged_at"):
+            kind, priority = "reconcile_open", 3
+        else:
             return None
-        kind, priority = "feedback_check", 2
-    elif status in ACTIVE:
+    elif status == "paused" and meta.get("paused_sha") == sha and meta.get("paused_base_sha") == base_sha:
+        if pr.get("updatedAt", "") <= meta.get("last_seen_updated_at", "") and not pending_rereview:
+            if meta.get("pr_lifecycle") == "closed_unmerged":
+                kind, priority = "reconcile_open", 3
+            else:
+                return None
+        else:
+            kind, priority = "feedback_check", 2
+    elif status in RESUMABLE:
         kind, priority = "resume", 0
     elif meta.get("last_reviewed_sha") != sha or meta.get("last_reviewed_base_sha") != base_sha:
         kind, priority = "review", 1
     elif pr.get("updatedAt", "") > meta.get("last_seen_updated_at", "") or pending_rereview:
         kind, priority = "feedback_check", 2
+    elif status == "done" and not meta.get("merged_at"):
+        kind, priority = "reconcile_open", 3
     else:
         return None
     return {
@@ -112,6 +196,8 @@ def pick_work(repos: dict, config: dict, tasks: list[dict]) -> tuple[dict | None
     found: list[dict] = []
     errors: list[str] = []
     boundary_probes: list[tuple[dict, dict, str, str]] = []
+    open_pr_keys: set[str] = set()
+    failed_repos: set[str] = set()
     for repo_key, entry in repos.items():
         try:
             repo = github_repo_url(entry["upstream"])
@@ -121,23 +207,46 @@ def pick_work(repos: dict, config: dict, tasks: list[dict]) -> tuple[dict | None
             prs = list_prs(repo, config["review_label"])
         except (RuntimeError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
             errors.append(f"{repo}: {exc}")
+            failed_repos.add(repo)
             continue
         for pr in prs:
             key = task_key(repo, pr.get("number"))
+            open_pr_keys.add(key)
             task = by_key.get(key)
             item = candidate(pr, repo_key, repo, task)
-            if item is None and task and task.get("status") in {"done", "paused"}:
+            if item is None and task and task.get("status") in {"done", "paused", "pr_open"}:
                 # updatedAt has second precision: a new command can share the
                 # last-seen timestamp and otherwise never enter feedback_check.
                 probe = candidate(pr, repo_key, repo, task, pending_rereview=True)
-                meta = task.get("metadata") or {}
-                if isinstance(meta, str):
-                    meta = json.loads(meta)
+                meta = _metadata(task)
                 since, through = meta.get("last_seen_updated_at"), pr.get("updatedAt")
                 if probe and probe["kind"] == "feedback_check" and since and through and since <= through:
                     boundary_probes.append((probe, meta, since, through))
             if item:
                 found.append(item)
+    for task in tasks:
+        status = task.get("status")
+        meta = _metadata(task)
+        if status not in {"pr_open", "in_progress", "pr_changes", "paused"} and not (
+            status == "done" and not meta.get("merged_at")
+        ):
+            continue
+        task_ref = _task_pr(task, repos)
+        if task_ref is None:
+            continue
+        repo_key, repo, number = task_ref
+        if repo in failed_repos:
+            continue
+        if task_key(repo, number) in open_pr_keys:
+            continue
+        try:
+            state = view_pr_state(repo, number)
+        except (RuntimeError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+            errors.append(f"{repo}#{number}: {exc}")
+            continue
+        item = lifecycle_work(task, repo_key, repo, number, state)
+        if item:
+            found.append(item)
     # Only probe timestamp-boundary comments when no higher-priority work is
     # ready. These requests are independently authorized by the runner.
     if not found:

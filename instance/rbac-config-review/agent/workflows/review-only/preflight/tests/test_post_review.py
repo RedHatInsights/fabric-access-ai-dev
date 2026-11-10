@@ -15,7 +15,7 @@ import post_review  # noqa: E402
 
 HEAD, BASE = "a" * 40, "b" * 40
 REPO, PR = "org/repo", 42
-BODY = f"## Review #1\n\n<!-- fabric-access-review:{HEAD}:{BASE} -->\n"
+BODY = f"## Review #1\n\n<!-- dev-review-bot:fabric-access-review:{HEAD}:{BASE} -->\n"
 
 
 def publication(tmp_path):
@@ -90,17 +90,17 @@ def test_changed_pr_and_duplicate_reviews_fail_closed(tmp_path, monkeypatch):
         post_review.publish(REPO, PR, HEAD, BASE, path)
 
 
-def test_github_api_receives_structured_json_without_a_report_file(monkeypatch):
+def test_github_api_receives_payload_as_fields_without_a_tempfile(monkeypatch):
     captured = {}
 
     def fake_run(command, **_kwargs):
         captured["command"] = command
-        captured["payload"] = json.loads(Path(command[-1]).read_text())
         return CompletedProcess(command, 0, stdout='{"id":73}', stderr="")
 
     monkeypatch.setattr(post_review.subprocess, "run", fake_run)
     assert post_review.api(f"repos/{REPO}/pulls/{PR}/reviews", "POST",
                            {"event": "COMMENT", "body": BODY}) == {"id": 73}
-    assert captured["command"][-4:-1] == ["--method", "POST", "--input"]
-    assert captured["payload"] == {"event": "COMMENT", "body": BODY}
-    assert not Path(captured["command"][-1]).exists()
+    assert captured["command"] == [
+        "gh", "api", f"repos/{REPO}/pulls/{PR}/reviews", "--method", "POST",
+        "--field", "event=COMMENT", "--field", f"body={BODY}",
+    ]

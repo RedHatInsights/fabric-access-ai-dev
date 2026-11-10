@@ -21,11 +21,15 @@ bot_status_update with this instance ID at cycle start and end.
   in_progress for a new head/base pair or an authorized re-review request.
   Do not claim another instance's task.
 - Save last_step and next_step at milestones. When a review is posted,
-  update to done with last_reviewed_sha, last_reviewed_base_sha,
+  update to pr_open with last_reviewed_sha, last_reviewed_base_sha,
   last_reviewed_at, last_seen_updated_at, review URL, review_id, update_count,
   ledger_path, and context manifest path. These fields make the next cycle
   idempotent and let it find and update the same review instead of posting a
   new one.
+- `pr_open` means the review is complete and the pull request is awaiting
+  changes or merge. It is active task state, but preflight must not resume it
+  unless the PR changes or new feedback arrives. Set `done` only after GitHub
+  confirms a non-null `mergedAt` for the pull request.
 - `review_id` and `update_count` exist from the task's first posted review
   onward; a task with no `review_id` yet has never posted. `ledger_path`
   points at that cycle's `ledger.json`, carried forward into the next cycle —
@@ -34,6 +38,29 @@ bot_status_update with this instance ID at cycle start and end.
 - `seen_rereview_comment_ids` records processed command comment IDs;
   `pending_publication` records a validated but unfinished publication. Treat
   missing fields as an empty list and null, respectively, for existing tasks.
+
+## PR lifecycle-only work
+
+Preflight can select `merge_complete`, `closed_unmerged`, or `reconcile_open`
+work without requesting another review. Handle these before building review
+context. Re-read the PR with
+`gh pr view <number> --repo <owner>/<repo> --json state,mergedAt,closedAt,headRefOid,baseRefOid,updatedAt`.
+
+- If `mergedAt` is non-null, set status to `done`, record
+  `metadata.pr_lifecycle="merged"` and `metadata.merged_at`, and clear any
+  `paused_reason`.
+- If the PR state is `OPEN`, set status to `pr_open`, record
+  `metadata.pr_lifecycle="open"`, and clear any `paused_reason`. Preserve the
+  feedback watermark so unseen comments remain eligible for a later check.
+- If the PR state is `CLOSED` and `mergedAt` is null, set status to `paused`,
+  set `paused_reason="PR closed without merge"`, and record
+  `metadata.pr_lifecycle="closed_unmerged"`, `paused_sha`,
+  `paused_base_sha`, and `last_seen_updated_at` from the live PR.
+
+Do not review, post comments, or mark a PR done in these lifecycle-only paths.
+If the GitHub lookup fails or returns an unknown state, leave the task unchanged
+and report the failure. A closed, unmerged PR remains not done; if reopened, it
+returns to `pr_open` and can be reviewed again when its head/base changes.
 
 ## Review or resume
 
@@ -86,28 +113,28 @@ artifacts. Keep uncompleted command IDs for the new cycle.
 
    Load the dimensional-review skill
    (`agent/skills/dimensional-review/SKILL.md`) with `--skip-learn` and run
-   exactly the listed passes sequentially, using their guide paths. The plan
-   has applied the configured level, applicability, and each dimension's
-   `default` flag.
+   exactly the listed passes sequentially, using their guide paths and
+   `review_agent` assignments. The plan has applied the configured level,
+   applicability, each dimension's `default` flag, and model routing.
    Entries in the current repository's `skills` list are always included,
    even when disabled by default, excluded by the level, or inapplicable by
    file pattern. Explicit focus and repository skills are combined once each.
    Read each pass's guide and, when present, its `context_path`. Give every
    pass this manifest's pinned PR checkout, final diff, related-repository
-   snapshots, linked docs, and impact report. Run CONTEXT with this manifest,
-   then EXECUTE and MERGE per the skill.
-   Use each pass's resolved `review_agent` and `model_preference` from
-   `review_plan`: `terra` uses the current Terra `review-runner`, and `luna`
-   uses the read-only `review-luna` subagent. Terra is the default for broad,
-   high-judgment work. Luna is preferred for the catalog's narrower focused
-   checks. The current per-dimension assignments in `dimensions.yaml` are the
-   source of truth; do not override them based on your own model choice. A
-   missing preference resolves to Terra during plan preparation. The
-   preference selects the worker only; it does not change the dimension's
-   criteria or JSON schema. Run passes sequentially and wait for each result.
-   If a selected worker is unavailable, mark that pass failed and continue
-   without silently switching models. Keep `review-verifier` on Terra for the
-   separate refutation step.
+   snapshots, linked docs, and impact report. Use each pass's resolved
+   `review_agent` and `model_preference` from `review_plan`: Terra-preference
+   passes use the read-only `review-terra` subagent, and Luna-preference passes
+   use the read-only `review-luna` subagent. Terra is the default for broad,
+   high-judgment work; Luna is reserved for the catalog's narrower focused
+   checks. The current assignments in `dimensions.yaml` are the source of
+   truth; do not override them based on your own model choice. A missing
+   preference resolves to Terra during plan preparation. The preference
+   selects the worker only; it does not change dimension criteria or the JSON
+   schema. Run passes sequentially and wait for each result. If a selected
+   worker is unavailable, mark that pass failed and continue without silently
+   switching models. Keep `review-verifier` on Terra for the separate
+   refutation step. Run CONTEXT with this manifest, then EXECUTE and MERGE per
+   the skill.
    Feed the
    `architecture` dimension this repo's `review-context.yaml` entry, its
    manifest-pinned related-repository snapshots and documents, and the impact
@@ -282,14 +309,20 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    same-head comment with the same ID instead of duplicating it. GitHub may
    create separate review records for inline comments; keep tracking the summary
    review's ID. If this step fails, leave the task in progress.
+   Every published summary and inline comment must carry the hidden marker
+   `<!-- dev-review-bot:... -->`. The evidence renderer writes these markers;
+   publishers also migrate legacy `fabric-access-*` markers when resuming a
+   pending publication. Keep markers in standard and custom formats.
    Include file/line references in the review body (already true of the
    validated output). Record the review URL and id.
-8. Mark the task done with review_id, the pending update_count (0 on its first
-   review), ledger_path, reviewed SHAs, and the cycle watermark as
-   `last_seen_updated_at`. Merge this cycle's processed command IDs into
-   `seen_rereview_comment_ids` and set `pending_publication` to null in the
-   same task update. Set `last_addressed` to the current time, including when
-   the review found nothing actionable. `memory_store`/`memory_delete`
+8. Mark the task `pr_open` with `metadata.pr_lifecycle="open"`, review_id, the
+   pending update_count (0 on its first review), ledger_path, reviewed SHAs,
+   and the cycle watermark as `last_seen_updated_at`. Clear `paused_reason`.
+   Merge this cycle's processed command IDs into `seen_rereview_comment_ids`
+   and set `pending_publication` to null in the same task update. Set
+   `last_addressed` to the current time, including when the review found
+   nothing actionable. The task becomes `done` only through PR lifecycle
+   handling after GitHub confirms the merge. `memory_store`/`memory_delete`
    are denied for this instance (see review-runner's permissions) — do not
    attempt to store a codebase_pattern memory; the task's own state (ledger,
    review_id) is where this instance's history lives, not the shared RAG
@@ -331,14 +364,16 @@ Otherwise, compare authorized corrections or acceptances with current code.
 `memory_store` is denied — put useful feedback in task state only. Record
 all checked command IDs in `seen_rereview_comment_ids` and advance
 last_seen_updated_at to preflight's updated_at; set `last_addressed` to the
-current time even if there was nothing actionable. Keep a paused task paused;
-otherwise keep it done. No review is posted for ordinary feedback. If a
-request was received while the task was paused for that same SHA pair, a
-verified command may explicitly retry it.
+current time even if there was nothing actionable. Keep a paused task paused
+unless `pr_lifecycle` is `closed_unmerged` and the PR is open again; in that
+case set it to `pr_open`. For other open PR tasks, keep status `pr_open`.
+No review is posted for ordinary feedback. If a request was received while
+the task was paused for that same SHA pair, a verified command may explicitly
+retry it.
 
 If GitHub or memory temporarily fails while checking feedback or membership,
 do not advance the watermark or mark a command handled; preserve the task's
-done/paused status so preflight retries the feedback check. For failures in
+current status so preflight retries the feedback check. For failures in
 an active review, keep the task in_progress with a concise last_step and retry
 next cycle. If the review skill or required
 context is unavailable until configuration changes, set status=paused,
