@@ -221,9 +221,14 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    ```
 
    Omit optional sections when they add nothing; a simple question may need
-   only `**Answer:**`. If the needed context is missing, ask one focused
-   question instead of guessing. Reply in the inline thread when the question
-   is inline; for a top-level question, post one top-level reply. Add
+   only `**Answer:**`. If a commenter explicitly requests a diagram or graph
+   in an explanation reply, add a concise Mermaid diagram after the prose when
+   pinned context supports an accurate one. Otherwise include a diagram only
+   when it materially improves understanding. Do not put diagrams in the
+   status summary or original finding comments. If the needed context is
+   missing, ask one focused question instead of guessing. Reply in the inline
+   thread when the question is inline; for a top-level question, post one
+   top-level reply. Add
    `<!-- dev-review-bot:fabric-access-explanation:<source-comment-id> -->` and
    check for that marker in the same comment collection before posting so
    retries do not duplicate the answer. Explanation replies do not create
@@ -282,9 +287,10 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    entries without a dimension must say `not recorded in prior review`; do not
    invent an origin.
    Avoid duplicate comments already present on the PR.
-   Keep summaries and inline comments in prose. For explanation answers outside
-   the finding format, use the explanatory-answer skill's optional diagram only
-   when it materially improves understanding.
+   Keep status summaries and original finding comments in prose. Explanation
+   replies follow the explanatory-answer skill: include a concise, accurate
+   Mermaid diagram when explicitly requested and supported by pinned context;
+   otherwise add one only when it materially improves understanding.
    If a prior ledger has `open` entries, also propose exactly one re-check
    per open entry, in a second JSON file under the snapshot directory:
    {"verifications":[{"finding_id":"F1","status":"addressed|still_open|uncertain",

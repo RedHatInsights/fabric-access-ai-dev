@@ -63,7 +63,11 @@ When the author asks for an explanation or asks “how”, load
 `skills/explanatory-answer/SKILL.md` before replying. Answer directly, explain
 the mechanism in sequence, connect the facts to the conclusion with inline
 references, and state the implication or next step when useful. Add an example
-or diagram only when it materially improves understanding.
+only when it helps. If a commenter explicitly asks for a diagram or graph in
+an explanation reply, include an accurate, concise Mermaid diagram when pinned
+context supports it. Otherwise, add a diagram only when it materially improves
+understanding. Keep diagrams out of status summaries and original finding
+comments.
 
 Use `missing-context-detector` when a review cannot be completed fairly because
 material context is missing, and when evaluating an author's answer. It must

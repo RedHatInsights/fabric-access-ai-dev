@@ -61,7 +61,7 @@ cycle so bot-authored updates alone do not start a model session.
 | Review workers | `.opencode/agents/review-terra.md`, `review-luna.md` | **AI** (subagents) | Read-only workers for dimensions routed to Terra or Luna |
 | Context questions and answers | `context_questions.py` | Script | Posts one marked question per comment and finds PR-author answers for the detector to assess |
 | Missing-context detector | `.opencode/agents/missing-context-detector.md` | **AI** (subagent) | Asks only material questions, then evaluates author answers against pinned context |
-| Explanation quality | `skills/explanatory-answer/SKILL.md` | **AI** (review-runner) | General guidance for direct answers, causal reasoning, evidence, and optional Mermaid diagrams; this workflow maps it to finding fields |
+| Explanation quality | `skills/explanatory-answer/SKILL.md` | **AI** (review-runner) | General guidance for direct answers, causal reasoning, evidence, and requested Mermaid diagrams; this workflow maps it to finding fields |
 | Verifier | `.opencode/agents/review-verifier.md` | **AI** (subagent) | Independently tries to refute every proposed finding using only pinned sources |
 | Evidence gate | `review_evidence.py` | Script | Rejects findings without real pinned locations/references; caps at seven; requires one verdict per finding; renders the status template |
 | Review ledger transport | `review_ledger.py`, `review_queue.py`, `post_review.py` | Script | Embeds a public-safe ledger in the status review and restores it from GitHub before a model session |
@@ -432,15 +432,26 @@ not start a new review.
 For longer replies, use this structure and omit optional sections when they
 add no value. A simple answer may need only the first line:
 
-```markdown
+````markdown
 **Answer:** <direct response>
 **Why or how:** <mechanism in a clear sequence>
 **Reasoning:** <pinned facts and evidence supporting the answer>
 **Example:** <only when useful>
 **Implication:** <what follows or what to do, when relevant>
 
-<!-- dev-review-bot:fabric-access-explanation:<source-comment-id> -->
+```mermaid
+flowchart TD
+    A[Request] --> B[Verified mechanism]
+    B --> C[Result]
 ```
+
+<!-- dev-review-bot:fabric-access-explanation:<source-comment-id> -->
+````
+
+Include the Mermaid block when a commenter explicitly asks for a diagram and
+the pinned facts support one. Without an explicit request, include it only
+when it materially improves understanding. Keep it out of status summaries
+and original finding comments.
 
 For example, [PR #3567](https://github.com/project-kessel/insights-rbac/pull/3567#discussion_r4511659742)
 has a documentation mismatch:

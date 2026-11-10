@@ -115,7 +115,11 @@ sections when they add no value:
 5. **Implication** — say what follows or what to do, when relevant.
 
 A simple answer may use only **Answer**. Evidence links sit beside the claims
-they support. Every explanation reply includes the hidden marker
+they support. If a commenter asks for a diagram or graph, include a concise
+Mermaid diagram after the explanation when pinned context supports an accurate
+one. Otherwise, include one only when it materially improves understanding.
+Diagrams are for explanation replies, not status summaries or original finding
+comments. Every explanation reply includes the hidden marker
 `<!-- dev-review-bot:fabric-access-explanation:<source-comment-id> -->` so a
 retry can detect an answer already posted.
 
