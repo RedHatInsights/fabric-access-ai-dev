@@ -215,9 +215,10 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    missing, ask one focused question instead of guessing. Reply in the inline
    thread when the question is inline; for a top-level question, post one
    top-level reply. Add
-   `<!-- dev-review-bot:explanation:<source-comment-id> -->` and check for that
-   marker before posting so retries do not duplicate the answer. Explanation
-   replies do not create findings or start a full re-review.
+   `<!-- dev-review-bot:fabric-access-explanation:<source-comment-id> -->` and
+   check for that marker in the same comment collection before posting so
+   retries do not duplicate the answer. Explanation replies do not create
+   findings or start a full re-review.
 
    Record skipped or failed passes and their reasons in task state. If no
    pass completes, stop without publishing a clean review.

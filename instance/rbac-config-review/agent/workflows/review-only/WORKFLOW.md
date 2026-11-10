@@ -426,8 +426,8 @@ use prose because the summary is compact and inline threads have limited width.
 During a feedback check, a verified member can ask how or why a finding occurs.
 The bot answers from pinned context in the same inline thread or as a top-level
 reply, using `explanatory-answer`; the reply carries a hidden
-`dev-review-bot:explanation:<source-comment-id>` marker and does not start a
-new review.
+`dev-review-bot:fabric-access-explanation:<source-comment-id>` marker and does
+not start a new review.
 
 For example, [PR #3567](https://github.com/project-kessel/insights-rbac/pull/3567#discussion_r4511659742)
 has a documentation mismatch:
