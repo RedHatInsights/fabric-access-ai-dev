@@ -8,8 +8,9 @@ one GitHub review summary per PR and edits it in place each cycle. It also
 posts one idempotent inline thread per actionable finding, using the same
 finding ID in the summary and inline comment. The summary uses one compact
 status line with plain-text finding IDs and `[inline comment]` links to each
-thread; scenarios, evidence, and fixes
-stay in the inline comments.
+thread; scenarios, evidence, and fixes stay in the inline comments. Its hidden
+versioned ledger payload is restored from GitHub at the start of later cycles,
+so review history does not depend on an instance-local file surviving.
 
 To request a fresh pass without changing the PR, an organization member can
 post a new top-level PR comment containing only `/review-bot re-review`.
@@ -61,6 +62,7 @@ cycle so bot-authored updates alone do not start a model session.
 | Explanation quality | `skills/explanatory-answer/SKILL.md` | **AI** (review-runner) | General guidance for direct answers, causal reasoning, evidence, and optional Mermaid diagrams; this workflow maps it to finding fields |
 | Verifier | `.opencode/agents/review-verifier.md` | **AI** (subagent) | Independently tries to refute every proposed finding using only pinned sources |
 | Evidence gate | `review_evidence.py` | Script | Rejects findings without real pinned locations/references; caps at seven; requires one verdict per finding; renders the compact status summary |
+| Review ledger transport | `review_ledger.py`, `review_queue.py`, `post_review.py` | Script | Embeds a public-safe ledger in the status review and restores it from GitHub before a model session |
 | Inline publisher | `post_inline_comments.py` | Script | Posts or updates one anchored comment per confirmed finding on the current PR head, deduplicated by finding ID |
 
 Built-in dimensions have `default: true`; the GitHub KISS recipe is
@@ -176,10 +178,11 @@ task filtering; the `external_key` prefix *is* the isolation boundary.
 ### Memory: task state vs. the shared RAG store
 
 `bot-memory` provides two different things, and this instance treats them
-differently. **Task state** (`task_add`/`task_update`/`bot_status_update`) —
-the SHA pairs, `review_id`, `update_count`, `ledger_path` above — is this
-instance's own bookkeeping and stays fully read/write; the pipeline can't
-function without it. The **shared RAG learning store**
+differently. **Task state** (`task_add`/`task_update`/`bot_status_update`)
+keeps the SHA pairs, `review_id`, `update_count`, and workflow checkpoints.
+The status review comment is the durable findings ledger; a local
+`ledger_path` is only a per-cycle working copy restored from that comment.
+The **shared RAG learning store**
 (`memory_store`/`memory_search`, categories `learning`/`review_feedback`/
 `codebase_pattern`, also readable team-wide via the read-only `team-memory`
 MCP endpoint) is read-only for this instance — `review-runner.md`'s
@@ -347,11 +350,16 @@ normally a `consumer_usages` entry from `impact.json` — never the
 ## Ledger: one review, updated over time
 
 The first cycle writes an initial `ledger.json` with every confirmed finding
-marked open; its IDs are carried forward unchanged on later cycles.
+marked open. Before the status review is posted, the publisher embeds a
+versioned, compressed ledger payload in an HTML comment in that same review
+body. The GitHub status review is the durable source; preflight restores a
+temporary working copy at the start of each later cycle. Its IDs are carried
+forward unchanged.
 
 From a task's second cycle onward, `review_evidence.py` also takes a prior
 `ledger.json` (every finding ever confirmed for this task, each `open` or
-`addressed`) and a proposed re-check of each `open` entry:
+`addressed`) restored from the status review, and a proposed re-check of each
+`open` entry:
 
 ```json
 {"verifications": [
@@ -369,6 +377,17 @@ review body has a `Review N` heading and one compact status line with each
 finding's stable ID, severity, dimension, resolution state, and inline-thread
 link. Detailed explanations stay in the inline comments. Review numbers omit
 the `#` prefix so GitHub does not treat them as issue links.
+
+The hidden payload is not private data: GitHub returns HTML-comment text in
+the review body API to anyone who can access the PR. It stores only the fields
+needed to resume the review. Open findings contain the same claim, scenario,
+impact, suggested fix, and pinned references already shown in their inline
+comments, with raw source-line text removed. Addressed findings are reduced to
+ID/status tombstones so IDs are never reused. Verifier notes and other
+unpublished analysis are not included. Never include credentials, secrets, or
+private instructions. If an older status review has no payload and its legacy
+ledger file is gone, preflight stops before starting a model session; that
+review needs a one-time ledger restore.
 
 ## Explaining a review finding
 
@@ -405,7 +424,12 @@ GitHub URL of the inline thread; finding IDs remain plain text):
 Findings (2 total; 1 open, 1 addressed): F1 · blocking · correctness · open ([inline comment](review-comment:F1)); F2 · nit · documentation · addressed ([inline comment](review-comment:F2))
 
 <!-- dev-review-bot:fabric-access-review:<head_sha>:<base_sha> -->
+<!-- dev-review-bot:review-ledger:v1:<compressed-public-ledger> -->
 ```
+
+The ledger line is hidden in the rendered comment but remains readable via the
+GitHub API. It is a transport for public review state, not an access-control
+boundary.
 
 The linked inline comment carries the evidence needed to act:
 
