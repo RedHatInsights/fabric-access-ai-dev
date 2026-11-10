@@ -9,6 +9,9 @@ import re
 import subprocess
 from pathlib import Path
 
+from public_comment_safety import ensure_public_content
+from review_ledger import append_to_body
+
 
 def add_payload_fields(command: list[str], payload: dict) -> None:
     """Append scalar JSON fields for the runner's remote gh API bridge."""
@@ -41,7 +44,8 @@ def api(endpoint: str, method: str = "GET", payload: dict | None = None,
 
 
 def publish(repo: str, pr: int, head: str, base: str, publication: Path,
-            review_id: int | None = None, comment_links: Path | None = None) -> dict:
+            review_id: int | None = None, comment_links: Path | None = None,
+            ledger_path: Path | None = None) -> dict:
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) or pr < 1:
         raise ValueError("Repository or PR number is invalid")
     if not all(re.fullmatch(r"[0-9a-f]{40}", sha) for sha in (head, base)):
@@ -72,6 +76,13 @@ def publish(repo: str, pr: int, head: str, base: str, publication: Path,
         return f"[{label}]({url})" if url else f"{label} (comment unavailable)"
 
     body = re.sub(r"\[([^\]]+)\]\(review-comment:(F[1-9]\d*)\)", replace_finding_link, body)
+    ensure_public_content(body, "Status review")
+    if ledger_path:
+        ledger = json.loads(ledger_path.read_text())
+        review_numbers = re.findall(r"(?m)^## Review ([1-9]\d*)$", body)
+        if len(review_numbers) != 1:
+            raise ValueError("Publication must contain exactly one review number")
+        body = append_to_body(body, repo, pr, head, base, int(review_numbers[0]) - 1, ledger)
 
     pr_state = api(f"repos/{repo}/pulls/{pr}")
     if (not isinstance(pr_state, dict) or pr_state.get("state") != "open"
@@ -116,6 +127,24 @@ def publish(repo: str, pr: int, head: str, base: str, publication: Path,
     return {"review_id": result["id"], "review_url": result.get("html_url"), "action": action}
 
 
+def prepare_publication(repo: str, pr: int, head: str, base: str,
+                        publication: Path, ledger_path: Path) -> dict:
+    """Embed the ledger before pending-publication state is recorded."""
+    data = json.loads(publication.read_text())
+    body = data.get("body") if isinstance(data, dict) else None
+    if not isinstance(body, str):
+        raise ValueError("Publication body is missing")
+    ledger = json.loads(ledger_path.read_text())
+    review_numbers = re.findall(r"(?m)^## Review ([1-9]\d*)$", body)
+    if len(review_numbers) != 1:
+        raise ValueError("Publication must contain exactly one review number")
+    data["body"] = append_to_body(
+        body, repo, pr, head, base, int(review_numbers[0]) - 1, ledger
+    )
+    publication.write_text(json.dumps(data, indent=2) + "\n")
+    return {"prepared": True, "ledger_entries": len(ledger), "publication": str(publication)}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True)
@@ -126,10 +155,21 @@ def main() -> None:
     parser.add_argument("--review-id", type=int)
     parser.add_argument("--comment-links", type=Path,
                         help="Finding comment URLs created or found by post_inline_comments.py")
+    parser.add_argument("--ledger", type=Path, required=True,
+                        help="Validated ledger to embed in the status review for future cycles")
+    parser.add_argument("--prepare-only", action="store_true",
+                        help="Embed the ledger in the publication file without posting to GitHub")
     args = parser.parse_args()
     try:
+        if args.prepare_only:
+            if not args.ledger:
+                parser.error("--prepare-only requires --ledger")
+            print(json.dumps(prepare_publication(
+                args.repo, args.pr, args.head_sha, args.base_sha, args.publication, args.ledger
+            )))
+            return
         print(json.dumps(publish(args.repo, args.pr, args.head_sha, args.base_sha,
-                                 args.publication, args.review_id, args.comment_links)))
+                                 args.publication, args.review_id, args.comment_links, args.ledger)))
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
         parser.exit(1, f"Review publication failed: {exc}\n")
 

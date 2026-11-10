@@ -10,6 +10,14 @@ from urllib.parse import urlencode
 
 from common import INSTANCE_ID, MEMORY_URL, http_get, load_project_repos, output_result
 from review_config import ReviewConfigError, github_repo_url, load_config
+from review_ledger import (
+    LedgerError,
+    LedgerPayloadMissing,
+    decode_body,
+    public_ledger,
+    restore_from_review,
+    write_cycle_ledger,
+)
 from rereview_requests import fetch_comments, requests as rereview_requests
 
 TASK_PREFIX = "review-only:github:"
@@ -85,6 +93,75 @@ def _metadata(task: dict) -> dict:
     if isinstance(meta, str):
         meta = json.loads(meta)
     return meta if isinstance(meta, dict) else {}
+
+
+def restore_prior_ledger(chosen: dict, task: dict | None) -> None:
+    """Restore prior review state from GitHub before the model session starts."""
+    if chosen.get("kind") not in {"review", "resume", "feedback_check"}:
+        return
+    if task is None:
+        chosen["update_count"] = 0
+        return
+    meta = _metadata(task)
+    pending = meta.get("pending_publication")
+    pending_body = pending.get("publication_body") if isinstance(pending, dict) else None
+    if isinstance(pending_body, str):
+        try:
+            pending_ledger = decode_body(pending_body, chosen["repo"], chosen["number"])
+        except LedgerPayloadMissing:
+            # Older pending publications have no embedded payload; fall back
+            # to the last posted review or its legacy local ledger.
+            pending_ledger = None
+        if (pending_ledger is not None
+                and pending_ledger["head_sha"] == chosen["head_sha"]
+                and pending_ledger["base_sha"] == chosen["base_sha"]):
+            chosen["ledger_path"] = write_cycle_ledger(
+                chosen["repo_key"], chosen["number"], chosen["head_sha"],
+                chosen["base_sha"], pending_ledger["findings"],
+            )
+            chosen["update_count"] = pending_ledger["update_count"]
+            return
+    had_review = bool(meta.get("review_id") or meta.get("last_reviewed_sha")
+                      or meta.get("update_count", 0) or task.get("status") in {"pr_open", "pr_changes"})
+    if not had_review:
+        chosen["update_count"] = 0
+        return
+
+    payload = None
+    review_id = meta.get("review_id")
+    if isinstance(review_id, int) and not isinstance(review_id, bool) and review_id > 0:
+        try:
+            payload = restore_from_review(
+                chosen["repo"], chosen["number"], review_id, _bot_login()
+            )
+        except LedgerPayloadMissing:
+            # Upgrade path for existing reviews: use an old local ledger once,
+            # then the next published status comment carries the durable copy.
+            payload = None
+    elif review_id is not None:
+        raise LedgerError("Tracked review ID is invalid")
+
+    if payload is None:
+        legacy_path = meta.get("ledger_path")
+        if not isinstance(legacy_path, str) or not Path(legacy_path).is_file():
+            raise LedgerError(
+                "Prior review has no embedded ledger and its legacy local ledger is unavailable"
+            )
+        try:
+            ledger = public_ledger(json.loads(Path(legacy_path).read_text()))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise LedgerError(f"Could not read the legacy ledger: {exc}") from exc
+        update_count = meta.get("update_count", 0)
+        if not isinstance(update_count, int) or isinstance(update_count, bool) or update_count < 0:
+            raise LedgerError("Legacy review update_count is invalid")
+    else:
+        ledger = payload["findings"]
+        update_count = payload["update_count"]
+
+    chosen["ledger_path"] = write_cycle_ledger(
+        chosen["repo_key"], chosen["number"], chosen["head_sha"], chosen["base_sha"], ledger
+    )
+    chosen["update_count"] = update_count
 
 
 def _bot_login() -> str:
@@ -372,6 +449,12 @@ def main() -> None:
         active_count = sum(task.get("status") in ACTIVE for task in tasks)
         if chosen["kind"] == "review" and not chosen["task_active"] and active_count >= 10:
             output_result("skip", f"Review instance at task capacity ({active_count}/10)")
+            return
+        task = next((item for item in tasks if item.get("external_key") == chosen["task_key"]), None)
+        try:
+            restore_prior_ledger(chosen, task)
+        except (LedgerError, OSError, subprocess.TimeoutExpired) as exc:
+            output_result("error", f"{chosen['repo']}#{chosen['number']}: {exc}")
             return
         chosen.pop("priority")
         output_result("start", json.dumps({"work": chosen, "discovery_errors": errors}))

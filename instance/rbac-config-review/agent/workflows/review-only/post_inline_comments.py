@@ -9,6 +9,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from public_comment_safety import PublicContentError, ensure_public_content
+
 
 def add_payload_fields(command: list[str], payload: dict) -> None:
     """Append scalar JSON fields for the runner's remote gh API bridge."""
@@ -110,6 +112,10 @@ def main() -> None:
         format_name = comment.get("format", "standard")
         if not isinstance(body, str) or format_name not in {"standard", "custom"}:
             parser.error(f"Inline comment {ident} has an invalid body or format")
+        try:
+            ensure_public_content(body, f"Finding {ident}")
+        except PublicContentError as exc:
+            parser.error(str(exc))
         if format_name == "custom":
             if f"[{ident}]" not in body:
                 parser.error(f"Custom inline comment {ident} must include its finding ID")
