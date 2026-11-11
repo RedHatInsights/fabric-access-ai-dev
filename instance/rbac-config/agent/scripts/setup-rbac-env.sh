@@ -73,6 +73,12 @@ if [ "$NO_ENV_FILE" -eq 1 ]; then
     export DATABASE_PASSWORD=postgres
     export DATABASE_NAME=postgres
     export PIPENV_DONT_LOAD_ENV=1
+    # With dotenv disabled, local settings need either an explicit secret or
+    # DEBUG to generate a temporary one. Keep this fallback local to this
+    # development setup process; production settings still require a secret.
+    if [[ -z "${DJANGO_SECRET_KEY:-}" ]]; then
+        export DJANGO_DEBUG=True
+    fi
     DJANGO_DOTENV_SETTING=False
 else
     if [ ! -f .env ]; then
