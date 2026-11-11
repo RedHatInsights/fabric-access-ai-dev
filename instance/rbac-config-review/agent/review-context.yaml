@@ -29,6 +29,7 @@ repositories:
         url: https://github.com/project-kessel/inventory-consumer/blob/main/README.md
     jira:
       project_env: BOT_JIRA_PROJECT_INSIGHTS_RBAC
+      team_field: customfield_10001
       team_id_env: BOT_JIRA_TEAM_ID_INSIGHTS_RBAC
       labels_env: BOT_JIRA_LABELS_INSIGHTS_RBAC
   inventory-api:

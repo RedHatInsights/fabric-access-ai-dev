@@ -47,6 +47,7 @@ repositories:
         url: https://github.com/project-kessel/rbac-config/blob/master/README.md
     jira:
       project_env: BOT_JIRA_PROJECT_INSIGHTS_RBAC
+      team_field: customfield_10001
       team_id_env: BOT_JIRA_TEAM_ID_INSIGHTS_RBAC
       labels_env: BOT_JIRA_LABELS_INSIGHTS_RBAC
     skills: []
@@ -77,7 +78,8 @@ The per-repository settings are:
   requesting a re-review or explanation.
 - **`jira`** (optional): Its presence enables explicit Jira creation requests
   for that repository. The `project_env` and `team_id_env` fields name
-  environment variables supplied by App Interface; `labels_env` names an
+  environment variables supplied by App Interface; `team_field` is the Jira
+  Team custom-field key and `labels_env` names an
   optional JSON array variable, such as `[]` or `["review-bot"]`. Keep their
   values in App Interface, not this public file. No global creation toggle is
   used. A verified organization member can request a ticket for an open finding
@@ -349,7 +351,7 @@ review deployment settings are:
 | `BOT_EXECUTION_ENGINE` | `coordinator` |
 | `BOT_LABEL` | `Prokurátor Velký Bratr` |
 | `BOT_JIRA_PROJECT_INSIGHTS_RBAC` | `RHCLOUD` (set in App Interface) |
-| `BOT_JIRA_TEAM_ID_INSIGHTS_RBAC` | Console Access Team value ID (set in App Interface) |
+| `BOT_JIRA_TEAM_ID_INSIGHTS_RBAC` | Console - Access Team value ID (set in App Interface) |
 | `BOT_JIRA_LABELS_INSIGHTS_RBAC` | JSON list, such as `[]` (set in App Interface) |
 
 `BOT_LABEL` is passed to the bot as a deployment label; it is separate from the

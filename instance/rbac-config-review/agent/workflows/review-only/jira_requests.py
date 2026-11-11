@@ -30,7 +30,8 @@ def requests(comments: list[dict], since: str, through: str,
         if not isinstance(comment, dict):
             continue
         ident, author = comment.get("id"), comment.get("user") or {}
-        match = COMMAND.fullmatch(comment.get("body", "").strip()) if isinstance(comment.get("body"), str) else None
+        body = comment.get("body")
+        match = COMMAND.fullmatch(body.strip()) if isinstance(body, str) else None
         if (not isinstance(ident, int) or isinstance(ident, bool) or ident <= 0
                 or ident in seen_ids or ident in emitted
                 or not isinstance(author, dict) or author.get("type") != "User"

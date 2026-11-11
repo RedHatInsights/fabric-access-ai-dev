@@ -132,6 +132,11 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
         if jira is not None:
             if not isinstance(jira, dict):
                 raise ReviewConfigError(f"repositories.{repo_key}.jira must be a mapping")
+            if not isinstance(jira.get("team_field"), str) or not re.fullmatch(
+                    r"customfield_[0-9]+", jira["team_field"]):
+                raise ReviewConfigError(
+                    f"repositories.{repo_key}.jira.team_field must be a Jira custom-field ID"
+                )
             for field in ("project_env", "team_id_env", "labels_env"):
                 env_name = jira.get(field)
                 if not isinstance(env_name, str) or not _ENV_NAME.fullmatch(env_name):

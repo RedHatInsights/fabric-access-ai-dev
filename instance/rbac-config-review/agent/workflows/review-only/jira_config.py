@@ -45,7 +45,20 @@ def resolve(repo_key: str, environ: dict[str, str] | None = None) -> dict:
             or any(not isinstance(label, str) or not label.strip() for label in labels)
             or len(labels) != len(set(labels))):
         raise ReviewConfigError("Jira labels must be a unique JSON array of non-empty strings")
-    return {"repo_key": repo_key, "project": project, "team_id": team_id, "labels": labels}
+    labels = [label.strip() for label in labels]
+    if len(labels) != len(set(labels)):
+        raise ReviewConfigError("Jira labels must be unique after trimming whitespace")
+    team_field = settings.get("team_field")
+    if not isinstance(team_field, str) or not re.fullmatch(r"customfield_[0-9]+", team_field):
+        raise ReviewConfigError(f"Invalid Jira Team field for {repo_key}")
+    return {
+        "repo_key": repo_key,
+        "project": project,
+        "team_field": team_field,
+        "team_id": team_id,
+        "team_name": "Console - Access",
+        "labels": labels,
+    }
 
 
 def main() -> None:
