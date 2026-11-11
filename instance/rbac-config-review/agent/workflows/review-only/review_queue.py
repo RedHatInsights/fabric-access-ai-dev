@@ -561,6 +561,8 @@ def _task_pr(task: dict, repos: dict) -> tuple[str, str, int] | None:
 
 def lifecycle_work(task: dict, repo_key: str, repo: str, number: int, pr: dict) -> dict | None:
     status = task.get("status")
+    if status == "paused":
+        return None
     meta = _metadata(task)
     common = {
         "priority": 0,
@@ -581,13 +583,9 @@ def lifecycle_work(task: dict, repo_key: str, repo: str, number: int, pr: dict) 
             return None
         return {**common, "kind": "merge_complete", "merged_at": pr.get("mergedAt")}
     if pr.get("state") == "CLOSED":
-        if status == "paused" and meta.get("pr_lifecycle") == "closed_unmerged":
-            return None
         return {**common, "kind": "closed_unmerged"}
     if pr.get("state") == "OPEN":
         if status == "done" and not meta.get("merged_at"):
-            return {**common, "kind": "reconcile_open", "priority": 3}
-        if status == "paused" and meta.get("pr_lifecycle") == "closed_unmerged":
             return {**common, "kind": "reconcile_open", "priority": 3}
     return None
 
@@ -607,6 +605,8 @@ def candidate(pr: dict, repo_key: str, repo: str, task: dict | None,
         return None
     meta = _metadata(task or {})
     status = (task or {}).get("status")
+    if status == "paused":
+        return None
     if pr.get("isDraft"):
         if status == "done" and not meta.get("merged_at"):
             kind, priority = "reconcile_open", 3
@@ -624,14 +624,6 @@ def candidate(pr: dict, repo_key: str, repo: str, task: dict | None,
             kind, priority = "review", 1
     elif force_review:
         kind, priority = "review", 1
-    elif status == "paused" and meta.get("paused_sha") == sha and meta.get("paused_base_sha") == base_sha:
-        if pr.get("updatedAt", "") <= meta.get("last_seen_updated_at", "") and not pending_rereview:
-            if meta.get("pr_lifecycle") == "closed_unmerged":
-                kind, priority = "reconcile_open", 3
-            else:
-                return None
-        else:
-            kind, priority = "feedback_check", 2
     elif meta.get("last_reviewed_sha") != sha or meta.get("last_reviewed_base_sha") != base_sha:
         kind, priority = "review", 1
     elif pr.get("updatedAt", "") > meta.get("last_seen_updated_at", "") or pending_rereview:
@@ -685,12 +677,12 @@ def pick_work(repos: dict, config: dict, tasks: list[dict],
             if key in excluded_task_keys:
                 continue
             task = by_key.get(key)
-            if task and task.get("status") == "archived":
-                # Keep the unique task key reserved. Operators can unarchive
-                # this existing record when the PR should be reviewed again.
+            if task and task.get("status") in {"archived", "paused"}:
+                # Keep archived and paused tasks out of all review, feedback,
+                # and lifecycle paths until an operator changes their status.
                 continue
             item = candidate(pr, repo_key, repo, task)
-            if item is None and task and task.get("status") in {"done", "paused", "pr_open"}:
+            if item is None and task and task.get("status") in {"done", "pr_open"}:
                 # updatedAt has second precision: a new command can share the
                 # last-seen timestamp and otherwise never enter feedback_check.
                 probe = candidate(pr, repo_key, repo, task, pending_rereview=True)
@@ -743,7 +735,7 @@ def pick_work(repos: dict, config: dict, tasks: list[dict],
     for task in tasks:
         status = task.get("status")
         meta = _metadata(task)
-        if status not in {"pr_open", "in_progress", "pr_changes", "paused"} and not (
+        if status not in {"pr_open", "in_progress", "pr_changes"} and not (
             status == "done" and not meta.get("merged_at")
         ):
             continue

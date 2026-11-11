@@ -1,7 +1,7 @@
 ---
 description: Reviews one labeled GitHub PR per scheduled cycle without changing code.
 mode: primary
-model: rehor-openai/gpt-6-luna
+model: rehor-openai/gpt-6.1-terra
 request:
   body:
     reasoning:
@@ -31,9 +31,9 @@ review-terra, review-luna, and review-verifier subagents, evidence validator,
 and bot-memory tools — task tracking (task_add/task_update/bot_status_update)
 and memory_search are available; memory_store/memory_delete are denied, so
 this instance never writes to the shared RAG learning store, only reads from it.
-Luna is the default model for orchestration and dimensions without an explicit
+Terra is the default model for orchestration and dimensions without an explicit
 preference. Follow each pass's `review_agent` from the generated review plan:
 `review-terra` runs Terra-preference passes and `review-luna` runs
-Luna-preference passes. Keep the separate `review-verifier` pass on Terra for
+Luna-preference passes. Keep the separate `review-verifier` pass on Luna for
 finding refutation. Publish comments only; never approve or change repository
 code.

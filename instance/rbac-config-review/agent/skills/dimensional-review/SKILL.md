@@ -135,11 +135,11 @@ For each selected dimension, prepend the full local reviewer guide to a shared r
 ### 3.3 rbac-config-review Workflow Dispatch (OpenCode)
 
 This vendored copy runs inside the `rbac-config-review` instance's
-`review-runner` agent on OpenCode. The instance default is Luna. The review
+`review-runner` agent on OpenCode. The instance default is Terra. The review
 plan resolves every pass to both a `model_preference` and a `review_agent`:
 Terra-preference passes use the read-only `review-terra` subagent, while Luna-
 preference passes use the read-only `review-luna` subagent. A missing
-preference uses the catalog's Luna default. The separate `review-verifier`
+preference uses the catalog's Terra default. The separate `review-verifier`
 subagent uses Luna for evidence refutation.
 
 Run applicable dimensions in **bounded parallel batches of at most four**,
@@ -156,7 +156,7 @@ worker is unavailable: mark that dimension failed, report the reason, and
 continue with the remaining passes. CONTEXT/DETECT/MERGE, deduplication, and
 consensus scoring are unchanged; Step 5 uses the review-only workflow's GitHub
 publication. Dynamic dimensions without `model_preference` use the catalog's
-Luna default. Unknown preferences fail during skill preparation instead of
+Terra default. Unknown preferences fail during skill preparation instead of
 silently running under another model.
 
 Each dimension's review pass must include:

@@ -111,7 +111,7 @@ def test_candidate_state_transitions():
         "last_seen_updated_at": PR["updatedAt"],
     }}
     assert queue.candidate(PR, "insights-rbac", "project-kessel/insights-rbac", paused) is None
-    assert queue.candidate(feedback, "insights-rbac", "project-kessel/insights-rbac", paused)["kind"] == "feedback_check"
+    assert queue.candidate(feedback, "insights-rbac", "project-kessel/insights-rbac", paused) is None
 
 
 def test_queue_skips_draft_and_own_pr(monkeypatch):
