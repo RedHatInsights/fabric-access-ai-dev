@@ -24,6 +24,15 @@ for one Fabric Access repository (insights-rbac, rbac-config,
 entitlements-api-go, uhc-auth-proxy, turnpike, cloudwatch-aggregator). Select
 one relevant subagent; do not delegate recursively.
 
+## Review-bot PR feedback
+
+The instance preflight wakes this Jira-sprint workflow for new comments by
+`platex-rehor-bot` that contain `dev-review-bot`, `fabric-access-finding`, or
+`fabric-access-review`. Treat these marked comments as external reviewer
+feedback even though they use the bot account. Read and validate the finding
+before acting; the preflight only selects the task and does not confirm that a
+finding is correct.
+
 The shared Jira workflow may still mention `personas/<name>/prompt.md`. This
 profile has no persona directory; map those role names to matching native
 subagents and do not search for deleted persona files.
