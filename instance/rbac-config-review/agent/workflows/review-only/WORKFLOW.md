@@ -116,11 +116,12 @@ each one — a session only launches if a PR survives all of this. It also
 checks tracked tasks missing from the open labeled list for merge, closure, or
 legacy-state reconciliation:
 
-1. **Filters out**: drafts, PRs authored by the configured bot account except
-   `platex-rehor-bot`, and PRs missing a head/base SHA. PRs from
-   `platex-rehor-bot` remain eligible even when it is the configured
-   `GH_USER_NAME`. A PR paused for its current SHA pair is checked only when
-   there is newer feedback.
+1. **Filters out**: drafts, tasks with status `paused` or `archived`, PRs
+   authored by the configured bot account except `platex-rehor-bot`, and PRs
+   missing a head/base SHA. PRs from `platex-rehor-bot` remain eligible even
+   when it is the configured `GH_USER_NAME`. Paused tasks are skipped across
+   review, feedback, and lifecycle handling, regardless of SHA changes or new
+   comments. An operator must unpause the task before the queue can act on it.
 2. **Classifies survivors** into one kind (first match wins):
 
    | Kind | Condition | Priority |
@@ -130,12 +131,12 @@ legacy-state reconciliation:
    | `feedback_check` | SHA unchanged and preflight finds unseen human issue/review feedback; `/review-bot re-review` requests approval for a fresh pass | 2 |
    | `merge_complete` | GitHub confirms a tracked PR has merged | 0 |
    | `closed_unmerged` | GitHub confirms a tracked PR closed without merging | 0 |
-   | `reconcile_open` | A legacy `done` task is still open, or a closed-unmerged PR was reopened | 3 |
+   | `reconcile_open` | A legacy `done` task is still open | 3 |
 
    Everything else (already reviewed, nothing newer) is excluded. A posted
    review moves the task to `pr_open`; lifecycle-only work marks it `done` only
    after a live GitHub response includes `mergedAt`. Closed, unmerged PRs are
-   paused, not done.
+   paused, not done; reopening them does not resume a paused task.
 3. **Picks exactly one** candidate across every repo, sorted by
    `(priority, updatedAt, repo, number)` — one PR per cycle, oldest
    highest-priority first.
@@ -149,6 +150,10 @@ legacy-state reconciliation:
    this preflight run and the queue continues to other PRs. A brand-new review
    is skipped if 10 tasks are already active, even if otherwise authorized.
    An interrupted, already-authorized review resumes without asking again.
+
+Before context building, every model batch, verification, and publication, the
+runner re-reads task state. If the task is paused, it stops further review work
+and posts nothing; an operator must unpause it before the queue resumes.
 
 Re-review commands are matched exactly from new top-level comments, bounded by
 the preflight timestamp, and deduplicated using comment IDs in task state. A

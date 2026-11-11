@@ -277,9 +277,12 @@ existing summary instead of creating duplicate review summaries.
 Task status follows the PR lifecycle: a review that has been published is
 `pr_open` while the PR awaits changes or merge. The queue checks tracked PRs
 for lifecycle changes; it sets `done` only after GitHub confirms a non-null
-`mergedAt`. A PR closed without merging is `paused`, and can return to
-`pr_open` if reopened. This also reconciles older tasks that were marked done
-immediately after publishing a review.
+`mergedAt`. A PR closed without merging is `paused`. Paused tasks are excluded
+from review, feedback, and lifecycle handling until an operator explicitly
+unpauses them; reopening the PR alone does not resume work. If an active review
+is paused, the runner checks task state between model batches and before
+publication, then stops without posting. This also reconciles older tasks that
+were marked done immediately after publishing a review.
 
 Context preparation pins the PR and fetched references. Impact analysis finds
 candidate usages of changed identifiers in declared related repositories; a

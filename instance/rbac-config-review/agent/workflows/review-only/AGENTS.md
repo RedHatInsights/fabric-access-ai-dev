@@ -25,6 +25,9 @@ bot_status_update with this instance ID at cycle start and end.
   in_progress for a new head/base pair or an authorized re-review request.
   Set `active_head_sha` and `active_base_sha` to the preflight pair and persist
   all supplied authorization fields. Do not claim another instance's task.
+- Before setting an existing task to `in_progress`, verify its current status
+  with `task_get`. If it is `paused`, stop without changing the task or
+  starting model work.
 - Authorization gate: for `kind="review"`, preflight must supply either
   `review_authorization="label_added"` or
   `review_authorization="organization_member_approved"`. If neither is
@@ -82,12 +85,28 @@ bot_status_update with this instance ID at cycle start and end.
   them when matching PRs and skips archived PRs, so a still-present GitHub
   label cannot cause a duplicate `task_add`. To resume, unarchive that task
   record; do not create a replacement task for the same PR.
+- Paused tasks are hard-skipped by preflight. Do not run review, feedback,
+  comment handling, or lifecycle reconciliation for a task whose status is
+  `paused`, even when its PR changes, receives comments, or reopens. Only an
+  operator changing the task status from `paused` can resume it.
+- Re-read task state before context building, before each model batch, before
+  verification, before every `task_update`, and immediately before any GitHub
+  publication. If the task is
+  `paused`, stop at that point: launch no more workers, post no comments, and
+  do not update the task or change its status. If a parallel batch is already
+  running, do not start another; stop after that batch returns. Set only the
+  bot activity status to idle and report that the task is paused.
+  At cycle entry, check task state before marking the task working or changing
+  its status.
+  If `task_get` fails or returns an unreadable status at a checkpoint, stop
+  before further model work or publication and leave the task unchanged.
 
 ## PR lifecycle-only work
 
 Preflight can select `merge_complete`, `closed_unmerged`, or `reconcile_open`
-work without requesting another review. Handle these before building review
-context. Re-read the PR with
+work without requesting another review, but never selects a task already
+marked `paused`. Handle lifecycle work before building review context. Re-read
+the PR with
 `gh pr view <number> --repo <owner>/<repo> --json state,mergedAt,closedAt,headRefOid,baseRefOid,updatedAt`.
 
 - If `mergedAt` is non-null, set status to `done`, record
@@ -103,8 +122,9 @@ context. Re-read the PR with
 
 Do not review, post comments, or mark a PR done in these lifecycle-only paths.
 If the GitHub lookup fails or returns an unknown state, leave the task unchanged
-and report the failure. A closed, unmerged PR remains not done; if reopened, it
-returns to `pr_open` and can be reviewed again when its head/base changes.
+and report the failure. A closed, unmerged PR remains not done. Its task is
+paused; reopening the PR does not resume it. An operator must unpause the task
+before lifecycle or review work can continue.
 
 ## Review or resume
 
@@ -568,12 +588,10 @@ all checked command IDs in `seen_rereview_comment_ids`, merge the work item's
 `feedback_comment_ids` into `seen_feedback_comment_ids` (retain the newest
 1,000 IDs), and advance last_seen_updated_at to preflight's updated_at; set
 `last_addressed` to the current time even if there was nothing actionable.
-Keep a paused task paused
-unless `pr_lifecycle` is `closed_unmerged` and the PR is open again; in that
-case set it to `pr_open`. For other open PR tasks, keep status `pr_open`.
-No review is posted for ordinary feedback. If a request was received while
-the task was paused for that same SHA pair, a verified command may explicitly
-retry it.
+This path only runs for non-paused tasks. Do not transition a paused task based
+on comments, commands, SHA changes, or PR lifecycle; an operator must unpause
+it first. For other open PR tasks, keep status `pr_open`. No review is posted
+for ordinary feedback.
 
 If GitHub or memory temporarily fails while checking feedback or membership,
 do not advance the watermark or mark a command handled; preserve the task's
