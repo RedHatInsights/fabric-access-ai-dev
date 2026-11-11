@@ -27,6 +27,33 @@ repositories:
         url: https://github.com/project-kessel/inventory-api/blob/main/README.md
       - id: inventory-consumer-readme
         url: https://github.com/project-kessel/inventory-consumer/blob/main/README.md
+  inventory-api:
+    related:
+      - id: insights-rbac
+        url: https://github.com/project-kessel/insights-rbac
+        relationship: RBAC calls Inventory API for V2 authorization checks; API contract changes can break permission decisions.
+      - id: rbac-config
+        url: https://github.com/project-kessel/rbac-config
+        relationship: Supplies SpiceDB schema and KSL configuration used by the Inventory relations integration.
+      - id: inventory-consumer
+        url: https://github.com/project-kessel/inventory-consumer
+        relationship: Transforms provider events and reports resources through the Inventory API.
+      - id: insights-host-inventory
+        url: https://github.com/RedHatInsights/insights-host-inventory
+        relationship: Produces host inventory events consumed by KIC and mapped to Inventory API resources.
+    docs:
+      - id: inventory-api-architecture
+        url: https://github.com/project-kessel/inventory-api/blob/main/ARCHITECTURE.md
+      - id: inventory-api-api-guidelines
+        url: https://github.com/project-kessel/inventory-api/blob/main/api/GUIDELINES.md
+      - id: insights-rbac-architecture
+        url: https://github.com/project-kessel/insights-rbac/blob/master/docs/ARCHITECTURE.md
+      - id: rbac-config-readme
+        url: https://github.com/project-kessel/rbac-config/blob/master/README.md
+      - id: inventory-consumer-readme
+        url: https://github.com/project-kessel/inventory-consumer/blob/main/README.md
+      - id: hbi-kessel-effects
+        url: https://github.com/RedHatInsights/insights-host-inventory/blob/master/docs/kessel-effects-on-hbi.md
   rbac-config:
     related:
       - id: insights-rbac
