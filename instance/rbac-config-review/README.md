@@ -328,10 +328,10 @@ review deployment settings are:
 `BOT_LABEL` is passed to the bot as a deployment label; it is separate from the
 GitHub PR label selected by `review-context.yaml: review_label`.
 
-| Profile | Agent | Configured model |
-|---|---|---|
-| `terra` | `review-runner`, `review-terra` | `rehor-openai/gpt-6.1-terra` |
-| `luna` | `review-luna`, `review-verifier` | `rehor-openai/gpt-6-luna` |
+| Profile | Agent | Configured model | Reasoning effort |
+|---|---|---|---|
+| `terra` | `review-runner`, `review-terra` | `rehor-openai/gpt-6.1-terra` | Medium |
+| `luna` | `review-luna`, `review-verifier` | `rehor-openai/gpt-6-luna` | High |
 
 The primary `review-runner` uses Terra for orchestration. Dimension passes are
 dispatched in batches of at most four concurrent workers to `review-terra` or
