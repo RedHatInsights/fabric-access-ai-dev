@@ -21,9 +21,15 @@ from review_ledger import (
     decode_body,
     public_ledger,
     restore_from_review,
+    status_summary,
     write_cycle_ledger,
 )
-from rereview_requests import fetch_comments, requests as rereview_requests
+from rereview_requests import (
+    VERIFY_COMMAND,
+    fetch_comments,
+    requests as explicit_command_requests,
+    requests as rereview_requests,
+)
 
 TASK_PREFIX = "review-only:github:"
 ACTIVE = {"in_progress", "pr_open", "pr_changes"}
@@ -227,15 +233,21 @@ def _request_ledger_recovery(chosen: dict, meta: dict) -> bool:
 
 def restore_prior_ledger(chosen: dict, task: dict | None) -> bool:
     """Restore the status-review ledger, then saved copies, before any model run."""
-    if chosen.get("kind") not in {"review", "resume", "feedback_check"}:
+    if chosen.get("kind") not in {"review", "resume", "feedback_check", "verify"}:
         return True
     if task is None:
+        if chosen.get("kind") == "verify":
+            chosen["ledger_recovery_state"] = "unavailable"
+            return False
         chosen["update_count"] = 0
         return True
     meta = _metadata(task)
     had_review = bool(meta.get("review_id") or meta.get("last_reviewed_sha")
                       or meta.get("update_count", 0) or task.get("status") in {"pr_open", "pr_changes"})
     if not had_review:
+        if chosen.get("kind") == "verify":
+            chosen["ledger_recovery_state"] = "unavailable"
+            return False
         chosen["update_count"] = 0
         return True
 
@@ -258,6 +270,7 @@ def restore_prior_ledger(chosen: dict, task: dict | None) -> bool:
 
     # The published status review is authoritative. An interrupted publication
     # is the next recoverable copy, followed by the legacy local ledger.
+    ledger_available = payload is not None
     if payload is None:
         pending = meta.get("pending_publication")
         pending_body = pending.get("publication_body") if isinstance(pending, dict) else None
@@ -269,6 +282,7 @@ def restore_prior_ledger(chosen: dict, task: dict | None) -> bool:
             if (pending_ledger is not None
                     and pending_ledger["head_sha"] == chosen["head_sha"]
                     and pending_ledger["base_sha"] == chosen["base_sha"]):
+                pending_ledger["status_summary"] = status_summary(pending_body)
                 payload = pending_ledger
 
     if payload is None:
@@ -281,7 +295,11 @@ def restore_prior_ledger(chosen: dict, task: dict | None) -> bool:
             update_count = meta.get("update_count", 0)
             if not isinstance(update_count, int) or isinstance(update_count, bool) or update_count < 0:
                 raise LedgerError("Legacy review update_count is invalid")
+            ledger_available = True
         else:
+            if chosen.get("kind") == "verify":
+                chosen["ledger_recovery_state"] = "unavailable"
+                return False
             if not _request_ledger_recovery(chosen, meta):
                 return False
             chosen["update_count"] = 0
@@ -297,6 +315,13 @@ def restore_prior_ledger(chosen: dict, task: dict | None) -> bool:
     else:
         ledger = payload["findings"]
         update_count = payload["update_count"]
+        ledger_available = True
+        if isinstance(payload.get("status_summary"), str):
+            chosen["pr_summary"] = payload["status_summary"]
+
+    if chosen.get("kind") == "verify" and not ledger_available:
+        chosen["ledger_recovery_state"] = "unavailable"
+        return False
 
     chosen["ledger_path"] = write_cycle_ledger(
         chosen["repo_key"], chosen["number"], chosen["head_sha"], chosen["base_sha"], ledger
@@ -483,7 +508,7 @@ def _external_feedback_key(item: dict, since: str, through: str,
         # This command is a review-authorization request, not feedback to send
         # through the model. It is handled separately after org membership is
         # verified.
-        if re.fullmatch(r"/review-bot\s+re-review", item["body"].strip(), re.IGNORECASE):
+        if re.fullmatch(r"/review-bot\s+(?:re-review|verify)", item["body"].strip(), re.IGNORECASE):
             return None
         # A negative ledger-recovery answer closes that request without making
         # every later preflight treat the same control comment as new feedback.
@@ -540,6 +565,27 @@ def _eligible_rereview_ids(chosen: dict, task: dict | None, since: str) -> list[
         if _is_org_member(org, request["login"]):
             eligible.append(request["id"])
     return eligible
+
+
+def _eligible_verify_ids(chosen: dict, task: dict | None, since: str) -> list[int]:
+    """Find exact verification commands from organization members on reviewed PRs."""
+    if task is None or task.get("status") != "pr_open":
+        return []
+    meta = _metadata(task)
+    review_id = meta.get("review_id")
+    if (not isinstance(review_id, int) or isinstance(review_id, bool) or review_id < 1
+            or not (meta.get("last_reviewed_sha") or meta.get("update_count"))):
+        return []
+    seen = meta.get("seen_verify_comment_ids") or []
+    if not isinstance(seen, list) or any(type(ident) is not int or ident <= 0 for ident in seen):
+        raise ValueError("Invalid seen_verify_comment_ids")
+    comments = fetch_comments(chosen["repo"], chosen["number"], since)
+    candidates = explicit_command_requests(
+        comments, since, chosen["updated_at"], set(seen), VERIFY_COMMAND
+    )
+    org = chosen["repo"].split("/", 1)[0]
+    return [request["id"] for request in candidates
+            if _is_org_member(org, request["login"])]
 
 
 def _task_pr(task: dict, repos: dict) -> tuple[str, str, int] | None:
@@ -625,7 +671,11 @@ def candidate(pr: dict, repo_key: str, repo: str, task: dict | None,
     elif force_review:
         kind, priority = "review", 1
     elif meta.get("last_reviewed_sha") != sha or meta.get("last_reviewed_base_sha") != base_sha:
-        kind, priority = "review", 1
+        if (meta.get("last_verified_sha") == sha
+                and meta.get("last_verified_base_sha") == base_sha):
+            kind, priority = "feedback_check", 2
+        else:
+            kind, priority = "review", 1
     elif pr.get("updatedAt", "") > meta.get("last_seen_updated_at", "") or pending_rereview:
         kind, priority = "feedback_check", 2
     elif status == "done" and not meta.get("merged_at"):
@@ -716,6 +766,15 @@ def pick_work(repos: dict, config: dict, tasks: list[dict],
                         item["kind"] = "review"
                         item["priority"] = 1
                         item["review_authorization"] = "approval_required"
+                    verify_ids = []
+                    if (not command_ids and item.get("review_authorization") != "label_added"
+                            and item["kind"] != "resume"):
+                        verify_ids = _eligible_verify_ids(item, task, since)
+                    if verify_ids:
+                        item["verify_comment_ids"] = verify_ids
+                        item["kind"] = "verify"
+                        item["priority"] = 1
+                        item.pop("review_authorization", None)
                     feedback_ids = external_feedback_ids(
                         repo, pr["number"], since, item["updated_at"], set(seen_feedback)
                     ) if task and item["kind"] in {"review", "feedback_check"} else []
@@ -780,13 +839,23 @@ def pick_work(repos: dict, config: dict, tasks: list[dict],
                     probe["repo"], probe["number"], since, through, set(seen_feedback)
                 )
                 command_ids = _eligible_rereview_ids(probe, by_key.get(probe["task_key"]), since)
+                verify_ids = []
+                if not command_ids:
+                    verify_ids = _eligible_verify_ids(probe, by_key.get(probe["task_key"]), since)
                 if command_ids:
                     probe["rereview_comment_ids"] = command_ids
                     probe["kind"] = "review"
                     probe["priority"] = 1
                     probe["review_authorization"] = "approval_required"
+                elif verify_ids:
+                    probe["verify_comment_ids"] = verify_ids
+                    probe["kind"] = "verify"
+                    probe["priority"] = 1
                 if command_ids or feedback_ids:
                     probe["feedback_comment_ids"] = feedback_ids
+                    found.append(probe)
+                    break
+                if verify_ids:
                     found.append(probe)
                     break
             except (RuntimeError, subprocess.TimeoutExpired, ValueError) as exc:
@@ -806,6 +875,7 @@ def main() -> None:
         excluded_task_keys: set[str] = set()
         recovery_waits: list[str] = []
         approval_waits: list[str] = []
+        verification_waits: list[str] = []
         while True:
             chosen, errors = pick_work(repos, config, tasks, excluded_task_keys)
             if chosen is None:
@@ -817,6 +887,9 @@ def main() -> None:
                 if approval_waits:
                     detail = ("Waiting for organization-member review approvals on "
                               + ", ".join(approval_waits) + "; " + detail)
+                if verification_waits:
+                    detail = ("Verification commands need a recoverable prior ledger on "
+                              + ", ".join(verification_waits) + "; " + detail)
                 output_result(status, detail)
                 return
             active_count = sum(
@@ -850,10 +923,13 @@ def main() -> None:
                 return
             if not proceed:
                 state = chosen.get("ledger_recovery_state", "waiting")
-                if state in {"asked", "waiting", "declined", "verification_unavailable"}:
+                if state in {"asked", "waiting", "declined", "verification_unavailable", "unavailable"}:
                     # A consent wait gates only this PR; keep scanning the queue.
                     excluded_task_keys.add(chosen["task_key"])
-                    recovery_waits.append(f"{chosen['repo']}#{chosen['number']}")
+                    if state == "unavailable":
+                        verification_waits.append(f"{chosen['repo']}#{chosen['number']}")
+                    else:
+                        recovery_waits.append(f"{chosen['repo']}#{chosen['number']}")
                     continue
                 output_result("skip", f"{chosen['repo']}#{chosen['number']}: ledger recovery state {state}")
                 return

@@ -30,6 +30,15 @@ Return one verdict for every finding. Mark uncertain when a needed source is
 unavailable. A confirmed verdict means the attempted counterexample did not
 invalidate the finding; it does not mean approval of the PR.
 
+For a verification-only request about an existing finding, inspect the
+proposed fix in the supplied current pinned sources and try to refute that the
+original issue is resolved. Return one verdict for each proposed addressed
+finding using the same `finding_id`, `status`, `refutation_check`, and `reason`
+fields. Use `confirmed` only when the fix is evidenced and the original issue
+no longer reproduces; use `refuted` when the issue remains or the fix misses a
+case, and `uncertain` when pinned evidence is insufficient. The evidence gate
+keeps refuted or uncertain findings open.
+
 When asked to check a custom-formatted review, compare each inline comment
 with the supplied confirmed findings, recorded skill results, and that skill's
 pinned guide. Use the comment's `skill` field to select its guide and confirm
