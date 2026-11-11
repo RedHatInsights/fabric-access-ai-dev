@@ -78,7 +78,6 @@ bot_status_update with this instance ID at cycle start and end.
   publisher.
 - `seen_rereview_comment_ids` records processed re-review command IDs;
   `seen_verify_comment_ids` records completed verification command IDs;
-  `seen_jira_comment_ids` records successfully handled Jira-creation command IDs;
   `seen_feedback_comment_ids` records human conversation/review comment IDs
   seen at the timestamp boundary; `pending_publication` records a validated
   but unfinished publication. Treat missing fields as empty lists and null,
@@ -475,6 +474,21 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    review body inside `publication.json` (flat, or with carried-forward status)
    and reports the update_count (0 on the first review).
 
+   After the verifier and evidence gate confirm the findings, route new
+   cross-repository follow-ups before preparing GitHub comments. For each new
+   `category="cross_repo"` finding, collect the distinct repositories in
+   `evidence.refs` that differ from the PR repository. Automatically create a
+   Jira only when this set contains exactly one repository and that repository
+   has a profile in the current repo's `review-context.yaml`; this creates the
+   ticket for the owning team's configured project, Team ID, and labels. Do
+   not create current-team tickets automatically. If the set is empty,
+   ambiguous, or unmapped, skip automatic creation; an organization member can
+   ask for a Jira in a PR comment. Pass only evidence-gate-confirmed findings
+   and their pinned references to `jira-ticket-creator`. Its target-specific
+   marker makes retries idempotent. A Jira creation failure does not suppress
+   valid GitHub findings; record the failed target and finding ID in task
+   state, and do not claim that a ticket was created.
+
    For `manifest.format == "standard"`, use the generated publication JSON and
    inline comments. The status summary has a `Review N` heading (without `#N`),
    the one-sentence `pr_summary`, and a `Findings` table with plain-text IDs,
@@ -633,6 +647,32 @@ A follow-up question gets a new Q-ID and a separate comment with its own
 marker; no-change responses say that no code change is indicated. Save
 processed answer comment IDs with the cycle watermark.
 
+For any new human comment, determine whether the author explicitly asks for a
+Jira issue; natural language is enough, and no slash command is required.
+Questions about whether a ticket might be useful are not creation requests.
+Verify the requester's organization membership before acting. For an explicit
+request about work owned by this service or an out-of-scope PR, use the
+`project-kessel/insights-rbac` Jira profile. For a finding owned by another
+repository, use that repository's profile only when pinned evidence identifies
+one configured owner (currently `project-kessel/inventory-api`). Do not infer
+ownership from the PR's changed-file location alone. If the owner or profile
+is ambiguous, ask one direct follow-up question and do not create an issue.
+Resolve settings with
+`python3 workflows/review-only/jira_config.py --repo-key <repo_key>
+--target-repository <owner/repo>` and pass the verified requester, PR,
+finding or out-of-scope context, pinned evidence, target repository and
+resolved settings to `jira-ticket-creator`. The creator applies the configured
+Team field/value and labels, searches its deterministic marker before create,
+and returns the result only to the runner. Do not publish Jira keys or URLs.
+For an explicit request, reply that the ticket was created without exposing
+the key or URL, and add
+`<!-- dev-review-bot:fabric-access-jira:<source-comment-id> -->`; check for
+that marker before posting so retries do not duplicate the reply. For an
+automatically created cross-repo ticket, do not add a separate PR comment.
+If explicit-request creation or confirmation fails, do not mark the requesting
+comment as seen or advance the feedback watermark; a retry finds the same Jira
+issue by its marker.
+
 Preflight inspects issue comments, review comments, and submitted reviews
 deterministically before starting this session. It selects `feedback_check`
 only when it finds an unseen human-authored item in the window; updates caused
@@ -683,43 +723,6 @@ deduplicate its ID in `seen_verify_comment_ids` only after the status review
 update and addressed-thread resolutions succeed; follow **Verification-only
 command** above. If both commands appear in one window, the full re-review
 request takes precedence and still requires approval.
-
-For repositories with a `jira` entry in `review-context.yaml`, a new top-level
-comment exactly matching `/review-bot jira F1` requests a Jira issue for that
-finding ID. Preflight accepts it only on a `pr_open` task with a recoverable
-status-review ledger and after verifying the comment author's organization
-membership. It emits `kind="jira"` with the comment IDs and finding IDs; the
-runner does not perform a full review. Confirm each requested finding is still
-open in the restored ledger, then load project, Team ID, and optional labels
-with `jira_config.py` and delegate creation only to `jira-ticket-creator`.
-Never create a ticket from an ordinary finding or comment. The Jira subagent
-must search for its deterministic request marker before creation. Record
-successful command IDs in `seen_jira_comment_ids`; on failure leave them
-unseen for retry, and do not advance `last_seen_updated_at` for a Jira-only
-cycle. Keep Jira keys and URLs out of public PR comments.
-
-### Jira-only command
-
-When preflight supplies `kind="jira"`, handle only its Jira request. Re-read
-the task; stop if it is paused, and preserve its `pr_open` status. The restored
-`work.ledger_path` must match the work item's current head/base SHAs. For every
-requested `F<n>`, find that exact entry in the ledger and require
-`status="open"`; do not create an issue for a missing, resolved, or stale
-entry. Load repository settings by running
-`python3 workflows/review-only/jira_config.py --repo-key <repo_key>`; do not
-print resolved values into comments or logs. Pass the verified author,
-request comment ID, repo key, PR number/URL, current SHAs, finding and pinned
-evidence, and resolved settings to `jira-ticket-creator`.
-
-Only the subagent may call Jira create/update tools. It creates at most one
-issue per PR finding, sets the Team field to Console Access using the
-configured Team ID, and applies only configured labels. It must fail closed if
-the Team ID cannot be confirmed as Console Access. Do not update or transition
-existing Jira issues. After success (including when the idempotency search
-finds an existing issue), add the command IDs to `metadata.seen_jira_comment_ids`
-and keep the task `pr_open`. Do not advance `last_seen_updated_at` or mark
-command IDs handled before success; failures leave them eligible for retry.
-Do not post Jira keys or URLs to GitHub.
 
 Otherwise, compare authorized corrections or acceptances with current code.
 `memory_store` is denied — put useful feedback in task state only. Record

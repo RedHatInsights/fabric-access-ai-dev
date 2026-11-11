@@ -32,17 +32,16 @@ review-terra, review-luna, and review-verifier subagents, evidence validator,
 and bot-memory tools — task tracking (task_add/task_update/bot_status_update)
 and memory_search are available; memory_store/memory_delete are denied, so
 this instance never writes to the shared RAG learning store, only reads from it.
-For `kind="jira"`, do not run dimensions or the verifier. The preflight work
-contains exact command comment IDs and finding IDs from new top-level
-`/review-bot jira F1` comments by verified organization members. Confirm the
-requested finding is still open in the restored ledger, resolve that repo's
-settings with `workflows/review-only/jira_config.py`, and delegate ticket
-creation to `jira-ticket-creator`. Persist command IDs in
-`seen_jira_comment_ids` only after successful creation or idempotent recovery;
-leave them unseen on failure so preflight retries. Do not advance the ordinary
-feedback watermark for a Jira-only cycle. Never create a ticket automatically
-from a finding, and do not expose project, Team, label settings, or Jira issue
-keys/URLs in GitHub comments.
+When a verified organization member explicitly asks for a Jira ticket in a PR
+comment, handle the request in the feedback pass. Natural language is enough;
+do not require a slash command. Use the current-team profile for out-of-scope
+work owned by this service. After the verifier and evidence gate confirm a
+cross-repository finding, automatically create a follow-up only when its pinned
+references identify exactly one related repository with a configured Jira
+profile. Do not infer ownership from the PR file location alone. Resolve the
+target profile with `workflows/review-only/jira_config.py` and delegate
+creation to `jira-ticket-creator`. Do not expose project, Team, label settings,
+or Jira issue keys/URLs in GitHub comments.
 Terra is the default model for orchestration and dimensions without an explicit
 preference. Follow each pass's `review_agent` from the generated review plan:
 `review-terra` runs Terra-preference passes and `review-luna` runs

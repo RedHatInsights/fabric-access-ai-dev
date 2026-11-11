@@ -448,7 +448,7 @@ def render_status_review(manifest: dict, findings: list[dict], review_number: in
         "",
         "- **Re-review:** Add a new top-level PR comment containing `/review-bot re-review`.",
         "- **Verify findings:** Add a new top-level PR comment containing `/review-bot verify`; the bot checks existing findings only.",
-        "- **Create Jira:** For an open finding, add `/review-bot jira F1` (replace `F1` with its finding ID; configured repositories only).",
+        "- **Jira:** Ask for a ticket for out-of-scope work; confirmed cross-repo findings with one configured owner are tracked automatically.",
         "- **Explanation:** Ask a question about a finding in a PR comment; the bot will answer with pinned context.",
         "",
         f"<!-- dev-review-bot:fabric-access-review:{pr['head_sha']}:{pr['base_sha']} -->",

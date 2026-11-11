@@ -50,13 +50,13 @@ cycle so bot-authored updates alone do not start a model session.
 
 | Piece | File | Script or AI | Role |
 |---|---|---|---|
-| Queue | `preflight/01-review-queue.py` → `review_queue.py` | Script | Picks one newly label-authorized review, approval-gated revision/re-review, feedback pass, explicit Jira request, or lifecycle reconciliation; checks unseen human comments before a feedback session |
+| Queue | `preflight/01-review-queue.py` → `review_queue.py` | Script | Picks one newly label-authorized review, approval-gated revision/re-review, feedback pass, or lifecycle reconciliation; checks unseen human comments before a feedback session |
 | Config validation | `review_config.py` | Script | Loads and strictly validates `review-context.yaml` (GitHub URL shape, `.md`-only doc links, unique ids) |
 | Context builder | `build_context.py` | Script | Checks out the PR head read-only, clones related repos at a pinned SHA, fetches configured Markdown docs at a pinned commit, writes `manifest.json` |
 | Skill preparation | `review_skills.py` | Script | Selects dimensions, reads selected recipe YAML at a pinned commit, and generates per-run review skills |
 | Impact analysis | `impact_analysis.py` | Script | Deterministically (no LLM) extracts changed identifiers from the diff and `git grep`-matches them in related repos → `impact.json`'s `consumer_usages` (candidates, not confirmed breakage) |
-| PR command detection | `rereview_requests.py`, `jira_requests.py`, `review_queue.py` | Script | Finds exact re-review, verification, and Jira commands; preflight verifies each author's organization membership before acting |
-| Jira issue creation | `.opencode/agents/jira-ticket-creator.md`, `jira_config.py` | **AI** (subagent) + script | Handles only `/review-bot jira F1` for an open ledger finding; loads repository-scoped App Interface settings and checks an idempotency marker before creation |
+| PR command detection | `rereview_requests.py`, `review_queue.py` | Script | Finds exact re-review and verification commands; the runner verifies each author's organization membership before acting |
+| Jira issue creation | `.opencode/agents/jira-ticket-creator.md`, `jira_config.py` | **AI** (subagent) + script | Handles an explicit Jira request or an authorized cross-repo follow-up using the target repository's App Interface profile and an idempotency marker |
 | Model routing | `review_skills.py` + `dimensions.yaml` | Script | Resolves each pass's model preference to the configured Terra or Luna subagent in `review_plan` |
 | Review criteria | `skills/dimensional-review/SKILL.md` | **AI** (review-terra / review-luna) | Multi-dimension review over pinned context using the configured model profile; results are deduped and consensus-scored |
 | Review workers | `.opencode/agents/review-terra.md`, `review-luna.md` | **AI** (subagents) | Read-only workers for dimensions routed to Terra or Luna |
@@ -132,15 +132,14 @@ legacy-state reconciliation:
    | `resume` | Task status is `in_progress`/`pr_changes` and its stored active head/base pair matches the PR | 0 (highest) |
    | `review` | A new event added the configured label, or the current head/base pair differs from the stored review pair and needs approval | 1 |
    | `verify` | A new exact `/review-bot verify` comment from an organization member asks to check existing findings only | 1 |
-   | `jira` | On a configured repo, a new exact `/review-bot jira F1` comment from an organization member requests an issue for an open finding in the restored ledger | 0 |
    | `feedback_check` | SHA unchanged and preflight finds unseen human issue/review feedback; `/review-bot re-review` requests approval for a fresh pass | 2 |
    | `merge_complete` | GitHub confirms a tracked PR has merged | 0 |
    | `closed_unmerged` | GitHub confirms a tracked PR closed without merging | 0 |
    | `reconcile_open` | A legacy `done` task is still open | 3 |
 
-   Jira work restores the existing ledger, does not run review dimensions, and
-   leaves the normal feedback watermark unchanged. If creation fails, its
-   command ID stays unseen so a later cycle can retry it. Everything else
+   Jira requests are detected within the ordinary feedback cycle after
+   organization membership is verified. A failed creation leaves its request
+   comment unseen so a later cycle can retry it. Everything else
    (already reviewed, nothing newer) is excluded. A posted review moves the
    task to `pr_open`; lifecycle-only work marks it `done` only
    after a live GitHub response includes `mergedAt`. Closed, unmerged PRs are

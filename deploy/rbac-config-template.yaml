@@ -17,6 +17,12 @@ parameters:
   value: ""
 - name: BOT_JIRA_LABELS_INSIGHTS_RBAC
   value: "[]"
+- name: BOT_JIRA_PROJECT_INVENTORY_API
+  value: ""
+- name: BOT_JIRA_TEAM_ID_INVENTORY_API
+  value: ""
+- name: BOT_JIRA_LABELS_INVENTORY_API
+  value: "[]"
 - name: BOT_REPLICAS
   value: "0"
 - name: BOT_BOARD_NAME
@@ -188,6 +194,12 @@ objects:
             value: ${BOT_JIRA_TEAM_ID_INSIGHTS_RBAC}
           - name: BOT_JIRA_LABELS_INSIGHTS_RBAC
             value: ${BOT_JIRA_LABELS_INSIGHTS_RBAC}
+          - name: BOT_JIRA_PROJECT_INVENTORY_API
+            value: ${BOT_JIRA_PROJECT_INVENTORY_API}
+          - name: BOT_JIRA_TEAM_ID_INVENTORY_API
+            value: ${BOT_JIRA_TEAM_ID_INVENTORY_API}
+          - name: BOT_JIRA_LABELS_INVENTORY_API
+            value: ${BOT_JIRA_LABELS_INVENTORY_API}
           - name: BOT_MEMORY_URL
             value: http://devbot-memory-server:8080/mcp
           - name: BOT_MEMORY_HEALTH_URL

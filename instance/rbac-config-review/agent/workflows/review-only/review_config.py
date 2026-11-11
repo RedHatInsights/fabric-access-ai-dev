@@ -137,12 +137,34 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
                 raise ReviewConfigError(
                     f"repositories.{repo_key}.jira.team_field must be a Jira custom-field ID"
                 )
-            for field in ("project_env", "team_id_env", "labels_env"):
-                env_name = jira.get(field)
-                if not isinstance(env_name, str) or not _ENV_NAME.fullmatch(env_name):
+            profiles = jira.get("profiles")
+            if not isinstance(profiles, dict) or not profiles:
+                raise ReviewConfigError(f"repositories.{repo_key}.jira.profiles must be a non-empty mapping")
+            target_repositories: set[str] = set()
+            for profile_name, profile in profiles.items():
+                if not isinstance(profile_name, str) or not _ID.fullmatch(profile_name):
+                    raise ReviewConfigError(f"repositories.{repo_key}.jira profile names must be lowercase IDs")
+                if not isinstance(profile, dict):
+                    raise ReviewConfigError(f"repositories.{repo_key}.jira.profiles.{profile_name} must be a mapping")
+                target_repository = profile.get("target_repository")
+                if (not isinstance(target_repository, str)
+                        or len(target_repository.split("/")) != 2
+                        or any(not _REPO_PART.fullmatch(part) for part in target_repository.split("/"))):
                     raise ReviewConfigError(
-                        f"repositories.{repo_key}.jira.{field} must name an uppercase environment variable"
+                        f"repositories.{repo_key}.jira.profiles.{profile_name}.target_repository must be owner/repo"
                     )
+                if target_repository in target_repositories:
+                    raise ReviewConfigError(f"Jira target repository is duplicated: {target_repository}")
+                target_repositories.add(target_repository)
+                if not isinstance(profile.get("team_name"), str) or not profile["team_name"].strip():
+                    raise ReviewConfigError(f"repositories.{repo_key}.jira.profiles.{profile_name}.team_name is required")
+                for field in ("project_env", "team_id_env", "labels_env"):
+                    env_name = profile.get(field)
+                    if not isinstance(env_name, str) or not _ENV_NAME.fullmatch(env_name):
+                        raise ReviewConfigError(
+                            f"repositories.{repo_key}.jira.profiles.{profile_name}.{field} "
+                            "must name an uppercase environment variable"
+                        )
         if context.get("format") == "custom" and not context.get("skills"):
             raise ReviewConfigError(f"repositories.{repo_key}.format custom needs at least one skill")
         if "skills" in context:
