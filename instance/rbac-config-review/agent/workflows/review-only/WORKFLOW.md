@@ -45,11 +45,13 @@ flowchart LR
 Gray = deterministic script, $0, no model call. Red = an LLM reasons over
 pinned context and can be wrong. `C`, `T`, `D`, and `M` spend tokens during a review;
 `A`, `B`, and `E` are plain Python. Preflight checks comments before a feedback
-cycle so bot-authored updates alone do not start a model session.
+cycle; unmarked bot updates and this bot's own comments do not start a model
+session. Comments from another bot account can start one when the body contains
+`dev-review-bot`, `fabric-access-finding`, or `fabric-access-review`.
 
 | Piece | File | Script or AI | Role |
 |---|---|---|---|
-| Queue | `preflight/01-review-queue.py` → `review_queue.py` | Script | Picks one newly label-authorized review, approval-gated revision/re-review, feedback pass, or lifecycle reconciliation; checks unseen human comments before a feedback session |
+| Queue | `preflight/01-review-queue.py` → `review_queue.py` | Script | Picks one newly label-authorized review, approval-gated revision/re-review, feedback pass, or lifecycle reconciliation; checks unseen human and marked review-bot comments before a feedback session |
 | Config validation | `review_config.py` | Script | Loads and strictly validates `review-context.yaml` (GitHub URL shape, `.md`-only doc links, unique ids) |
 | Context builder | `build_context.py` | Script | Checks out the PR head read-only, clones related repos at a pinned SHA, fetches configured Markdown docs at a pinned commit, writes `manifest.json` |
 | Skill preparation | `review_skills.py` | Script | Selects dimensions, reads selected recipe YAML at a pinned commit, and generates per-run review skills |
@@ -127,7 +129,7 @@ legacy-state reconciliation:
    |---|---|---|
    | `resume` | Task status is `in_progress`/`pr_changes` and its stored active head/base pair matches the PR | 0 (highest) |
    | `review` | A new event added the configured label, or the current head/base pair differs from the stored review pair and needs approval | 1 |
-   | `feedback_check` | SHA unchanged and preflight finds unseen human issue/review feedback; `/review-bot re-review` requests approval for a fresh pass | 2 |
+   | `feedback_check` | SHA unchanged and preflight finds unseen human or marked external review-bot feedback; `/review-bot re-review` requests approval for a fresh pass | 2 |
    | `merge_complete` | GitHub confirms a tracked PR has merged | 0 |
    | `closed_unmerged` | GitHub confirms a tracked PR closed without merging | 0 |
    | `reconcile_open` | A legacy `done` task is still open, or a closed-unmerged PR was reopened | 3 |
@@ -156,15 +158,18 @@ command only starts an approval request; it does not authorize review. The
 runner verifies organization membership on approvals and on feedback before
 acting. Ordinary feedback does not trigger a full review. Before starting a feedback
 session, preflight checks issue comments, review comments, and submitted reviews
-for unseen human-authored activity. Bot-authored updates alone do not invoke the
-model. Same-second feedback IDs are saved to prevent replay.
+for unseen human-authored activity or comments from a different bot account
+whose body contains `dev-review-bot`, `fabric-access-finding`, or
+`fabric-access-review`. Comments by this bot and unmarked bot updates do not
+invoke the model. Same-second feedback IDs are saved to prevent replay.
 Requests arriving after a review starts are left for a later cycle. A validated
 but unfinished publication is recorded in task state so retries reuse its body
 and number rather than counting another review.
 When the queue otherwise has no work, it also checks comments at the stored
 timestamp boundary: GitHub's second-precision `updatedAt` can be unchanged by
 a request made in that same second. This uses GitHub API calls but does not
-start an AI session when the PR only has bot comments.
+start an AI session when the PR only has comments by this bot or unmarked bot
+comments.
 
 ### What identifies a task
 

@@ -522,8 +522,10 @@ processed answer comment IDs with the cycle watermark.
 
 Preflight inspects issue comments, review comments, and submitted reviews
 deterministically before starting this session. It selects `feedback_check`
-only when it finds an unseen human-authored item in the window; updates caused
-only by this bot's comments do not start an AI cycle. Store the returned
+when it finds unseen human feedback or a marked review-bot comment from a
+different bot account. A marked comment contains `dev-review-bot`,
+`fabric-access-finding`, or `fabric-access-review`. Comments by this review bot
+and unmarked bot comments do not start an AI cycle. Store the returned
 `feedback_comment_ids` so same-second comment timestamps are not replayed.
 
 A member can request another full review, even on the same commit, by posting
@@ -540,8 +542,9 @@ already present without a new label-add event cannot trigger a review.
 Before acting on any new comment or review thread, including an ordinary
 correction or acceptance, verify its author's organization membership using
 the core `check_org_member` / `store_org_member` procedure. Ignore non-members
-and bot-authored feedback completely; a failed membership check leaves the
-watermark unchanged for retry.
+and unmarked bot-authored feedback; marked review-bot comments are eligible
+only when authored by a different account from this bot. A failed membership
+check leaves the watermark unchanged for retry.
 
 Find candidates with:
 

@@ -31,6 +31,9 @@ RESUMABLE = {"in_progress", "pr_changes"}
 PR_FIELDS = "number,title,url,headRefOid,baseRefOid,headRefName,isDraft,author,updatedAt"
 PR_STATE_FIELDS = "state,mergedAt,closedAt,headRefOid,baseRefOid,updatedAt,url,title,headRefName"
 REVIEWABLE_BOT_AUTHORS = {"platex-rehor-bot"}
+REVIEW_BOT_FEEDBACK_MARKERS = (
+    "dev-review-bot", "fabric-access-finding", "fabric-access-review",
+)
 
 
 def task_key(repo: str, number: int) -> str:
@@ -491,9 +494,14 @@ def _external_feedback_key(item: dict, since: str, through: str,
             return None
     user = item.get("user") or item.get("author") or {}
     login = user.get("login") if isinstance(user, dict) else None
+    body = item.get("body")
+    marked_review_bot = (
+        isinstance(body, str)
+        and any(marker in body.casefold() for marker in REVIEW_BOT_FEEDBACK_MARKERS)
+    )
     if (not isinstance(login, str) or not login.strip()
-            or user.get("type") == "Bot"
-            or login.casefold() == bot_login.casefold()):
+            or login.casefold() == bot_login.casefold()
+            or (user.get("type") == "Bot" and not marked_review_bot)):
         return None
     timestamp = (item.get("updated_at") or item.get("created_at")
                  or item.get("submitted_at"))
@@ -507,7 +515,7 @@ def _external_feedback_key(item: dict, since: str, through: str,
 
 def external_feedback_ids(repo: str, number: int, since: str, through: str,
                           seen_ids: set[str]) -> list[str]:
-    """Return same-window human feedback IDs, excluding bot-only PR updates."""
+    """Return human and marked external review-bot feedback IDs in the window."""
     found: list[str] = []
     bot_login = _bot_login()
     sources = [
