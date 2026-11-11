@@ -4,6 +4,11 @@
     "upstream": "https://github.com/project-kessel/insights-rbac.git",
     "readonly": true
   },
+  "inventory-api": {
+    "url": "https://github.com/project-kessel/inventory-api.git",
+    "upstream": "https://github.com/project-kessel/inventory-api.git",
+    "readonly": true
+  },
   "rbac-config": {
     "url": "https://github.com/project-kessel/rbac-config.git",
     "upstream": "https://github.com/project-kessel/rbac-config.git",

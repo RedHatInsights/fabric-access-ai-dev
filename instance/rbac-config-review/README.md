@@ -80,11 +80,12 @@ gets the intended context and skills; the loader validates the shape of each
 mapping but does not currently reject unmatched repository keys.
 
 In the current configuration, `project-repos.json` scans `insights-rbac`,
-`rbac-config`, `entitlements-api-go`, `uhc-auth-proxy`, `turnpike`, and
-`cloudwatch-aggregator`. Context entries exist for `insights-rbac` and
-`rbac-config`; linked documents are configured for `insights-rbac`. The other
-allowlisted repositories can still be reviewed, but do not get those extra
-context sources unless entries are added for them.
+`inventory-api`, `rbac-config`, `entitlements-api-go`, `uhc-auth-proxy`,
+`turnpike`, and `cloudwatch-aggregator`. Context entries exist for
+`insights-rbac`, `inventory-api`, and `rbac-config`; linked documents are
+configured for `insights-rbac` and `inventory-api`. The other allowlisted
+repositories can still be reviewed, but do not get those extra context sources
+unless entries are added for them.
 
 ## Comment writing and context questions
 
