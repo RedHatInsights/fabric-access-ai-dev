@@ -116,8 +116,10 @@ each one — a session only launches if a PR survives all of this. It also
 checks tracked tasks missing from the open labeled list for merge, closure, or
 legacy-state reconciliation:
 
-1. **Filters out**: drafts, PRs authored by the bot itself, and PRs missing a
-   head/base SHA. A PR paused for its current SHA pair is checked only when
+1. **Filters out**: drafts, PRs authored by the configured bot account except
+   `platex-rehor-bot`, and PRs missing a head/base SHA. PRs from
+   `platex-rehor-bot` remain eligible even when it is the configured
+   `GH_USER_NAME`. A PR paused for its current SHA pair is checked only when
    there is newer feedback.
 2. **Classifies survivors** into one kind (first match wins):
 
