@@ -269,8 +269,8 @@ with `review_label`, and at most one eligible PR in a cycle. A newly added
 `review_label` event is the only automatic authorization for a full review;
 the label merely being present does not authorize one. A changed head/base SHA
 or re-review request requires explicit organization-member approval before
-review work starts. It skips drafts, the bot's own PRs, and entries without
-head/base revisions. It tracks work in the shared task-state service, so
+review work starts. It skips drafts, self-authored PRs other than those from
+`platex-rehor-bot`, and entries without head/base revisions. It tracks work in the shared task-state service, so
 interrupted authorized reviews can resume and later reviews can update the
 existing summary instead of creating duplicate review summaries.
 

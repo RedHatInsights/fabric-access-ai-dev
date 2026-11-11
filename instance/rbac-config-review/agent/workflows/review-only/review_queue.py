@@ -30,6 +30,7 @@ ACTIVE = {"in_progress", "pr_open", "pr_changes"}
 RESUMABLE = {"in_progress", "pr_changes"}
 PR_FIELDS = "number,title,url,headRefOid,baseRefOid,headRefName,isDraft,author,updatedAt"
 PR_STATE_FIELDS = "state,mergedAt,closedAt,headRefOid,baseRefOid,updatedAt,url,title,headRefName"
+REVIEWABLE_BOT_AUTHORS = {"platex-rehor-bot"}
 
 
 def task_key(repo: str, number: int) -> str:
@@ -596,7 +597,9 @@ def candidate(pr: dict, repo_key: str, repo: str, task: dict | None,
     if not isinstance(pr.get("number"), int):
         return None
     author = (pr.get("author") or {}).get("login", "")
-    if author.lower() == os.environ.get("GH_USER_NAME", "").lower() and author:
+    author_login = author.casefold() if isinstance(author, str) else ""
+    bot_login = os.environ.get("GH_USER_NAME", "").strip().casefold()
+    if author_login and author_login == bot_login and author_login not in REVIEWABLE_BOT_AUTHORS:
         return None
     sha = pr.get("headRefOid")
     base_sha = pr.get("baseRefOid")
