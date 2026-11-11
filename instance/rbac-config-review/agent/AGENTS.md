@@ -26,15 +26,17 @@ Follow the active workflow AGENTS.md for the exact cycle.
 The review bot's default model is GPT-6.1 Terra. It is configured on both the
 instance (`instance.yaml`) and the primary `review-runner` agent. Use Terra for
 overall review orchestration and dimensions with no explicit preference.
-Dimensions with a `luna` preference use Luna. The separate verifier uses Luna.
+Dimensions with a `luna` preference use Luna at high reasoning effort. The
+separate verifier also uses Luna at high effort. Terra workers remain at
+medium effort.
 
 Dimensions can set `model_preference` in
 `skills/dimensional-review/dimensions.yaml`:
 
 | Preference | Worker | Intended use |
 |---|---|---|
-| `terra` | Read-only `review-terra` subagent | Default for orchestration and dimensions without a preference; also used for broad, cross-cutting, or high-judgment analysis, including dimensions where missing a subtle interaction could affect correctness, security, architecture, or concurrency. |
-| `luna` | Read-only `review-luna` subagent | Used for explicitly routed focused checks. |
+| `terra` | Read-only `review-terra` subagent, medium effort | Default for orchestration and dimensions without a preference; also used for broad, cross-cutting, or high-judgment analysis, including dimensions where missing a subtle interaction could affect correctness, security, architecture, or concurrency. |
+| `luna` | Read-only `review-luna` subagent, high effort | Used for explicitly routed focused checks. |
 
 The catalog's `config.model_routing.default` is `terra`. The review planner
 resolves every selected built-in or dynamic pass to a preference and worker in
@@ -47,7 +49,7 @@ Run passes in batches of at most four concurrent workers, forming batches in
 plan order. Invoke each selected worker with the same pinned PR context and
 only its assigned dimension. Wait for all results in a batch, record them by
 dimension name, then start the next batch. The separate `review-verifier`
-uses Luna to attempt to refute proposed findings. If a selected
+uses Luna at high effort to attempt to refute proposed findings. If a selected
 worker is unavailable, mark that pass failed and continue with the other
 planned passes; do not silently retry it with a different model. Follow the
 workflow's publication gate if no review pass completes.

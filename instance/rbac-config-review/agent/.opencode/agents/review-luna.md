@@ -5,7 +5,7 @@ model: rehor-openai/gpt-6-luna
 request:
   body:
     reasoning:
-      effort: medium
+      effort: high
 permissions:
   - { action: edit, resource: "*", effect: deny }
   - { action: shell, resource: "*", effect: deny }

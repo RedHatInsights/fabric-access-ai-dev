@@ -25,7 +25,7 @@
           "name": "GPT-6 Luna",
           "capabilities": { "reasoning": { "supported": true } },
           "settings": {
-            "reasoningEffort": "medium"
+            "reasoningEffort": "high"
           }
         }
       }
