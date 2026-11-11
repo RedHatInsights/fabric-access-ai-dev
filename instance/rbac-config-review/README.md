@@ -322,16 +322,18 @@ review deployment settings are:
 `BOT_LABEL` is passed to the bot as a deployment label; it is separate from the
 GitHub PR label selected by `review-context.yaml: review_label`.
 
-| Profile | Agent | Configured model |
+| Profile | Configured model | Agents and responsibility |
 |---|---|---|
-| `terra` | `review-runner`, `review-terra` | `rehor-openai/gpt-6.1-terra` |
-| `luna` | `review-luna`, `review-verifier` | `rehor-openai/gpt-6-luna` |
+| `terra` | `rehor-openai/gpt-6.1-terra` | `review-runner` orchestrates the review; `review-terra` handles Terra-routed dimensions; `missing-context-detector` identifies material context gaps and evaluates author answers. |
+| `luna` | `rehor-openai/gpt-6-luna` | `review-luna` handles Luna-routed dimensions; `review-verifier` independently tries to refute proposed findings. |
 
 The primary `review-runner` uses Terra for orchestration. Dimension passes are
 dispatched in batches of at most four concurrent workers to `review-terra` or
 `review-luna` according to the resolved model preference. Results are recorded
 by dimension before the next batch. The separate `review-verifier` subagent
-also uses Luna to refute proposed findings. See the [runner config](agent/.opencode/agents/review-runner.md),
+also uses Luna to refute proposed findings. The `missing-context-detector`
+uses Terra for questions that cannot be answered from pinned context and for
+evaluating author responses. See the [runner config](agent/.opencode/agents/review-runner.md),
 [Terra reviewer config](agent/.opencode/agents/review-terra.md),
 [Luna reviewer config](agent/.opencode/agents/review-luna.md),
 [verifier config](agent/.opencode/agents/review-verifier.md), and

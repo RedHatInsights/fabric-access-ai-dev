@@ -142,6 +142,33 @@ preference passes use the read-only `review-luna` subagent. A missing
 preference uses the catalog's Terra default. The separate `review-verifier`
 subagent uses Luna for evidence refutation.
 
+#### Model and subagent responsibilities
+
+| Agent | Model | Work |
+|---|---|---|
+| `review-runner` (primary) | `rehor-openai/gpt-6.1-terra` | Orchestrates context, dimension dispatch, merging, and publication. |
+| `review-terra` (subagent) | `rehor-openai/gpt-6.1-terra` | Reviews dimensions whose catalog entry sets `model_preference: terra`. |
+| `review-luna` (subagent) | `rehor-openai/gpt-6-luna` | Reviews dimensions whose catalog entry sets `model_preference: luna`. |
+| `missing-context-detector` (subagent) | `rehor-openai/gpt-6.1-terra` | Finds material questions not answerable from pinned context and evaluates the author's answers. |
+| `review-verifier` (subagent) | `rehor-openai/gpt-6-luna` | Independently attempts to refute each proposed finding against pinned evidence. |
+
+#### Dimension routing
+
+`config.model_routing.default` is `terra`. An explicit
+`model_preference` overrides that default; an omitted preference routes to
+`review-terra`. The current explicit assignments are:
+
+| Route | Dimensions |
+|---|---|
+| Terra | `correctness`, `architecture`, `security`, `concurrency`, `db-schema`, `cross-repo-dependencies` |
+| Luna | `code-quality`, `documentation`, `observability`, `performance`, `error-handling`, `test-quality`, `api-contract`, `db-query`, `integration`, `vulnerability`, `go-idioms`, `react-patternfly`, `learning-extraction` |
+| Terra fallback | `goose-kiss-review` and any future dimension without `model_preference` |
+
+The review level and applicability rules decide which dimensions run for a PR;
+model routing only selects the worker for a dimension after it is selected.
+If that worker is unavailable, record the pass as failed rather than changing
+models silently. The `high` preset includes all applicable dimensions.
+
 Run applicable dimensions in **bounded parallel batches of at most four**,
 keeping the review-plan order when forming each batch. Dispatch the independent
 worker calls in a batch concurrently, using each pass's `review_agent`, pinned
@@ -257,7 +284,7 @@ All thresholds are defined in the sibling `dimensions.yaml` under `config:`:
 ## Adding a New Dimension
 
 1. Create a focused reviewer guide at reviewers/<dimension-name>.md. Keep it specific to that review concern.
-2. Add a dimension entry to dimensions.yaml with its name, category, language and optional file-pattern match rules, a `model_preference` (`terra` or `luna`; omitted means Luna), and the following source fields:
+2. Add a dimension entry to dimensions.yaml with its name, category, language and optional file-pattern match rules, a `model_preference` (`terra` or `luna`; omitted means the configured Terra default), and the following source fields:
        source:
          path: reviewers/<dimension-name>.md
          plugin: dimensional-review:<dimension-name>
