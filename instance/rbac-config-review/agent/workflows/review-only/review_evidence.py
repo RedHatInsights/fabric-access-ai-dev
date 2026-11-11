@@ -447,6 +447,7 @@ def render_status_review(manifest: dict, findings: list[dict], review_number: in
         "---",
         "",
         "- **Re-review:** Add a new top-level PR comment containing `/review-bot re-review`.",
+        "- **Verify findings:** Add a new top-level PR comment containing `/review-bot verify`; the bot checks existing findings only.",
         "- **Explanation:** Ask a question about a finding in a PR comment; the bot will answer with pinned context.",
         "",
         f"<!-- dev-review-bot:fabric-access-review:{pr['head_sha']}:{pr['base_sha']} -->",
@@ -716,12 +717,18 @@ def render_custom(manifest: dict, ledger: list[dict], new_findings: list[dict],
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("manifest", "findings", "verdicts", "publication-output"):
+    for name in ("manifest", "publication-output"):
         parser.add_argument(f"--{name}", required=True, type=Path)
+    parser.add_argument("--findings", type=Path, help="Proposed finding JSON for a full review")
+    parser.add_argument("--verdicts", type=Path, help="Verifier verdicts for proposed findings")
     parser.add_argument("--ledger", type=Path, help="Path to the previous cycle's ledger.json, if any")
     parser.add_argument("--verifications", type=Path, help="Proposed re-checks of open ledger entries")
     parser.add_argument("--verification-verdicts", type=Path, help="review-verifier's verdicts for 'addressed' re-checks")
-    parser.add_argument("--update-count", type=int, help="Update count so far; this run writes update-count + 1")
+    parser.add_argument("--update-count", type=int,
+                        help="Current review count; full reviews increment it, verification-only runs preserve it")
+    parser.add_argument("--verification-only", action="store_true",
+                        help="Update only prior finding statuses without incrementing the review number")
+    parser.add_argument("--pr-summary", help="Existing one-line PR summary to preserve during verification")
     parser.add_argument("--ledger-output", type=Path, help="Where to write the updated ledger.json")
     parser.add_argument("--inline-comments-output", type=Path,
                         help="Where to write inline comments rendered from confirmed findings")
@@ -745,6 +752,8 @@ def main() -> None:
     try:
         manifest = json.loads(args.manifest.read_text())
         impact = json.loads(Path(manifest["impact_path"]).read_text())
+        if not args.verification_only and (args.findings is None or args.verdicts is None):
+            parser.error("--findings and --verdicts are required unless --verification-only is used")
         if bool(args.context_questions) != bool(args.context_question_comments_output):
             raise EvidenceError("--context-questions and --context-question-comments-output must be used together")
         if bool(args.context_responses) != bool(args.context_response_comments_output):
@@ -761,22 +770,42 @@ def main() -> None:
             for comment in response_comments:
                 ensure_public_content(comment["body"], "Context response")
             args.context_response_comments_output.write_text(json.dumps(response_comments, indent=2))
-        findings_data = json.loads(args.findings.read_text())
-        summary = validate_pr_summary(findings_data, manifest)
-        findings = validate_findings(findings_data, manifest, impact)
-        accepted = confirmed(findings, json.loads(args.verdicts.read_text()))
-        if args.ledger is None:
-            new_ledger = apply_ledger_updates([], accepted, [], manifest["pr"]["head_sha"])
-            update_count = 0
+        if args.verification_only:
+            if (args.ledger is None or args.verifications is None or args.verification_verdicts is None
+                    or args.ledger_output is None or args.update_count is None):
+                raise EvidenceError("--verification-only requires --ledger, --verifications, "
+                                    "--verification-verdicts, --ledger-output, and --update-count")
+            summary = validate_pr_summary(
+                {"pr_summary": args.pr_summary} if args.pr_summary else {}, manifest
+            )
+            findings = []
+            accepted = []
+            ledger = json.loads(args.ledger.read_text())
+            verifications = validate_verifications(
+                json.loads(args.verifications.read_text()), ledger, manifest
+            )
+            resolved = confirm_verifications(
+                verifications, json.loads(args.verification_verdicts.read_text())
+            )
+            new_ledger = apply_ledger_updates(ledger, [], resolved, manifest["pr"]["head_sha"])
+            update_count = args.update_count
         else:
-            if not (args.verifications and args.verification_verdicts and args.ledger_output and args.update_count is not None):
-                raise EvidenceError("--ledger requires --verifications, --verification-verdicts, --update-count, --ledger-output")
-            ledger = json.loads(args.ledger.read_text()) if args.ledger.exists() else []
-            verifications = validate_verifications(json.loads(args.verifications.read_text()), ledger, manifest)
-            resolved = confirm_verifications(verifications, json.loads(args.verification_verdicts.read_text()))
-            new_ledger = apply_ledger_updates(ledger, accepted, resolved, manifest["pr"]["head_sha"])
-            update_count = args.update_count + 1
-        format_name = manifest.get("format", "standard")
+            findings_data = json.loads(args.findings.read_text())
+            summary = validate_pr_summary(findings_data, manifest)
+            findings = validate_findings(findings_data, manifest, impact)
+            accepted = confirmed(findings, json.loads(args.verdicts.read_text()))
+            if args.ledger is None:
+                new_ledger = apply_ledger_updates([], accepted, [], manifest["pr"]["head_sha"])
+                update_count = 0
+            else:
+                if not (args.verifications and args.verification_verdicts and args.ledger_output and args.update_count is not None):
+                    raise EvidenceError("--ledger requires --verifications, --verification-verdicts, --update-count, --ledger-output")
+                ledger = json.loads(args.ledger.read_text()) if args.ledger.exists() else []
+                verifications = validate_verifications(json.loads(args.verifications.read_text()), ledger, manifest)
+                resolved = confirm_verifications(verifications, json.loads(args.verification_verdicts.read_text()))
+                new_ledger = apply_ledger_updates(ledger, accepted, resolved, manifest["pr"]["head_sha"])
+                update_count = args.update_count + 1
+        format_name = "standard" if args.verification_only else manifest.get("format", "standard")
         if format_name == "custom":
             if not args.skill_results:
                 raise EvidenceError("Custom format requires --skill-results")
@@ -800,10 +829,14 @@ def main() -> None:
         elif format_name == "standard":
             if args.custom_format or args.custom_verdict or args.prepare_custom or args.skill_results:
                 raise EvidenceError("Custom formatting options require format: custom")
-            body = render_review(manifest, accepted, summary) if args.ledger is None else render_ledger(
-                manifest, new_ledger, accepted, update_count, summary
-            )
-            comments = render_inline_comments(accepted)
+            if args.verification_only:
+                body = render_ledger(manifest, new_ledger, [], update_count, summary)
+                comments = []
+            else:
+                body = render_review(manifest, accepted, summary) if args.ledger is None else render_ledger(
+                    manifest, new_ledger, accepted, update_count, summary
+                )
+                comments = render_inline_comments(accepted)
         else:
             raise EvidenceError("Unknown review format")
         ensure_public_content(body, "Status review")

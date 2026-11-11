@@ -111,7 +111,8 @@ def fetch_doc(url: str) -> tuple[str, str]:
 
 
 def build(repo_key: str, pr_number: int, expected_head: str, expected_base: str, output_root: Path,
-          focus: list[str] | None = None, level: str | None = None) -> dict:
+          focus: list[str] | None = None, level: str | None = None,
+          verification_only: bool = False) -> dict:
     config = load_config()
     project_repos = json.loads((Path.cwd() / "project-repos.json").read_text())
     entry = project_repos.get(repo_key)
@@ -188,10 +189,13 @@ def build(repo_key: str, pr_number: int, expected_head: str, expected_base: str,
     impact_path = snapshot / "impact.json"
     impact_path.write_text(json.dumps(make_impact_report(manifest, patch), indent=2))
     manifest["impact_path"] = str(impact_path)
-    run_root = snapshot / "review-runs"
-    run_root.mkdir(exist_ok=True)
-    run_path = Path(tempfile.mkdtemp(prefix="run-", dir=run_root))
-    manifest["review_plan"] = prepare_review(manifest, config, run_path, focus=focus, level=level)
+    if verification_only:
+        manifest["review_plan"] = {"passes": []}
+    else:
+        run_root = snapshot / "review-runs"
+        run_root.mkdir(exist_ok=True)
+        run_path = Path(tempfile.mkdtemp(prefix="run-", dir=run_root))
+        manifest["review_plan"] = prepare_review(manifest, config, run_path, focus=focus, level=level)
     manifest_path = snapshot / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2))
     return {"manifest_path": str(manifest_path), **manifest}
@@ -206,11 +210,14 @@ def main() -> None:
     parser.add_argument("--output-root", type=Path, default=Path("data/review-context"))
     parser.add_argument("--focus", help="Comma-separated dimension names")
     parser.add_argument("--level", help="Configured dimension level")
+    parser.add_argument("--verification-only", action="store_true",
+                        help="Build pinned evidence context without selecting or generating review dimensions")
     args = parser.parse_args()
     try:
         focus = args.focus.split(",") if args.focus else None
         print(json.dumps(build(args.repo_key, args.pr, args.head_sha, args.base_sha, args.output_root,
-                               focus=focus, level=args.level), indent=2))
+                               focus=focus, level=args.level,
+                               verification_only=args.verification_only), indent=2))
     except (ContextError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
         parser.exit(1, f"Context build failed: {exc}\n")
 

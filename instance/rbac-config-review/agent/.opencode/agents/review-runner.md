@@ -37,3 +37,10 @@ preference. Follow each pass's `review_agent` from the generated review plan:
 Luna-preference passes. Keep the separate `review-verifier` pass on Luna for
 finding refutation. Publish comments only; never approve or change repository
 code.
+
+When preflight says `kind="verify"` or the task has a pending verification,
+follow the verification-only workflow: use pinned current context and the
+existing ledger, invoke only `review-verifier` when an addressed fix needs
+challenge, update the existing status review, and resolve only confirmed
+addressed threads. Do not dispatch dimensional reviewers or search for new
+findings in that path.

@@ -10,15 +10,16 @@ finding ID in the summary and inline comment. The summary has a one-sentence
 purpose statement followed by a Findings table with plain-text IDs, severity,
 dimension, resolution state, and a separate link to each inline thread.
 Scenarios, evidence, and fixes stay in the inline comments. The summary ends
-with the re-review command and a prompt for explanation questions. Its hidden
+with re-review, verification, and explanation commands. Its hidden
 versioned ledger payload is restored from GitHub at the start of later cycles,
 so review history does not depend on an instance-local file surviving.
 
 Adding the configured review label is the only event that automatically
 authorizes a full review. A changed head/base SHA or a `/review-bot re-review`
 comment requires an organization member to approve a marked PR comment before
-the bot starts review work. Waiting for approval on one PR does not block other
-queued PRs.
+the bot starts a full review. A verified organization member can use
+`/review-bot verify` to check prior findings only. Waiting for approval on one
+PR does not block other queued PRs.
 
 ## Stages
 
@@ -54,7 +55,7 @@ cycle so bot-authored updates alone do not start a model session.
 | Context builder | `build_context.py` | Script | Checks out the PR head read-only, clones related repos at a pinned SHA, fetches configured Markdown docs at a pinned commit, writes `manifest.json` |
 | Skill preparation | `review_skills.py` | Script | Selects dimensions, reads selected recipe YAML at a pinned commit, and generates per-run review skills |
 | Impact analysis | `impact_analysis.py` | Script | Deterministically (no LLM) extracts changed identifiers from the diff and `git grep`-matches them in related repos → `impact.json`'s `consumer_usages` (candidates, not confirmed breakage) |
-| Re-review request detection | `rereview_requests.py` | Script | Finds exact commands in top-level comments; the runner verifies each author's organization membership before acting |
+| PR command detection | `rereview_requests.py`, `review_queue.py` | Script | Finds exact re-review and verification commands; the runner verifies each author's organization membership before acting |
 | Model routing | `review_skills.py` + `dimensions.yaml` | Script | Resolves each pass's model preference to the configured Terra or Luna subagent in `review_plan` |
 | Review criteria | `skills/dimensional-review/SKILL.md` | **AI** (review-terra / review-luna) | Multi-dimension review over pinned context using the configured model profile; results are deduped and consensus-scored |
 | Review workers | `.opencode/agents/review-terra.md`, `review-luna.md` | **AI** (subagents) | Read-only workers for dimensions routed to Terra or Luna |
@@ -65,6 +66,7 @@ cycle so bot-authored updates alone do not start a model session.
 | Evidence gate | `review_evidence.py` | Script | Rejects findings without real pinned locations/references; caps at seven; requires one verdict per finding; renders the status template |
 | Review ledger transport | `review_ledger.py`, `review_queue.py`, `post_review.py` | Script | Embeds a public-safe ledger in the status review and restores it from GitHub before a model session |
 | Inline publisher | `post_inline_comments.py` | Script | Posts or updates one anchored comment per confirmed finding on the current PR head, deduplicated by finding ID |
+| Finding thread resolver | `resolve_review_threads.py` | Script | Resolves only bot-authored finding threads whose addressed state was confirmed by the verifier and published in the status ledger |
 
 Built-in dimensions have `default: true`; the GitHub KISS recipe is
 `default: false` and may be selected explicitly. The bot's Python processor
@@ -128,6 +130,7 @@ legacy-state reconciliation:
    |---|---|---|
    | `resume` | Task status is `in_progress`/`pr_changes` and its stored active head/base pair matches the PR | 0 (highest) |
    | `review` | A new event added the configured label, or the current head/base pair differs from the stored review pair and needs approval | 1 |
+   | `verify` | A new exact `/review-bot verify` comment from an organization member asks to check existing findings only | 1 |
    | `feedback_check` | SHA unchanged and preflight finds unseen human issue/review feedback; `/review-bot re-review` requests approval for a fresh pass | 2 |
    | `merge_complete` | GitHub confirms a tracked PR has merged | 0 |
    | `closed_unmerged` | GitHub confirms a tracked PR closed without merging | 0 |
@@ -149,17 +152,22 @@ legacy-state reconciliation:
    response authorizes a full pass. Waiting or declining excludes that PR for
    this preflight run and the queue continues to other PRs. A brand-new review
    is skipped if 10 tasks are already active, even if otherwise authorized.
+   `/review-bot verify` needs no full-review approval; preflight accepts it only
+   from a verified organization member and limits it to the prior ledger.
    An interrupted, already-authorized review resumes without asking again.
 
 Before context building, every model batch, verification, and publication, the
 runner re-reads task state. If the task is paused, it stops further review work
 and posts nothing; an operator must unpause it before the queue resumes.
 
-Re-review commands are matched exactly from new top-level comments, bounded by
-the preflight timestamp, and deduplicated using comment IDs in task state. A
-command only starts an approval request; it does not authorize review. The
-runner verifies organization membership on approvals and on feedback before
-acting. Ordinary feedback does not trigger a full review. Before starting a feedback
+Re-review and verification commands are matched exactly from new top-level
+comments, bounded by the preflight timestamp, and deduplicated using comment
+IDs in task state. `/review-bot re-review` only starts an approval request; it
+does not authorize a full review. `/review-bot verify` checks prior findings
+only, updates the existing status review without incrementing its review
+number, and resolves threads only for findings whose addressed state the
+verifier confirms. Both commands require a verified organization member.
+Ordinary feedback does not trigger a full review. Before starting a feedback
 session, preflight checks issue comments, review comments, and submitted reviews
 for unseen human-authored activity. Bot-authored updates alone do not invoke the
 model. Same-second feedback IDs are saved to prevent replay.
@@ -502,6 +510,7 @@ This PR aligns the documented role response with the fields returned by the hand
 ---
 
 - **Re-review:** Add a new top-level PR comment containing `/review-bot re-review`; the bot will ask for approval before reviewing.
+- **Verify findings:** Add a new top-level PR comment containing `/review-bot verify`; the bot checks existing findings only.
 - **Explanation:** Ask a question about a finding in a PR comment; the bot will answer with pinned context.
 
 <!-- dev-review-bot:fabric-access-review:<head_sha>:<base_sha> -->

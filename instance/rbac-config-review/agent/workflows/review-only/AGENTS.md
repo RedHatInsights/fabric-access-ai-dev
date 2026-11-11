@@ -76,7 +76,8 @@ bot_status_update with this instance ID at cycle start and end.
   IDs forward. If `work.ignore_review_id` is true, set the task's old
   `review_id` and `review_url` to null and do not pass `--review-id` to the
   publisher.
-- `seen_rereview_comment_ids` records processed command comment IDs;
+- `seen_rereview_comment_ids` records processed re-review command IDs;
+  `seen_verify_comment_ids` records completed verification command IDs;
   `seen_feedback_comment_ids` records human conversation/review comment IDs
   seen at the timestamp boundary; `pending_publication` records a validated
   but unfinished publication. Treat missing fields as empty lists and null,
@@ -127,6 +128,97 @@ paused; reopening the PR does not resume it. An operator must unpause the task
 before lifecycle or review work can continue.
 
 ## Review or resume
+
+If preflight supplies `kind="verify"`, or a resumed task has a matching
+`pending_verification`, run only the verification path below. Do not load or
+dispatch dimensional reviewers, run missing-context detection, search for new
+findings, or treat the command as approval for a full review. Preflight accepts
+only a new, exact `/review-bot verify` top-level comment from a verified
+organization member on an existing, unpaused review task.
+
+### Verification-only command
+
+1. Re-read the task with `task_get` and stop if its status is `paused`. Mark
+   the existing task `in_progress`, set `active_head_sha` and `active_base_sha`
+   to the work item's pinned pair, and save `pending_verification` with the
+   command IDs and preflight watermark. Keep the prior `review_id`,
+   `update_count`, `last_reviewed_sha`, and `last_reviewed_base_sha`. Build the
+   current pinned manifest without selecting or generating dimensions:
+
+   ```
+   python3 workflows/review-only/build_context.py --verification-only \
+     --repo-key <repo_key> --pr <number> --head-sha <head_sha> \
+     --base-sha <base_sha>
+   ```
+
+   Read only the prior ledger's open findings.
+2. For every open ledger entry, compare the original claim with the current
+   pinned code. Write exactly one verification using the existing
+   `addressed|still_open|uncertain` schema. An `addressed` result must cite a
+   concrete current pinned fix. Keep `still_open` or `uncertain` entries open.
+   Do not create new findings or rewrite the original inline comments. Ask
+   `review-verifier` to challenge each proposed `addressed` result; when none
+   are proposed, write `{"verdicts":[]}` and do not invoke the verifier.
+   When no findings remain open, write `{"verifications":[]}` without an AI
+   subagent call.
+3. Run the evidence gate in verification-only mode. Use the saved one-line
+   `work.pr_summary` when available (otherwise the PR title), the restored
+   ledger, `work.update_count`, the verification JSON, and verifier verdicts:
+
+   ```
+   python3 workflows/review-only/review_evidence.py --verification-only \
+     --manifest <manifest.json> --ledger <work.ledger_path> \
+     --verifications <verifications.json> \
+     --verification-verdicts <verification-verdicts.json> \
+     --update-count <work.update_count> --pr-summary "<existing PR summary>" \
+     --publication-output <publication.json> \
+     --ledger-output <verified-ledger.json> \
+     --inline-comments-output <empty-inline-comments.json>
+   ```
+
+   This preserves the `Review N` count and the PR-purpose sentence. The
+   updated status table reflects only confirmed resolutions. Get existing
+   inline links without posting comments by running
+   `post_inline_comments.py --repo <owner>/<repo> --pr <number>
+   --head-sha <head_sha> --comments <empty-inline-comments.json>
+   --ledger <verified-ledger.json> --comment-links-output <comment-links.json>`.
+   Prepare the new status body and embed its ledger with
+   `post_review.py --repo <owner>/<repo> --pr <number> --head-sha <head_sha>
+   --base-sha <base_sha> --publication <publication.json>
+   --ledger <verified-ledger.json> --prepare-only`.
+4. Before publishing, save the exact publication body and JSON, updated ledger,
+   comment links, current SHAs, `operation="verify"`, and verification
+   command IDs in `pending_publication`. Publish the status review in place
+   using its existing `review_id`. Only after GitHub confirms that update,
+   resolve threads for entries whose ledger status is `addressed`:
+
+   ```
+   python3 workflows/review-only/resolve_review_threads.py \
+     --repo <owner>/<repo> --pr <number> --head-sha <head_sha> \
+     --ledger <verified-ledger.json>
+   ```
+
+   The resolver matches the finding marker on a comment authored by this bot,
+   checks the PR head again, and uses GitHub's review-thread resolution API;
+   the bot's GitHub token needs `Pull requests: write` permission.
+   It never resolves open or uncertain findings. A missing thread, changed
+   head, or GitHub permission error leaves the task retryable; retain the
+   prepared publication and do not mark the command complete.
+5. After the status review and all requested thread resolutions succeed, set
+   the task back to `pr_open`, clear `pending_verification` and
+   `pending_publication`, and merge command IDs into
+   `seen_verify_comment_ids` (retain the newest 1,000). Set
+   `last_verified_sha` and `last_verified_base_sha` to this pair so preflight
+   does not immediately ask for approval for the full review that this command
+   intentionally skipped. Keep the existing review count and last full-review
+   SHAs; a later SHA change still requires approval. Do not advance
+   `last_seen_updated_at` or mark unrelated feedback seen; a later queue pass
+   must still process any other human comments from the same interval.
+
+When a task resumes with `pending_publication.operation="verify"`, finish
+publishing that exact validated body and resolving its addressed threads; do
+not rerun verification or increment the review count. If the verification
+artifacts were not yet prepared, resume the verification-only path above.
 
 At the start of a new review, check for re-review commands in the preflight
 time window as described under **Feedback check**. Commands do not authorize a
@@ -581,6 +673,15 @@ request can be retried later.
 Coalesce requests already present in the same window into that one fresh pass.
 Carry forward the existing ledger, review_id and IDs; recheck open findings,
 look for new findings, and update the same summary with the next review number.
+
+A new top-level comment whose entire text is `/review-bot verify` requests
+verification of the existing open ledger only. Preflight accepts it only for
+an existing `pr_open` task with a tracked status review and from a verified
+organization member. It does not request full-review approval. Save and
+deduplicate its ID in `seen_verify_comment_ids` only after the status review
+update and addressed-thread resolutions succeed; follow **Verification-only
+command** above. If both commands appear in one window, the full re-review
+request takes precedence and still requires approval.
 
 Otherwise, compare authorized corrections or acceptances with current code.
 `memory_store` is denied — put useful feedback in task state only. Record

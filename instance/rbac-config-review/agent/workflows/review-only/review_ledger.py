@@ -17,6 +17,7 @@ from public_comment_safety import ensure_public_content
 MARKER_RE = re.compile(r"<!-- dev-review-bot:review-ledger:v1:([A-Za-z0-9_-]+) -->")
 REVISION_RE = re.compile(r"<!-- dev-review-bot:fabric-access-review:([0-9a-f]{40}):([0-9a-f]{40}) -->")
 REVIEW_NUMBER_RE = re.compile(r"(?m)^## Review ([1-9]\d*)$")
+STATUS_SUMMARY_RE = re.compile(r"(?m)^## Review [1-9]\d*\r?\n\r?\n([^\r\n]+)")
 FINDING_ID_RE = re.compile(r"F[1-9]\d*")
 REFERENCE_ID_RE = re.compile(r"R[1-9]\d*")
 SHA_RE = re.compile(r"[0-9a-f]{40}")
@@ -275,6 +276,17 @@ def decode_body(body: object, repo: str, pr: int) -> dict:
     return {**payload, "findings": ledger}
 
 
+def status_summary(body: object) -> str | None:
+    """Extract the one-line PR purpose sentence from a rendered status review."""
+    if not isinstance(body, str):
+        return None
+    match = STATUS_SUMMARY_RE.search(body)
+    if not match:
+        return None
+    summary = match.group(1).strip()
+    return summary or None
+
+
 def restore_from_review(repo: str, pr: int, review_id: int, bot_login: str,
                         expected_head: str | None = None) -> dict:
     if (not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo)
@@ -319,7 +331,9 @@ def restore_from_review(repo: str, pr: int, review_id: int, bot_login: str,
                 reusable=False,
             )
         raise EmptyPendingReview("Tracked review is an empty pending draft; start a fresh ledger")
-    return decode_body(review.get("body"), repo, pr)
+    payload = decode_body(review.get("body"), repo, pr)
+    payload["status_summary"] = status_summary(review.get("body"))
+    return payload
 
 
 def write_cycle_ledger(repo_key: str, pr: int, head: str, base: str,
