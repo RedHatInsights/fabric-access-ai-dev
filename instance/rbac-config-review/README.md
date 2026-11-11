@@ -45,6 +45,10 @@ repositories:
     docs:
       - id: rbac-config-readme
         url: https://github.com/project-kessel/rbac-config/blob/master/README.md
+    jira:
+      project_env: BOT_JIRA_PROJECT_INSIGHTS_RBAC
+      team_id_env: BOT_JIRA_TEAM_ID_INSIGHTS_RBAC
+      labels_env: BOT_JIRA_LABELS_INSIGHTS_RBAC
     skills: []
     format: standard
 ```
@@ -71,6 +75,17 @@ The per-repository settings are:
   inline layout. Both formats use the same status summary template: a short
   PR-purpose sentence, a Findings table with inline-thread links, and help for
   requesting a re-review or explanation.
+- **`jira`** (optional): Its presence enables explicit Jira creation requests
+  for that repository. The `project_env` and `team_id_env` fields name
+  environment variables supplied by App Interface; `labels_env` names an
+  optional JSON array variable, such as `[]` or `["review-bot"]`. Keep their
+  values in App Interface, not this public file. No global creation toggle is
+  used. A verified organization member can request a ticket for an open finding
+  with a top-level `/review-bot jira F1` comment. The runner checks the finding
+  ledger and delegates creation to `jira-ticket-creator`; findings alone never
+  create tickets. The creator checks a deterministic request marker before
+  creating, applies the configured Team ID and labels, and does not post Jira
+  keys or URLs to public PR comments.
 
 The loader validates the label, repository mappings, dimension names, unique
 IDs, and URL shapes before polling GitHub. Related repository links must be
@@ -309,6 +324,14 @@ Verification requires an existing, unpaused review task and a verified
 organization member; it does not run dimensional reviewers or discover new
 findings.
 
+For a repository with a `jira` entry in `review-context.yaml`, a verified
+organization member can request a Jira issue for an existing open finding
+with `/review-bot jira F1`. The queue restores the existing ledger, skips
+paused tasks, and runs only the dedicated Jira creator. Jira settings and
+optional labels come from that repository's App Interface environment
+variables. The request is idempotent, and the bot does not publish Jira keys or
+URLs in GitHub comments.
+
 ## Deployment settings
 
 The instance's workflow, runtime, provider, and model are configured in
@@ -325,6 +348,9 @@ review deployment settings are:
 | `BOT_CONFIG_PATH` | `instance/rbac-config-review` |
 | `BOT_EXECUTION_ENGINE` | `coordinator` |
 | `BOT_LABEL` | `Prokurátor Velký Bratr` |
+| `BOT_JIRA_PROJECT_INSIGHTS_RBAC` | `RHCLOUD` (set in App Interface) |
+| `BOT_JIRA_TEAM_ID_INSIGHTS_RBAC` | Console Access Team value ID (set in App Interface) |
+| `BOT_JIRA_LABELS_INSIGHTS_RBAC` | JSON list, such as `[]` (set in App Interface) |
 
 `BOT_LABEL` is passed to the bot as a deployment label; it is separate from the
 GitHub PR label selected by `review-context.yaml: review_label`.

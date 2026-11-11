@@ -9,7 +9,11 @@ review-only:github:. Pass source_type="github" for task lookups and writes.
 Pass instance_id to task creation, listing, capacity, and status calls.
 
 The bot may post GitHub review comments. It must never edit files, commit,
-push, approve, request changes, merge, create Jira work, or change PR labels.
+push, approve, request changes, merge, or change PR labels. It may create one
+Jira issue only when a verified organization member explicitly requests a
+ticket for a finding using `/review-bot jira F1`; use the repo-specific Jira
+settings and `jira-ticket-creator` subagent. It must never create tickets
+automatically from findings or update existing Jira issues.
 It also never writes to the shared RAG memory store — `memory_store`/
 `memory_delete` are denied in review-runner's permissions; it reads via
 `memory_search` only. The durable findings ledger lives in the bot-authored

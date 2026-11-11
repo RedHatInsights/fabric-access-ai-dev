@@ -13,6 +13,7 @@ CONFIG_PATH = AGENT_DIR / "review-context.yaml"
 DIMENSIONS_PATH = AGENT_DIR / "skills" / "dimensional-review" / "dimensions.yaml"
 _ID = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _REPO_PART = re.compile(r"^[A-Za-z0-9_.-]+$")
+_ENV_NAME = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 
 
 class ReviewConfigError(ValueError):
@@ -127,6 +128,16 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
             raise ReviewConfigError(f"repositories.{repo_key} must be a mapping")
         if context.get("format", "standard") not in ("standard", "custom"):
             raise ReviewConfigError(f"repositories.{repo_key}.format must be standard or custom")
+        jira = context.get("jira")
+        if jira is not None:
+            if not isinstance(jira, dict):
+                raise ReviewConfigError(f"repositories.{repo_key}.jira must be a mapping")
+            for field in ("project_env", "team_id_env", "labels_env"):
+                env_name = jira.get(field)
+                if not isinstance(env_name, str) or not _ENV_NAME.fullmatch(env_name):
+                    raise ReviewConfigError(
+                        f"repositories.{repo_key}.jira.{field} must name an uppercase environment variable"
+                    )
         if context.get("format") == "custom" and not context.get("skills"):
             raise ReviewConfigError(f"repositories.{repo_key}.format custom needs at least one skill")
         if "skills" in context:

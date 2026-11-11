@@ -30,6 +30,7 @@ from rereview_requests import (
     requests as explicit_command_requests,
     requests as rereview_requests,
 )
+from jira_requests import requests as jira_command_requests
 
 TASK_PREFIX = "review-only:github:"
 ACTIVE = {"in_progress", "pr_open", "pr_changes"}
@@ -233,7 +234,7 @@ def _request_ledger_recovery(chosen: dict, meta: dict) -> bool:
 
 def restore_prior_ledger(chosen: dict, task: dict | None) -> bool:
     """Restore the status-review ledger, then saved copies, before any model run."""
-    if chosen.get("kind") not in {"review", "resume", "feedback_check", "verify"}:
+    if chosen.get("kind") not in {"review", "resume", "feedback_check", "verify", "jira"}:
         return True
     if task is None:
         if chosen.get("kind") == "verify":
@@ -305,6 +306,8 @@ def restore_prior_ledger(chosen: dict, task: dict | None) -> bool:
             chosen["update_count"] = 0
             chosen["ledger_recovery_approved"] = True
             chosen["kind"] = "review"
+            chosen.pop("jira_comment_ids", None)
+            chosen.pop("jira_finding_ids", None)
             chosen["feedback_comment_ids"] = [
                 ident for ident in (chosen.get("feedback_comment_ids") or [])
                 if ident != f"issue:{chosen['ledger_recovery_response_comment_id']}"
@@ -508,7 +511,8 @@ def _external_feedback_key(item: dict, since: str, through: str,
         # This command is a review-authorization request, not feedback to send
         # through the model. It is handled separately after org membership is
         # verified.
-        if re.fullmatch(r"/review-bot\s+(?:re-review|verify)", item["body"].strip(), re.IGNORECASE):
+        if re.fullmatch(r"/review-bot\s+(?:re-review|verify|jira\s+F[1-9][0-9]*)",
+                        item["body"].strip(), re.IGNORECASE):
             return None
         # A negative ledger-recovery answer closes that request without making
         # every later preflight treat the same control comment as new feedback.
@@ -585,6 +589,28 @@ def _eligible_verify_ids(chosen: dict, task: dict | None, since: str) -> list[in
     )
     org = chosen["repo"].split("/", 1)[0]
     return [request["id"] for request in candidates
+            if _is_org_member(org, request["login"])]
+
+
+def _eligible_jira_requests(chosen: dict, task: dict | None, since: str,
+                            config: dict) -> list[dict]:
+    """Find authorized ticket requests for an already reviewed, configured PR."""
+    repositories = config.get("repositories")
+    context = repositories.get(chosen["repo_key"]) if isinstance(repositories, dict) else None
+    meta = _metadata(task or {})
+    if (task is None or task.get("status") != "pr_open"
+            or not isinstance(context, dict) or not isinstance(context.get("jira"), dict)
+            or not isinstance(meta.get("review_id"), int)
+            or isinstance(meta.get("review_id"), bool) or meta["review_id"] < 1
+            or not isinstance(meta.get("last_reviewed_sha"), str)):
+        return []
+    seen = meta.get("seen_jira_comment_ids") or []
+    if not isinstance(seen, list) or any(type(ident) is not int or ident <= 0 for ident in seen):
+        raise ValueError("Invalid seen_jira_comment_ids")
+    comments = fetch_comments(chosen["repo"], chosen["number"], since)
+    candidates = jira_command_requests(comments, since, chosen["updated_at"], set(seen))
+    org = chosen["repo"].split("/", 1)[0]
+    return [request for request in candidates
             if _is_org_member(org, request["login"])]
 
 
@@ -766,8 +792,19 @@ def pick_work(repos: dict, config: dict, tasks: list[dict],
                         item["kind"] = "review"
                         item["priority"] = 1
                         item["review_authorization"] = "approval_required"
+                    jira_requests = []
+                    if not command_ids and item["kind"] == "feedback_check":
+                        jira_requests = _eligible_jira_requests(item, task, since, config)
+                    if jira_requests:
+                        item["kind"] = "jira"
+                        item["priority"] = 0
+                        item["jira_comment_ids"] = [request["id"] for request in jira_requests]
+                        item["jira_finding_ids"] = {
+                            str(request["id"]): request["finding_id"] for request in jira_requests
+                        }
                     verify_ids = []
-                    if (not command_ids and item.get("review_authorization") != "label_added"
+                    if (not command_ids and not jira_requests
+                            and item.get("review_authorization") != "label_added"
                             and item["kind"] != "resume"):
                         verify_ids = _eligible_verify_ids(item, task, since)
                     if verify_ids:
@@ -778,7 +815,7 @@ def pick_work(repos: dict, config: dict, tasks: list[dict],
                     feedback_ids = external_feedback_ids(
                         repo, pr["number"], since, item["updated_at"], set(seen_feedback)
                     ) if task and item["kind"] in {"review", "feedback_check"} else []
-                    if item["kind"] != "feedback_check" or feedback_ids:
+                    if item["kind"] != "feedback_check" or feedback_ids or jira_requests:
                         item["feedback_comment_ids"] = feedback_ids
                         found.append(item)
                 except (RuntimeError, subprocess.TimeoutExpired, ValueError, json.JSONDecodeError) as exc:
@@ -839,19 +876,31 @@ def pick_work(repos: dict, config: dict, tasks: list[dict],
                     probe["repo"], probe["number"], since, through, set(seen_feedback)
                 )
                 command_ids = _eligible_rereview_ids(probe, by_key.get(probe["task_key"]), since)
-                verify_ids = []
+                jira_requests = []
                 if not command_ids:
+                    jira_requests = _eligible_jira_requests(
+                        probe, by_key.get(probe["task_key"]), since, config
+                    )
+                verify_ids = []
+                if not command_ids and not jira_requests:
                     verify_ids = _eligible_verify_ids(probe, by_key.get(probe["task_key"]), since)
                 if command_ids:
                     probe["rereview_comment_ids"] = command_ids
                     probe["kind"] = "review"
                     probe["priority"] = 1
                     probe["review_authorization"] = "approval_required"
+                elif jira_requests:
+                    probe["kind"] = "jira"
+                    probe["priority"] = 0
+                    probe["jira_comment_ids"] = [request["id"] for request in jira_requests]
+                    probe["jira_finding_ids"] = {
+                        str(request["id"]): request["finding_id"] for request in jira_requests
+                    }
                 elif verify_ids:
                     probe["verify_comment_ids"] = verify_ids
                     probe["kind"] = "verify"
                     probe["priority"] = 1
-                if command_ids or feedback_ids:
+                if command_ids or feedback_ids or jira_requests:
                     probe["feedback_comment_ids"] = feedback_ids
                     found.append(probe)
                     break
