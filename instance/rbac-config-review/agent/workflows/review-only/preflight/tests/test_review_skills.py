@@ -57,7 +57,7 @@ def test_default_dimensions_exclude_the_opt_in_recipe():
     catalog = yaml.safe_load((skills.SKILL_DIR / "dimensions.yaml").read_text())
     entries = {item["name"]: item for item in catalog["dimensions"]}
     default_preference = catalog["config"]["model_routing"]["default"]
-    assert default_preference == "luna"
+    assert default_preference == "terra"
     assert skills.model_route(entries["correctness"], catalog) == {
         "model_preference": "terra", "review_agent": "review-terra",
     }
@@ -65,7 +65,7 @@ def test_default_dimensions_exclude_the_opt_in_recipe():
         "model_preference": "luna", "review_agent": "review-luna",
     }
     assert skills.model_route(entries["goose-kiss-review"], catalog) == {
-        "model_preference": "luna", "review_agent": "review-luna",
+        "model_preference": "terra", "review_agent": "review-terra",
     }
     assert all(item["default"] is True for name, item in entries.items() if name != "goose-kiss-review")
     assert entries["goose-kiss-review"]["default"] is False
@@ -102,9 +102,9 @@ def test_repository_skill_runs_despite_default_and_level_and_receives_pinned_con
     plan = skills.prepare(source, config, tmp_path / "run", level="light")
     names = [item["name"] for item in plan["passes"]]
     assert names == ["correctness", "security", "db-schema", "goose-kiss-review"]
-    assert plan["default_model_preference"] == "luna"
+    assert plan["default_model_preference"] == "terra"
     assert [item["review_agent"] for item in plan["passes"]] == [
-        "review-terra", "review-terra", "review-terra", "review-luna",
+        "review-terra", "review-terra", "review-terra", "review-terra",
     ]
     custom = plan["passes"][-1]
     skill = Path(custom["guide_path"])

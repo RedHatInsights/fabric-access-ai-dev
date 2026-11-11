@@ -7,7 +7,7 @@ config:
   dedup_jaccard: 0.4
   dedup_line_range: 5
   model_routing:
-    default: luna
+    default: terra
     agents:
       terra: review-terra
       luna: review-luna
