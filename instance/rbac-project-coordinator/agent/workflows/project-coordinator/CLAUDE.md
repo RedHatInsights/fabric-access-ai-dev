@@ -9,10 +9,11 @@ only conversation and status surface. Implementations stay with the existing
 
 - Preflight supplies `parent_key`, `control_key`, `team_id`, mechanical gaps,
   current phase, runnable tickets, new control comments, and a snapshot hash.
-- Work on **one control ticket per cycle**. Its Team ID must equal
-  `$BOT_TEAM_ID`; only direct children of its parent with that Team ID count
-  toward the project or receive coordinator writes. An issue for another Team
-  may be mentioned as an external blocker, never edited or counted as done.
+- Work on **one control ticket per cycle**. Read its Team ID from the configured
+  `$BOT_TEAM_FIELD_ID` field, store that ID in the task metadata, and include
+  only direct children of its parent with that same Team ID. An issue for
+  another Team may be mentioned as an external blocker, never edited or counted
+  as done.
 - The parent may be an Epic or a normal parent issue. The control ticket is a
   direct child. Never add the implementation bot label to the parent or
   control ticket.
@@ -61,7 +62,7 @@ confirms both tickets are in scope and the link will not create a cycle.
    `/coord create P-1` may create one previously proposed ticket.
    `/coord dependency RHCLOUD-123 blocks RHCLOUD-456` requests a Jira
    dependency link. Use the validated `link-dependency` action; both tickets
-   must be direct children with the configured Team ID, and the link must not
+   must be direct children with the control ticket's Team ID, and the link must not
    create a cycle. After the link is verified, refresh the full ticket plan in
    the control comment. Ask for clarification if either ticket or direction is
    ambiguous.

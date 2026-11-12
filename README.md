@@ -86,8 +86,7 @@ Deploy another bot target using `deploy/template.yaml` or
 | `BOT_LABEL` | `dev-bot-control` |
 | `BOT_IMPLEMENTATION_LABEL` | The implementation bot's actual Jira label, currently `hcc-ai-platform-accessmanagement` |
 | `BOT_JIRA_PROJECT` | `RHCLOUD` |
-| `BOT_TEAM_FIELD_ID` | Jira's Team custom field key, e.g. `customfield_12345` (resolve in Jira; example is not a real value) |
-| `BOT_TEAM_ID` | The actual Jira Team option ID for the coordinator's Team |
+| `BOT_TEAM_FIELD_ID` | Jira's Team custom field key: `customfield_10001` (also used by this instance's review profiles) |
 | `BOT_INCLUDE_BACKLOG` | Match the implementation bot's backlog setting; if `false`, runnable tickets need an active sprint |
 | `BOT_EXECUTION_ENGINE` | `coordinator` (the runner uses OpenCode for this workflow) |
 | `REHOR_OPENCODE_DEPLOYMENT_CONFIG` | `/home/botuser/app/instance/rbac-project-coordinator/opencode-deployment.json` |
@@ -95,14 +94,16 @@ Deploy another bot target using `deploy/template.yaml` or
 No parent or control ticket key is hardcoded. Prepare Jira before the first
 coordinator run:
 
-1. **Configure the bot.** Set the Team field ID and Team ID, implementation
-   label, and repository allowlist. The Team ID must be the Jira Team option
-   ID, not its display name. Each `repo:<name>` allowed on the control ticket
-   must match a key in `project-repos.json`.
+1. **Configure the bot.** Set the Jira Team field ID, implementation label,
+   and repository allowlist. The coordinator reads the Team option ID from each
+   control ticket; it does not need a fixed Team ID in deployment config. Each
+   `repo:<name>` allowed on the control ticket must match a key in
+   `project-repos.json`.
 2. **Prepare the parent and control ticket.** Use an Epic or supported parent
    issue with a clear project goal. Create exactly one direct child control
-   ticket for this Team, set its Team field to `BOT_TEAM_ID`, and add the
-   `dev-bot-control` label. Add the permitted `repo:<name>` labels to this
+   ticket for this Team, set its Jira Team field, and add the `dev-bot-control`
+   label. The coordinator reads the Team ID from this field and uses it to
+   scope the project. Add the permitted `repo:<name>` labels to this
    control ticket. Leave phase and implementation labels off it. The
    coordinator sets its first state label when it enrolls the project.
 3. **Prepare implementation tickets.** Make each in-scope ticket a direct
@@ -163,7 +164,7 @@ flowchart TD
 
 | Step | Inputs | What happens |
 |---|---|---|
-| 1. Scan | Project, control label, configured Team ID, repo allowlist, backlog setting, and saved memory snapshot. | Finds control tickets and their parent issues. Includes only direct children with the same Team ID. |
+| 1. Scan | Project, control label, Team field key, repo allowlist, backlog setting, and saved memory snapshot. | Finds control tickets and their parent issues. Reads each control ticket's Team ID and includes only direct children with that same ID. |
 | 2. Detect change | Parent and control details; same-Team child status, labels, links, ownership, sprint, and human control comments. | Skips unchanged projects. Starts a cycle for a first run, changed project, or missing state label. |
 | 3. Review | Changed project payload: ticket keys, phases, statuses, dependencies, gaps, ready/waiting tickets, allowed repos, and new comments. | Coordinator rereads relevant Jira tickets and checks whether the plan is clear. |
 | 4. Decide | Phase labels, root-ticket `relates to` links, `blocks` dependencies, acceptance criteria, repo choices, and implementation readiness. | If details are missing, asks on the control ticket. Otherwise identifies unblocked tickets in the lowest incomplete phase. |

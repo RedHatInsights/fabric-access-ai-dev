@@ -23,7 +23,7 @@ import project_coordinator as coordinator  # noqa: E402
 
 TEAM_FIELD = "customfield_12345"
 TEAM_ID = "42"
-CONFIG = ("dev-bot-control", TEAM_FIELD, TEAM_ID, "hcc-ai-platform-accessmanagement")
+CONFIG = ("dev-bot-control", TEAM_FIELD, "hcc-ai-platform-accessmanagement")
 
 
 def issue(key: str, *, parent: str | None = "RHCLOUD-100", team: str = TEAM_ID, labels=None, status="New", links=None, summary=None, description="Clear acceptance criteria") -> dict:
@@ -59,14 +59,14 @@ def test_parallel_first_tickets_and_release_pending_unblock_next_phase():
     parallel = issue("RHCLOUD-103", labels=["phase:01"], links=[relates("RHCLOUD-101")])
     later = issue("RHCLOUD-104", labels=["phase:02"], links=[blocked_by("RHCLOUD-102"), blocked_by("RHCLOUD-103")])
 
-    result = coordinator.evaluate(control, [first, parallel, later], {"rbac-config"}, CONFIG[3], False)
+    result = coordinator.evaluate(control, [first, parallel, later], {"rbac-config"}, CONFIG[2], False)
     assert result["gaps"] == []
     assert result["current_phase"] == "phase:01"
     assert {item["key"] for item in result["ready"]} == {"RHCLOUD-102", "RHCLOUD-103"}
 
     first["fields"]["status"]["name"] = "Release Pending"
     parallel["fields"]["status"]["name"] = "Release Pending"
-    result = coordinator.evaluate(control, [first, parallel, later], {"rbac-config"}, CONFIG[3], False)
+    result = coordinator.evaluate(control, [first, parallel, later], {"rbac-config"}, CONFIG[2], False)
     assert result["current_phase"] == "phase:02"
     assert result["ready"] == [{"key": "RHCLOUD-104", "repo_candidates": ["rbac-config"]}]
 
@@ -74,7 +74,7 @@ def test_parallel_first_tickets_and_release_pending_unblock_next_phase():
 def test_control_phase_and_missing_first_link_stop_handoff():
     control = issue("RHCLOUD-101", labels=["dev-bot-control", "repo:rbac-config", "phase:01"])
     first = issue("RHCLOUD-102", labels=["phase:01"])
-    result = coordinator.evaluate(control, [first], {"rbac-config"}, CONFIG[3], False)
+    result = coordinator.evaluate(control, [first], {"rbac-config"}, CONFIG[2], False)
     assert any("control ticket" in gap.lower() for gap in result["gaps"])
     assert any("must relate" in gap for gap in result["gaps"])
     assert result["ready"] == []
@@ -85,7 +85,7 @@ def test_unphased_child_and_later_root_are_plan_gaps():
     first = issue("RHCLOUD-102", labels=["phase:01"], links=[relates("RHCLOUD-101")])
     unphased = issue("RHCLOUD-103")
     later_root = issue("RHCLOUD-104", labels=["phase:02"])
-    result = coordinator.evaluate(control, [first, unphased, later_root], {"rbac-config"}, CONFIG[3], False)
+    result = coordinator.evaluate(control, [first, unphased, later_root], {"rbac-config"}, CONFIG[2], False)
     assert any("RHCLOUD-103 has no phase label" in gap for gap in result["gaps"])
     assert any("RHCLOUD-104 must relate" in gap for gap in result["gaps"])
     assert result["ready"] == []
@@ -158,7 +158,7 @@ def test_handoff_rechecks_team(jira_store):
     store, writes = jira_store
     result = actions.handoff({"control_key": "RHCLOUD-101", "ticket_key": "RHCLOUD-102", "repos": ["rbac-config"]}, CONFIG)
     assert result["ticket_key"] == "RHCLOUD-102"
-    assert CONFIG[3] in store["RHCLOUD-102"]["fields"]["labels"]
+    assert CONFIG[2] in store["RHCLOUD-102"]["fields"]["labels"]
     assert any(name == "jira_update_issue" for name, _ in writes)
 
     store["RHCLOUD-102"]["fields"]["labels"] = ["phase:01"]
@@ -217,8 +217,7 @@ def test_preflight_bootstrap_then_skips_unchanged_and_wakes_on_completion(monkey
     monkeypatch.setenv("BOT_JIRA_PROJECT", "RHCLOUD")
     monkeypatch.setenv("BOT_LABEL", CONFIG[0])
     monkeypatch.setenv("BOT_TEAM_FIELD_ID", TEAM_FIELD)
-    monkeypatch.setenv("BOT_TEAM_ID", TEAM_ID)
-    monkeypatch.setenv("BOT_IMPLEMENTATION_LABEL", CONFIG[3])
+    monkeypatch.setenv("BOT_IMPLEMENTATION_LABEL", CONFIG[2])
     monkeypatch.setenv("BOT_INCLUDE_BACKLOG", "false")
 
     coordinator.main()
