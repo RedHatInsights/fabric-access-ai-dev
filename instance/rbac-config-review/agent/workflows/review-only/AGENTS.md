@@ -171,13 +171,16 @@ organization member on an existing, unpaused review task.
      --verifications <verifications.json> \
      --verification-verdicts <verification-verdicts.json> \
      --update-count <work.update_count> --pr-summary "<existing PR summary>" \
+     --verification-command-id <id> [--verification-command-id <id> ...] \
      --publication-output <publication.json> \
      --ledger-output <verified-ledger.json> \
      --inline-comments-output <empty-inline-comments.json>
    ```
 
    This preserves the `Review N` count and the PR-purpose sentence. The
-   updated status table reflects only confirmed resolutions. Get existing
+   updated status table reflects only confirmed resolutions, and a
+   `Last verification` line records the UTC check time, pinned head, and links
+   to every command handled in this pass. Get existing
    inline links without posting comments by running
    `post_inline_comments.py --repo <owner>/<repo> --pr <number>
    --head-sha <head_sha> --comments <empty-inline-comments.json>
@@ -204,7 +207,25 @@ organization member on an existing, unpaused review task.
    It never resolves open or uncertain findings. A missing thread, changed
    head, or GitHub permission error leaves the task retryable; retain the
    prepared publication and do not mark the command complete.
-5. After the status review and all requested thread resolutions succeed, set
+5. After the status review and all requested thread resolutions succeed,
+   acknowledge each command ID with one top-level PR comment:
+
+   ```
+   python3 workflows/review-only/post_verify_replies.py \
+     --repo <owner>/<repo> --pr <number> --head-sha <head_sha> \
+     --base-sha <base_sha> --review-id <review_id> \
+     --command-id <id> [--command-id <id> ...]
+   ```
+
+   Each reply links its original command and the updated status review. The
+   publisher verifies that the status review records those requests and uses
+   `<!-- dev-review-bot:verify-response:<comment-id> -->` to avoid duplicate
+   replies after a retry. If any reply fails, keep the command pending and
+   retry the missing replies; do not claim completion.
+   Run `python3 workflows/review-only/review_comment_footer.py --repo
+   <owner>/<repo> --pr <number> --review-id <review_id>` to refresh the
+   shared footer on all bot comments. Keep the command pending if sync fails.
+6. After all replies succeed, set
    the task back to `pr_open`, clear `pending_verification` and
    `pending_publication`, and merge command IDs into
    `seen_verify_comment_ids` (retain the newest 1,000). Set
@@ -216,9 +237,10 @@ organization member on an existing, unpaused review task.
    must still process any other human comments from the same interval.
 
 When a task resumes with `pending_publication.operation="verify"`, finish
-publishing that exact validated body and resolving its addressed threads; do
-not rerun verification or increment the review count. If the verification
-artifacts were not yet prepared, resume the verification-only path above.
+publishing that exact validated body, resolving its addressed threads, and
+posting any missing command replies; do not rerun verification or increment
+the review count. If the verification artifacts were not yet prepared, resume
+the verification-only path above.
 
 At the start of a new review, check for re-review commands in the preflight
 time window as described under **Feedback check**. Commands do not authorize a
@@ -591,6 +613,11 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    summary are all published so a retry reuses the same validated payload and
    count. GitHub may create separate review records for inline comments; keep
    tracking the summary review's ID.
+   Run `python3 workflows/review-only/review_comment_footer.py --repo
+   <owner>/<repo> --pr <number> --review-id <review_id>` after the status
+   review is published. This adds the direct status link to inline findings
+   and context questions posted before the review existed. Retain
+   `pending_publication` if footer sync fails; a retry uses the same payload.
    Every published summary and inline comment must carry the hidden marker
    `<!-- dev-review-bot:... -->`. The status summary also carries one
    `dev-review-bot:review-ledger:v1` payload. It contains only resume fields

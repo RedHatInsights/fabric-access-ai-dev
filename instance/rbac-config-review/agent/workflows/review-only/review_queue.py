@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import quote, urlencode
 
 from common import INSTANCE_ID, MEMORY_URL, http_get, load_project_repos, output_result
+from review_comment_footer import with_footer
 from review_config import ReviewConfigError, github_repo_url, load_config
 from review_ledger import (
     EmptyPendingReview,
@@ -108,6 +109,14 @@ def _metadata(task: dict) -> dict:
     return meta if isinstance(meta, dict) else {}
 
 
+def _status_review_url(meta: dict, repo: str, number: int) -> str | None:
+    ident = meta.get("review_id")
+    url = meta.get("review_url")
+    expected = (f"https://github.com/{repo}/pull/{number}#pullrequestreview-{ident}"
+                if type(ident) is int and ident > 0 else None)
+    return url if isinstance(url, str) and url == expected else None
+
+
 def _parse_timestamp(value: object) -> datetime | None:
     if not isinstance(value, str):
         return None
@@ -180,6 +189,8 @@ def _request_ledger_recovery(chosen: dict, meta: dict) -> bool:
             f"include `Review bot: yes {recovery_id}` to approve, or "
             f"`Review bot: no {recovery_id}` to decline, anywhere in their comment.\n\n{marker}"
         )
+        body = with_footer(body, chosen["repo"], chosen["number"],
+                           _status_review_url(meta, chosen["repo"], chosen["number"]))
         result = subprocess.run(
             ["gh", "api", f"repos/{chosen['repo']}/issues/{chosen['number']}/comments",
              "--method", "POST", "--field", f"body={body}"],
@@ -520,6 +531,8 @@ def _request_review_approval(chosen: dict, task: dict | None) -> dict:
             f"- `Review bot: yes {approval_id}` — approve and start the review.\n"
             f"- `Review bot: no {approval_id}` — decline the review.\n\n{marker}"
         )
+        body = with_footer(body, chosen["repo"], chosen["number"],
+                           _status_review_url(_metadata(task or {}), chosen["repo"], chosen["number"]))
         _set_approval_waiting_label(chosen["repo"], chosen["number"], True)
         result = subprocess.run(
             ["gh", "api", f"repos/{chosen['repo']}/issues/{chosen['number']}/comments",

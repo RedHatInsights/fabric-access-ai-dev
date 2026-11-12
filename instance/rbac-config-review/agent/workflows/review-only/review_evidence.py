@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
@@ -430,8 +431,28 @@ def findings_table(findings: list[dict]) -> list[str]:
     return lines
 
 
+def verification_status_line(manifest: dict, command_ids: list[int], verified_at: datetime) -> str:
+    """Describe the latest completed verification and link every request it handled."""
+    if (not command_ids or any(type(ident) is not int or ident < 1 for ident in command_ids)
+            or len(command_ids) != len(set(command_ids))):
+        raise EvidenceError("Verification needs unique positive command IDs")
+    if verified_at.tzinfo is None:
+        raise EvidenceError("Verification time needs a timezone")
+    pr = manifest["pr"]
+    repo, number, head = pr["repo"], pr["number"], pr["head_sha"]
+    timestamp = verified_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    requests = ", ".join(
+        f"[request #{ident}](https://github.com/{repo}/pull/{number}#issuecomment-{ident})"
+        for ident in command_ids
+    )
+    return (f"**Last verification:** {timestamp} for "
+            f"[head `{head[:12]}`](https://github.com/{repo}/commit/{head}); "
+            f"requested by {requests}.")
+
+
 def render_status_review(manifest: dict, findings: list[dict], review_number: int,
-                         summary: str | None = None) -> str:
+                         summary: str | None = None,
+                         last_verification: str | None = None) -> str:
     """Render the shared status-review template for standard and custom reviews."""
     pr = manifest["pr"]
     summary = summary or validate_pr_summary({}, manifest)
@@ -444,6 +465,7 @@ def render_status_review(manifest: dict, findings: list[dict], review_number: in
         "",
         *findings_table(findings),
         "",
+        *([last_verification, ""] if last_verification else []),
         "---",
         "",
         "- **Re-review:** Add a new top-level PR comment containing `/review-bot re-review`.",
@@ -592,9 +614,11 @@ def compact_status_line(findings: list[dict]) -> str:
 
 
 def render_ledger(manifest: dict, ledger: list[dict], new_findings: list[dict],
-                  update_count: int, summary: str | None = None) -> str:
+                  update_count: int, summary: str | None = None,
+                  last_verification: str | None = None) -> str:
     """Render the updated status review with the carried finding ledger."""
-    return render_status_review(manifest, ledger, update_count + 1, summary)
+    return render_status_review(manifest, ledger, update_count + 1, summary,
+                                last_verification)
 
 
 def custom_skill_results(manifest: dict, data: object) -> tuple[list[dict], list[dict]]:
@@ -729,6 +753,8 @@ def main() -> None:
                         help="Current review count; full reviews increment it, verification-only runs preserve it")
     parser.add_argument("--verification-only", action="store_true",
                         help="Update only prior finding statuses without incrementing the review number")
+    parser.add_argument("--verification-command-id", action="append", type=int, default=[],
+                        help="Top-level PR comment ID requesting verification; repeat for each request")
     parser.add_argument("--pr-summary", help="Existing one-line PR summary to preserve during verification")
     parser.add_argument("--ledger-output", type=Path, help="Where to write the updated ledger.json")
     parser.add_argument("--inline-comments-output", type=Path,
@@ -776,6 +802,9 @@ def main() -> None:
                     or args.ledger_output is None or args.update_count is None):
                 raise EvidenceError("--verification-only requires --ledger, --verifications, "
                                     "--verification-verdicts, --ledger-output, and --update-count")
+            last_verification = verification_status_line(
+                manifest, args.verification_command_id, datetime.now(timezone.utc)
+            )
             summary = validate_pr_summary(
                 {"pr_summary": args.pr_summary} if args.pr_summary else {}, manifest
             )
@@ -791,6 +820,8 @@ def main() -> None:
             new_ledger = apply_ledger_updates(ledger, [], resolved, manifest["pr"]["head_sha"])
             update_count = args.update_count
         else:
+            if args.verification_command_id:
+                raise EvidenceError("--verification-command-id requires --verification-only")
             findings_data = json.loads(args.findings.read_text())
             summary = validate_pr_summary(findings_data, manifest)
             findings = validate_findings(findings_data, manifest, impact)
@@ -831,7 +862,8 @@ def main() -> None:
             if args.custom_format or args.custom_verdict or args.prepare_custom or args.skill_results:
                 raise EvidenceError("Custom formatting options require format: custom")
             if args.verification_only:
-                body = render_ledger(manifest, new_ledger, [], update_count, summary)
+                body = render_ledger(manifest, new_ledger, [], update_count, summary,
+                                     last_verification)
                 comments = []
             else:
                 body = render_review(manifest, accepted, summary) if args.ledger is None else render_ledger(

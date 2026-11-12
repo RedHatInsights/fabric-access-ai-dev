@@ -11,6 +11,7 @@ from pathlib import Path
 
 from post_review import api
 from public_comment_safety import ensure_public_content
+from review_comment_footer import with_footer
 from review_evidence import render_context_response_comments, validate_context_responses
 
 
@@ -36,7 +37,8 @@ def comments_for_pr(repo: str, pr: int) -> tuple[dict, list[dict]]:
     return pull, comments
 
 
-def publish(repo: str, pr: int, head: str, comments_path: Path) -> dict:
+def publish(repo: str, pr: int, head: str, comments_path: Path,
+            status_url: str | None = None) -> dict:
     pull, existing = comments_for_pr(repo, pr)
     actor = api("user")
     bot_login = actor.get("login") if isinstance(actor, dict) else None
@@ -51,6 +53,7 @@ def publish(repo: str, pr: int, head: str, comments_path: Path) -> dict:
     for comment in comments:
         if not isinstance(comment, dict) or not isinstance(comment.get("body"), str):
             raise ValueError("Each context comment needs a body")
+        comment["body"] = with_footer(comment["body"], repo, pr, status_url)
         ensure_public_content(comment["body"], "Context comment")
     posted = unchanged = 0
     latest_comment_at = None
@@ -172,6 +175,7 @@ def main() -> None:
     post.add_argument("--repo", required=True)
     post.add_argument("--pr", required=True, type=int)
     post.add_argument("--head-sha", required=True)
+    post.add_argument("--status-url", help="Existing submitted status review URL, when available")
     post.add_argument("--comments", required=True, type=Path)
     answers = subparsers.add_parser("answers", help="Find new answers from the PR author")
     answers.add_argument("--repo", required=True)
@@ -185,7 +189,8 @@ def main() -> None:
     args = parser.parse_args()
     try:
         if args.command == "publish":
-            print(json.dumps(publish(args.repo, args.pr, args.head_sha, args.comments)))
+            print(json.dumps(publish(args.repo, args.pr, args.head_sha,
+                                     args.comments, args.status_url)))
         elif args.command == "answers":
             print(json.dumps({"answers": answer_candidates(args.repo, args.pr, args.since, args.through)}))
         else:
