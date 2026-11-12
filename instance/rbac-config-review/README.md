@@ -50,13 +50,13 @@ repositories:
       profiles:
         current-team:
           target_repository: project-kessel/insights-rbac
-          team_name: Console - Access
+          team_name_env: ${BOT_JIRA_TEAM_NAME_INSIGHTS_RBAC}
           project_env: ${BOT_JIRA_PROJECT_INSIGHTS_RBAC}
           team_id_env: ${BOT_JIRA_TEAM_ID_INSIGHTS_RBAC}
           labels_env: ${BOT_JIRA_LABELS_INSIGHTS_RBAC}
         inventory-api:
           target_repository: project-kessel/inventory-api
-          team_name: Console - Kessel
+          team_name_env: ${BOT_JIRA_TEAM_NAME_INVENTORY_API}
           project_env: ${BOT_JIRA_PROJECT_INVENTORY_API}
           team_id_env: ${BOT_JIRA_TEAM_ID_INVENTORY_API}
           labels_env: ${BOT_JIRA_LABELS_INVENTORY_API}
@@ -365,9 +365,11 @@ review deployment settings are:
 | `BOT_LABEL` | `Prokurátor Velký Bratr` |
 | `BOT_JIRA_PROJECT_INSIGHTS_RBAC` | `RHCLOUD` (set in App Interface) |
 | `BOT_JIRA_TEAM_ID_INSIGHTS_RBAC` | Console - Access Team value ID (set in App Interface) |
+| `BOT_JIRA_TEAM_NAME_INSIGHTS_RBAC` | `Console - Access` (set in App Interface) |
 | `BOT_JIRA_LABELS_INSIGHTS_RBAC` | JSON list, such as `[]` (set in App Interface) |
 | `BOT_JIRA_PROJECT_INVENTORY_API` | `RHCLOUD` (set in App Interface) |
 | `BOT_JIRA_TEAM_ID_INVENTORY_API` | Console - Kessel Team value ID (set in App Interface) |
+| `BOT_JIRA_TEAM_NAME_INVENTORY_API` | `Console - Kessel` (set in App Interface) |
 | `BOT_JIRA_LABELS_INVENTORY_API` | JSON list, such as `[]` (set in App Interface) |
 
 `BOT_LABEL` is passed to the bot as a deployment label; it is separate from the

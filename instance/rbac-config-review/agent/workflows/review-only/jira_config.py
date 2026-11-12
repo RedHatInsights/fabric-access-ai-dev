@@ -41,6 +41,7 @@ def resolve(repo_key: str, target_repository: str,
 
     project = required("project_env")
     team_id = required("team_id_env")
+    team_name = required("team_name_env")
     labels_name = environment_variable_name(profile.get("labels_env"))
     if labels_name is None:
         raise ReviewConfigError(f"Invalid Jira environment reference for {repo_key}: labels_env")
@@ -65,7 +66,7 @@ def resolve(repo_key: str, target_repository: str,
         "project": project,
         "team_field": team_field,
         "team_id": team_id,
-        "team_name": profile["team_name"],
+        "team_name": team_name,
         "labels": labels,
     }
 

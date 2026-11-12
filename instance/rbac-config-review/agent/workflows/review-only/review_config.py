@@ -164,9 +164,7 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
                 if target_repository in target_repositories:
                     raise ReviewConfigError(f"Jira target repository is duplicated: {target_repository}")
                 target_repositories.add(target_repository)
-                if not isinstance(profile.get("team_name"), str) or not profile["team_name"].strip():
-                    raise ReviewConfigError(f"repositories.{repo_key}.jira.profiles.{profile_name}.team_name is required")
-                for field in ("project_env", "team_id_env", "labels_env"):
+                for field in ("project_env", "team_id_env", "team_name_env", "labels_env"):
                     env_name = profile.get(field)
                     if environment_variable_name(env_name) is None:
                         raise ReviewConfigError(

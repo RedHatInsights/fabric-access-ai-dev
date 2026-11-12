@@ -15,11 +15,15 @@ parameters:
   value: ""
 - name: BOT_JIRA_TEAM_ID_INSIGHTS_RBAC
   value: ""
+- name: BOT_JIRA_TEAM_NAME_INSIGHTS_RBAC
+  value: ""
 - name: BOT_JIRA_LABELS_INSIGHTS_RBAC
   value: "[]"
 - name: BOT_JIRA_PROJECT_INVENTORY_API
   value: ""
 - name: BOT_JIRA_TEAM_ID_INVENTORY_API
+  value: ""
+- name: BOT_JIRA_TEAM_NAME_INVENTORY_API
   value: ""
 - name: BOT_JIRA_LABELS_INVENTORY_API
   value: "[]"
@@ -192,12 +196,16 @@ objects:
             value: ${BOT_JIRA_PROJECT_INSIGHTS_RBAC}
           - name: BOT_JIRA_TEAM_ID_INSIGHTS_RBAC
             value: ${BOT_JIRA_TEAM_ID_INSIGHTS_RBAC}
+          - name: BOT_JIRA_TEAM_NAME_INSIGHTS_RBAC
+            value: ${BOT_JIRA_TEAM_NAME_INSIGHTS_RBAC}
           - name: BOT_JIRA_LABELS_INSIGHTS_RBAC
             value: ${BOT_JIRA_LABELS_INSIGHTS_RBAC}
           - name: BOT_JIRA_PROJECT_INVENTORY_API
             value: ${BOT_JIRA_PROJECT_INVENTORY_API}
           - name: BOT_JIRA_TEAM_ID_INVENTORY_API
             value: ${BOT_JIRA_TEAM_ID_INVENTORY_API}
+          - name: BOT_JIRA_TEAM_NAME_INVENTORY_API
+            value: ${BOT_JIRA_TEAM_NAME_INVENTORY_API}
           - name: BOT_JIRA_LABELS_INVENTORY_API
             value: ${BOT_JIRA_LABELS_INVENTORY_API}
           - name: BOT_MEMORY_URL
