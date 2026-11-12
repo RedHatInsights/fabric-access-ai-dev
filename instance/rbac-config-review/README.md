@@ -51,15 +51,15 @@ repositories:
         current-team:
           target_repository: project-kessel/insights-rbac
           team_name: Console - Access
-          project_env: BOT_JIRA_PROJECT_INSIGHTS_RBAC
-          team_id_env: BOT_JIRA_TEAM_ID_INSIGHTS_RBAC
-          labels_env: BOT_JIRA_LABELS_INSIGHTS_RBAC
+          project_env: ${BOT_JIRA_PROJECT_INSIGHTS_RBAC}
+          team_id_env: ${BOT_JIRA_TEAM_ID_INSIGHTS_RBAC}
+          labels_env: ${BOT_JIRA_LABELS_INSIGHTS_RBAC}
         inventory-api:
           target_repository: project-kessel/inventory-api
           team_name: Console - Kessel
-          project_env: BOT_JIRA_PROJECT_INVENTORY_API
-          team_id_env: BOT_JIRA_TEAM_ID_INVENTORY_API
-          labels_env: BOT_JIRA_LABELS_INVENTORY_API
+          project_env: ${BOT_JIRA_PROJECT_INVENTORY_API}
+          team_id_env: ${BOT_JIRA_TEAM_ID_INVENTORY_API}
+          labels_env: ${BOT_JIRA_LABELS_INVENTORY_API}
     skills: []
     format: standard
 ```
@@ -89,7 +89,9 @@ The per-repository settings are:
 - **`jira`** (optional): Its presence enables Jira follow-up for that review
   repository. `team_field` is the Jira Team custom-field key; each profile maps
   a target repository to a Jira project, Team name/ID, and optional labels.
-  The `*_env` values name variables supplied by App Interface; labels are JSON
+  The `*_env` values use explicit `${ENV_NAME}` references. The Jira resolver
+  reads those names from the process environment and rejects unmarked strings,
+  so a variable name cannot be mistaken for a literal value. Labels are JSON
   arrays such as `[]` or `["review-bot"]`. Keep actual IDs in App Interface,
   not this public file. No global creation toggle is used. A verified member
   can ask in natural language for a Jira ticket for an out-of-scope change or

@@ -13,11 +13,19 @@ CONFIG_PATH = AGENT_DIR / "review-context.yaml"
 DIMENSIONS_PATH = AGENT_DIR / "skills" / "dimensional-review" / "dimensions.yaml"
 _ID = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _REPO_PART = re.compile(r"^[A-Za-z0-9_.-]+$")
-_ENV_NAME = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+_ENV_REFERENCE = re.compile(r"^\$\{([A-Z_][A-Z0-9_]*)\}$")
 
 
 class ReviewConfigError(ValueError):
     pass
+
+
+def environment_variable_name(value: object) -> str | None:
+    """Return the variable name from an explicit ${VARIABLE} reference."""
+    if not isinstance(value, str):
+        return None
+    match = _ENV_REFERENCE.fullmatch(value)
+    return match.group(1) if match else None
 
 
 def github_repo_url(url: str) -> str:
@@ -160,10 +168,10 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
                     raise ReviewConfigError(f"repositories.{repo_key}.jira.profiles.{profile_name}.team_name is required")
                 for field in ("project_env", "team_id_env", "labels_env"):
                     env_name = profile.get(field)
-                    if not isinstance(env_name, str) or not _ENV_NAME.fullmatch(env_name):
+                    if environment_variable_name(env_name) is None:
                         raise ReviewConfigError(
                             f"repositories.{repo_key}.jira.profiles.{profile_name}.{field} "
-                            "must name an uppercase environment variable"
+                            "must use a ${UPPERCASE_ENVIRONMENT_VARIABLE} reference"
                         )
         if context.get("format") == "custom" and not context.get("skills"):
             raise ReviewConfigError(f"repositories.{repo_key}.format custom needs at least one skill")

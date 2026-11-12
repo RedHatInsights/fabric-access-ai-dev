@@ -7,9 +7,9 @@ import json
 import os
 import re
 
-from review_config import ReviewConfigError, load_config
+from review_config import ReviewConfigError, environment_variable_name, load_config
 
-_ENV_NAME = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+_TEAM_FIELD = re.compile(r"^customfield_[0-9]+$")
 
 
 def resolve(repo_key: str, target_repository: str,
@@ -31,8 +31,8 @@ def resolve(repo_key: str, target_repository: str,
         raise ReviewConfigError(f"No Jira team profile is configured for {target_repository}")
 
     def required(field: str) -> str:
-        name = profile.get(field)
-        if not isinstance(name, str) or not _ENV_NAME.fullmatch(name):
+        name = environment_variable_name(profile.get(field))
+        if name is None:
             raise ReviewConfigError(f"Invalid Jira environment reference for {repo_key}: {field}")
         value = env.get(name, "").strip()
         if not value:
@@ -41,8 +41,8 @@ def resolve(repo_key: str, target_repository: str,
 
     project = required("project_env")
     team_id = required("team_id_env")
-    labels_name = profile.get("labels_env")
-    if not isinstance(labels_name, str) or not _ENV_NAME.fullmatch(labels_name):
+    labels_name = environment_variable_name(profile.get("labels_env"))
+    if labels_name is None:
         raise ReviewConfigError(f"Invalid Jira environment reference for {repo_key}: labels_env")
     labels_text = env.get(labels_name, "[]").strip() or "[]"
     try:
@@ -57,7 +57,7 @@ def resolve(repo_key: str, target_repository: str,
     if len(labels) != len(set(labels)):
         raise ReviewConfigError("Jira labels must be unique after trimming whitespace")
     team_field = jira.get("team_field")
-    if not isinstance(team_field, str) or not re.fullmatch(r"customfield_[0-9]+", team_field):
+    if not isinstance(team_field, str) or not _TEAM_FIELD.fullmatch(team_field):
         raise ReviewConfigError(f"Invalid Jira Team field for {repo_key}")
     return {
         "repo_key": repo_key,
