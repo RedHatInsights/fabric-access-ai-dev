@@ -338,7 +338,8 @@ their status in the current summary without incrementing its review number,
 and resolves only threads for findings confirmed as addressed by the verifier.
 Verification requires an existing, unpaused review task and a verified
 organization member; it does not run dimensional reviewers or discover new
-findings.
+findings. It takes precedence over a pending full-review approval, while any
+unprocessed re-review command remains available for a later cycle.
 
 For a repository with `jira` profiles in `review-context.yaml`, a verified
 organization member can simply ask for a Jira issue in a PR comment. The runner

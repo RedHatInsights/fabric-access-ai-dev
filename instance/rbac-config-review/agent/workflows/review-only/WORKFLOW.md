@@ -158,8 +158,10 @@ legacy-state reconciliation:
    is skipped if 10 tasks are already active, even if otherwise authorized.
    The bot applies `dev-bot-review-waiting-for-approval` while waiting and
    removes it after a verified yes or no response.
-   `/review-bot verify` needs no full-review approval; preflight accepts it only
-   from a verified organization member and limits it to the prior ledger.
+   `/review-bot verify` needs no full-review approval and takes precedence over
+   a pending re-review request. Preflight accepts it only from a verified
+   organization member and limits it to the prior ledger; the re-review request
+   remains for a later cycle.
    An interrupted, already-authorized review resumes without asking again.
 
 Before context building, every model batch, verification, and publication, the
