@@ -27,6 +27,21 @@ repositories:
         url: https://github.com/project-kessel/inventory-api/blob/main/README.md
       - id: inventory-consumer-readme
         url: https://github.com/project-kessel/inventory-consumer/blob/main/README.md
+    jira:
+      team_field: customfield_10001
+      profiles:
+        current-team:
+          target_repository: project-kessel/insights-rbac
+          team_name_env: ${BOT_JIRA_TEAM_NAME_INSIGHTS_RBAC}
+          project_env: ${BOT_JIRA_PROJECT_INSIGHTS_RBAC}
+          team_id_env: ${BOT_JIRA_TEAM_ID_INSIGHTS_RBAC}
+          labels_env: ${BOT_JIRA_LABELS_INSIGHTS_RBAC}
+        inventory-api:
+          target_repository: project-kessel/inventory-api
+          team_name_env: ${BOT_JIRA_TEAM_NAME_INVENTORY_API}
+          project_env: ${BOT_JIRA_PROJECT_INVENTORY_API}
+          team_id_env: ${BOT_JIRA_TEAM_ID_INVENTORY_API}
+          labels_env: ${BOT_JIRA_LABELS_INVENTORY_API}
   inventory-api:
     related:
       - id: insights-rbac

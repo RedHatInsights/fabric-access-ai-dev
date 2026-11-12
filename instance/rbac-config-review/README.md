@@ -45,6 +45,21 @@ repositories:
     docs:
       - id: rbac-config-readme
         url: https://github.com/project-kessel/rbac-config/blob/master/README.md
+    jira:
+      team_field: customfield_10001
+      profiles:
+        current-team:
+          target_repository: project-kessel/insights-rbac
+          team_name_env: ${BOT_JIRA_TEAM_NAME_INSIGHTS_RBAC}
+          project_env: ${BOT_JIRA_PROJECT_INSIGHTS_RBAC}
+          team_id_env: ${BOT_JIRA_TEAM_ID_INSIGHTS_RBAC}
+          labels_env: ${BOT_JIRA_LABELS_INSIGHTS_RBAC}
+        inventory-api:
+          target_repository: project-kessel/inventory-api
+          team_name_env: ${BOT_JIRA_TEAM_NAME_INVENTORY_API}
+          project_env: ${BOT_JIRA_PROJECT_INVENTORY_API}
+          team_id_env: ${BOT_JIRA_TEAM_ID_INVENTORY_API}
+          labels_env: ${BOT_JIRA_LABELS_INVENTORY_API}
     skills: []
     format: standard
 ```
@@ -71,6 +86,20 @@ The per-repository settings are:
   inline layout. Both formats use the same status summary template: a short
   PR-purpose sentence, a Findings table with inline-thread links, and help for
   requesting a re-review or explanation.
+- **`jira`** (optional): Its presence enables Jira follow-up for that review
+  repository. `team_field` is the Jira Team custom-field key; each profile maps
+  a target repository to a Jira project, Team name/ID, and optional labels.
+  The `*_env` values use explicit `${ENV_NAME}` references. The Jira resolver
+  reads those names from the process environment and rejects unmarked strings,
+  so a variable name cannot be mistaken for a literal value. Labels are JSON
+  arrays such as `[]` or `["review-bot"]`. Keep actual IDs in App Interface,
+  not this public file. No global creation toggle is used. A verified member
+  can ask in natural language for a Jira ticket for an out-of-scope change or
+  finding. A verifier-confirmed cross-repo finding with exactly one configured
+  related-repository owner automatically routes to that owner's team profile.
+  Current-team tickets remain request-only. The runner delegates creation to
+  `jira-ticket-creator`, which uses a deterministic marker to avoid duplicates
+  and keeps Jira keys/URLs out of public PR comments.
 
 The loader validates the label, repository mappings, dimension names, unique
 IDs, and URL shapes before polling GitHub. Related repository links must be
@@ -298,16 +327,27 @@ inline threads for confirmed findings. The summary has a short description of
 the PR, a Findings table with inline-thread links, and prompts for requesting
 a re-review, verification, or explanation. A new top-level PR comment containing exactly
 `/review-bot re-review` asks for approval; it does not start a review. The bot
-posts a revision-bound approval ID, and any verified member of the repository's
-GitHub organization can reply `Review bot: yes <RA-ID>` or
-`Review bot: no <RA-ID>`. A verified yes starts the pass and preserves finding
-IDs while incrementing the review number in the summary. A new top-level
+posts a structured request with a revision-bound approval ID and separate
+bullet options. Any verified member of the repository's GitHub organization
+can reply `Review bot: yes <RA-ID>` or `Review bot: no <RA-ID>`. The bot applies
+`dev-bot-review-waiting-for-approval` while it waits and removes it after a
+verified yes or no. A verified yes starts the pass and preserves finding IDs
+while incrementing the review number in the summary. A new top-level
 `/review-bot verify` comment checks the existing open findings only, updates
 their status in the current summary without incrementing its review number,
 and resolves only threads for findings confirmed as addressed by the verifier.
 Verification requires an existing, unpaused review task and a verified
 organization member; it does not run dimensional reviewers or discover new
 findings.
+
+For a repository with `jira` profiles in `review-context.yaml`, a verified
+organization member can simply ask for a Jira issue in a PR comment. The runner
+uses the current-team profile for out-of-scope work. After verification, it
+automatically creates a ticket for a cross-repo finding only when pinned
+evidence identifies one configured owning repository unambiguously. Jira
+settings and optional labels come from App Interface
+environment variables. The request is idempotent, and the bot does not publish
+Jira keys or URLs in GitHub comments.
 
 ## Deployment settings
 
@@ -325,6 +365,14 @@ review deployment settings are:
 | `BOT_CONFIG_PATH` | `instance/rbac-config-review` |
 | `BOT_EXECUTION_ENGINE` | `coordinator` |
 | `BOT_LABEL` | `Prokurátor Velký Bratr` |
+| `BOT_JIRA_PROJECT_INSIGHTS_RBAC` | `RHCLOUD` (set in App Interface) |
+| `BOT_JIRA_TEAM_ID_INSIGHTS_RBAC` | Console - Access Team value ID (set in App Interface) |
+| `BOT_JIRA_TEAM_NAME_INSIGHTS_RBAC` | `Console - Access` (set in App Interface) |
+| `BOT_JIRA_LABELS_INSIGHTS_RBAC` | JSON list, such as `[]` (set in App Interface) |
+| `BOT_JIRA_PROJECT_INVENTORY_API` | `RHCLOUD` (set in App Interface) |
+| `BOT_JIRA_TEAM_ID_INVENTORY_API` | Console - Kessel Team value ID (set in App Interface) |
+| `BOT_JIRA_TEAM_NAME_INVENTORY_API` | `Console - Kessel` (set in App Interface) |
+| `BOT_JIRA_LABELS_INVENTORY_API` | JSON list, such as `[]` (set in App Interface) |
 
 `BOT_LABEL` is passed to the bot as a deployment label; it is separate from the
 GitHub PR label selected by `review-context.yaml: review_label`.

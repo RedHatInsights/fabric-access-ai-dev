@@ -56,6 +56,7 @@ cycle so bot-authored updates alone do not start a model session.
 | Skill preparation | `review_skills.py` | Script | Selects dimensions, reads selected recipe YAML at a pinned commit, and generates per-run review skills |
 | Impact analysis | `impact_analysis.py` | Script | Deterministically (no LLM) extracts changed identifiers from the diff and `git grep`-matches them in related repos → `impact.json`'s `consumer_usages` (candidates, not confirmed breakage) |
 | PR command detection | `rereview_requests.py`, `review_queue.py` | Script | Finds exact re-review and verification commands; the runner verifies each author's organization membership before acting |
+| Jira issue creation | `.opencode/agents/jira-ticket-creator.md`, `jira_config.py` | **AI** (subagent) + script | Handles an explicit Jira request or an authorized cross-repo follow-up using the target repository's App Interface profile and an idempotency marker |
 | Model routing | `review_skills.py` + `dimensions.yaml` | Script | Resolves each pass's model preference to the configured Terra or Luna subagent in `review_plan` |
 | Review criteria | `skills/dimensional-review/SKILL.md` | **AI** (review-terra / review-luna) | Multi-dimension review over pinned context using the configured model profile; results are deduped and consensus-scored |
 | Review workers | `.opencode/agents/review-terra.md`, `review-luna.md` | **AI** (subagents) | Read-only workers for dimensions routed to Terra or Luna |
@@ -136,8 +137,11 @@ legacy-state reconciliation:
    | `closed_unmerged` | GitHub confirms a tracked PR closed without merging | 0 |
    | `reconcile_open` | A legacy `done` task is still open | 3 |
 
-   Everything else (already reviewed, nothing newer) is excluded. A posted
-   review moves the task to `pr_open`; lifecycle-only work marks it `done` only
+   Jira requests are detected within the ordinary feedback cycle after
+   organization membership is verified. A failed creation leaves its request
+   comment unseen so a later cycle can retry it. Everything else
+   (already reviewed, nothing newer) is excluded. A posted review moves the
+   task to `pr_open`; lifecycle-only work marks it `done` only
    after a live GitHub response includes `mergedAt`. Closed, unmerged PRs are
    paused, not done; reopening them does not resume a paused task.
 3. **Picks exactly one** candidate across every repo, sorted by
@@ -152,6 +156,8 @@ legacy-state reconciliation:
    response authorizes a full pass. Waiting or declining excludes that PR for
    this preflight run and the queue continues to other PRs. A brand-new review
    is skipped if 10 tasks are already active, even if otherwise authorized.
+   The bot applies `dev-bot-review-waiting-for-approval` while waiting and
+   removes it after a verified yes or no response.
    `/review-bot verify` needs no full-review approval; preflight accepts it only
    from a verified organization member and limits it to the prior ledger.
    An interrupted, already-authorized review resumes without asking again.

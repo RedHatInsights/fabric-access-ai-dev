@@ -13,6 +13,7 @@ permissions:
   - { action: subagent, resource: review-luna, effect: allow }
   - { action: subagent, resource: review-terra, effect: allow }
   - { action: subagent, resource: review-verifier, effect: allow }
+  - { action: subagent, resource: jira-ticket-creator, effect: allow }
   - { action: webfetch, resource: "*", effect: deny }
   - { action: websearch, resource: "*", effect: deny }
   - { action: shell, resource: "git push*", effect: deny }
@@ -31,6 +32,16 @@ review-terra, review-luna, and review-verifier subagents, evidence validator,
 and bot-memory tools — task tracking (task_add/task_update/bot_status_update)
 and memory_search are available; memory_store/memory_delete are denied, so
 this instance never writes to the shared RAG learning store, only reads from it.
+When a verified organization member explicitly asks for a Jira ticket in a PR
+comment, handle the request in the feedback pass. Natural language is enough;
+do not require a slash command. Use the current-team profile for out-of-scope
+work owned by this service. After the verifier and evidence gate confirm a
+cross-repository finding, automatically create a follow-up only when its pinned
+references identify exactly one related repository with a configured Jira
+profile. Do not infer ownership from the PR file location alone. Resolve the
+target profile with `workflows/review-only/jira_config.py` and delegate
+creation to `jira-ticket-creator`. Do not expose project, Team, label settings,
+or Jira issue keys/URLs in GitHub comments.
 Terra is the default model for orchestration and dimensions without an explicit
 preference. Follow each pass's `review_agent` from the generated review plan:
 `review-terra` runs Terra-preference passes and `review-luna` runs

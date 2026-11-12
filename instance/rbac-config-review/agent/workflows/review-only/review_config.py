@@ -13,10 +13,19 @@ CONFIG_PATH = AGENT_DIR / "review-context.yaml"
 DIMENSIONS_PATH = AGENT_DIR / "skills" / "dimensional-review" / "dimensions.yaml"
 _ID = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _REPO_PART = re.compile(r"^[A-Za-z0-9_.-]+$")
+_ENV_REFERENCE = re.compile(r"^\$\{([A-Z_][A-Z0-9_]*)\}$")
 
 
 class ReviewConfigError(ValueError):
     pass
+
+
+def environment_variable_name(value: object) -> str | None:
+    """Return the variable name from an explicit ${VARIABLE} reference."""
+    if not isinstance(value, str):
+        return None
+    match = _ENV_REFERENCE.fullmatch(value)
+    return match.group(1) if match else None
 
 
 def github_repo_url(url: str) -> str:
@@ -127,6 +136,41 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
             raise ReviewConfigError(f"repositories.{repo_key} must be a mapping")
         if context.get("format", "standard") not in ("standard", "custom"):
             raise ReviewConfigError(f"repositories.{repo_key}.format must be standard or custom")
+        jira = context.get("jira")
+        if jira is not None:
+            if not isinstance(jira, dict):
+                raise ReviewConfigError(f"repositories.{repo_key}.jira must be a mapping")
+            if not isinstance(jira.get("team_field"), str) or not re.fullmatch(
+                    r"customfield_[0-9]+", jira["team_field"]):
+                raise ReviewConfigError(
+                    f"repositories.{repo_key}.jira.team_field must be a Jira custom-field ID"
+                )
+            profiles = jira.get("profiles")
+            if not isinstance(profiles, dict) or not profiles:
+                raise ReviewConfigError(f"repositories.{repo_key}.jira.profiles must be a non-empty mapping")
+            target_repositories: set[str] = set()
+            for profile_name, profile in profiles.items():
+                if not isinstance(profile_name, str) or not _ID.fullmatch(profile_name):
+                    raise ReviewConfigError(f"repositories.{repo_key}.jira profile names must be lowercase IDs")
+                if not isinstance(profile, dict):
+                    raise ReviewConfigError(f"repositories.{repo_key}.jira.profiles.{profile_name} must be a mapping")
+                target_repository = profile.get("target_repository")
+                if (not isinstance(target_repository, str)
+                        or len(target_repository.split("/")) != 2
+                        or any(not _REPO_PART.fullmatch(part) for part in target_repository.split("/"))):
+                    raise ReviewConfigError(
+                        f"repositories.{repo_key}.jira.profiles.{profile_name}.target_repository must be owner/repo"
+                    )
+                if target_repository in target_repositories:
+                    raise ReviewConfigError(f"Jira target repository is duplicated: {target_repository}")
+                target_repositories.add(target_repository)
+                for field in ("project_env", "team_id_env", "team_name_env", "labels_env"):
+                    env_name = profile.get(field)
+                    if environment_variable_name(env_name) is None:
+                        raise ReviewConfigError(
+                            f"repositories.{repo_key}.jira.profiles.{profile_name}.{field} "
+                            "must use a ${UPPERCASE_ENVIRONMENT_VARIABLE} reference"
+                        )
         if context.get("format") == "custom" and not context.get("skills"):
             raise ReviewConfigError(f"repositories.{repo_key}.format custom needs at least one skill")
         if "skills" in context:

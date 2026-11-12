@@ -474,6 +474,21 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    review body inside `publication.json` (flat, or with carried-forward status)
    and reports the update_count (0 on the first review).
 
+   After the verifier and evidence gate confirm the findings, route new
+   cross-repository follow-ups before preparing GitHub comments. For each new
+   `category="cross_repo"` finding, collect the distinct repositories in
+   `evidence.refs` that differ from the PR repository. Automatically create a
+   Jira only when this set contains exactly one repository and that repository
+   has a profile in the current repo's `review-context.yaml`; this creates the
+   ticket for the owning team's configured project, Team ID, and labels. Do
+   not create current-team tickets automatically. If the set is empty,
+   ambiguous, or unmapped, skip automatic creation; an organization member can
+   ask for a Jira in a PR comment. Pass only evidence-gate-confirmed findings
+   and their pinned references to `jira-ticket-creator`. Its target-specific
+   marker makes retries idempotent. A Jira creation failure does not suppress
+   valid GitHub findings; record the failed target and finding ID in task
+   state, and do not claim that a ticket was created.
+
    For `manifest.format == "standard"`, use the generated publication JSON and
    inline comments. The status summary has a `Review N` heading (without `#N`),
    the one-sentence `pr_summary`, and a `Findings` table with plain-text IDs,
@@ -631,6 +646,32 @@ then publish with `context_questions.py publish --repo <owner>/<repo>
 A follow-up question gets a new Q-ID and a separate comment with its own
 marker; no-change responses say that no code change is indicated. Save
 processed answer comment IDs with the cycle watermark.
+
+For any new human comment, determine whether the author explicitly asks for a
+Jira issue; natural language is enough, and no slash command is required.
+Questions about whether a ticket might be useful are not creation requests.
+Verify the requester's organization membership before acting. For an explicit
+request about work owned by this service or an out-of-scope PR, use the
+`project-kessel/insights-rbac` Jira profile. For a finding owned by another
+repository, use that repository's profile only when pinned evidence identifies
+one configured owner (currently `project-kessel/inventory-api`). Do not infer
+ownership from the PR's changed-file location alone. If the owner or profile
+is ambiguous, ask one direct follow-up question and do not create an issue.
+Resolve settings with
+`python3 workflows/review-only/jira_config.py --repo-key <repo_key>
+--target-repository <owner/repo>` and pass the verified requester, PR,
+finding or out-of-scope context, pinned evidence, target repository and
+resolved settings to `jira-ticket-creator`. The creator applies the configured
+Team field/value and labels, searches its deterministic marker before create,
+and returns the result only to the runner. Do not publish Jira keys or URLs.
+For an explicit request, reply that the ticket was created without exposing
+the key or URL, and add
+`<!-- dev-review-bot:fabric-access-jira:<source-comment-id> -->`; check for
+that marker before posting so retries do not duplicate the reply. For an
+automatically created cross-repo ticket, do not add a separate PR comment.
+If explicit-request creation or confirmation fails, do not mark the requesting
+comment as seen or advance the feedback watermark; a retry finds the same Jira
+issue by its marker.
 
 Preflight inspects issue comments, review comments, and submitted reviews
 deterministically before starting this session. It selects `feedback_check`
