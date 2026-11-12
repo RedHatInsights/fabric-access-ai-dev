@@ -29,8 +29,11 @@ def test_existing_finding_on_later_page_is_not_reposted(tmp_path, monkeypatch, c
         calls.append(command)
         if command[-2:] == ["--jq", ".head.sha"]:
             return CompletedProcess(command, 0, stdout=head + "\n", stderr="")
-        assert command[-2:] == ["--paginate", "--slurp"]
-        return CompletedProcess(command, 0, stdout=json.dumps([[], [existing]]), stderr="")
+        if command[-2:] == ["--paginate", "--slurp"]:
+            return CompletedProcess(command, 0, stdout=json.dumps([[], [existing]]), stderr="")
+        assert command[2:5] == ["repos/org/repo/pulls/comments/42", "--method", "PATCH"]
+        assert "**Next steps:**" in command[-1]
+        return CompletedProcess(command, 0, stdout=json.dumps({"id": 42}), stderr="")
 
     monkeypatch.setattr(publisher.subprocess, "run", fake_run)
     monkeypatch.setattr(sys, "argv", [
@@ -40,8 +43,8 @@ def test_existing_finding_on_later_page_is_not_reposted(tmp_path, monkeypatch, c
 
     publisher.main()
 
-    assert json.loads(capsys.readouterr().out) == {"posted": 0, "updated": 0, "unchanged": 1}
-    assert len(calls) == 2
+    assert json.loads(capsys.readouterr().out) == {"posted": 0, "updated": 1, "unchanged": 0}
+    assert len(calls) == 3
 
 
 def test_skill_formatted_inline_comment_can_be_published(tmp_path, monkeypatch, capsys):
@@ -66,4 +69,6 @@ def test_skill_formatted_inline_comment_can_be_published(tmp_path, monkeypatch, 
                                       "--head-sha", head, "--comments", str(comments_file)])
     publisher.main()
     assert json.loads(capsys.readouterr().out)["posted"] == 1
-    assert calls[-1][1]["body"] == body
+    assert calls[-1][1]["body"].startswith(body)
+    assert "**Status Comment:** Pending the first review." in calls[-1][1]["body"]
+    assert "**Next steps:**" in calls[-1][1]["body"]

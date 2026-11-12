@@ -161,7 +161,9 @@ legacy-state reconciliation:
    `/review-bot verify` needs no full-review approval and takes precedence over
    a pending re-review request. Preflight accepts it only from a verified
    organization member and limits it to the prior ledger; the re-review request
-   remains for a later cycle.
+   remains for a later cycle. A successful verification records its UTC time,
+   checked head, and command links in the status review, then posts one
+   idempotent reply for each command with a link back to that review.
    An interrupted, already-authorized review resumes without asking again.
 
 Before context building, every model batch, verification, and publication, the
@@ -553,11 +555,26 @@ The linked inline comment carries the evidence needed to act:
 **Suggested fix:** Document the field emitted by the handler.
 
 <!-- dev-review-bot:fabric-access-finding:F1 -->
+
+<!-- dev-review-bot:comment-footer:start -->
+---
+
+**Status Comment:** [View review status](https://github.com/org/repo/pull/42#pullrequestreview-123)
+
+**Next steps:**
+- Ask for an explanation or a diagram in a PR comment.
+- After changes, comment `/review-bot verify` to recheck existing findings.
+- Comment `/review-bot re-review` to request a full review (approval required).
+<!-- dev-review-bot:comment-footer:end -->
 ```
 
 A context question is a separate top-level comment with one direct question,
 severity `question`, dimension `missing-context-detector`, a realistic scenario,
-and pinned evidence. It does not appear in the finding count.
+and pinned evidence. It does not appear in the finding count. Every bot comment
+except the status review has the same footer; approval and context questions
+also include their exact answer command. Before the first status review exists,
+the footer says status is pending. The footer sync updates earlier comments
+with the direct status link after publication.
 
 The summary and inline thread are the PR review comments (GitHub). Separately,
 `bot_status_update`

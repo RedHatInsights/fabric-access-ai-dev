@@ -346,7 +346,16 @@ verified yes or no. A verified yes starts the pass and preserves finding IDs
 while incrementing the review number in the summary. A new top-level
 `/review-bot verify` comment checks the existing open findings only, updates
 their status in the current summary without incrementing its review number,
-and resolves only threads for findings confirmed as addressed by the verifier.
+records the UTC time and checked head as the last verification, and resolves
+only threads for findings confirmed as addressed by the verifier. After the
+status update and thread resolutions, the bot posts one reply per verification
+command with links to the request and updated status review. Retries use a
+hidden marker on each reply to avoid duplicates.
+Every bot comment other than the status review ends with a Status Comment link
+and Next steps. Approval and context questions include their exact reply
+syntax. Comments posted before the first status review show that status is
+pending; the bot adds the direct link after publication. Footer updates are
+idempotent on retry.
 Verification requires an existing, unpaused review task and a verified
 organization member; it does not run dimensional reviewers or discover new
 findings. It takes precedence over a pending full-review approval, while any

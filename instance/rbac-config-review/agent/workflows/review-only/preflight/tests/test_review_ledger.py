@@ -2,6 +2,7 @@
 
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -95,6 +96,21 @@ def test_first_cycle_ledger_has_no_carried_entries(tmp_path):
     assert "| F1 | blocking | not recorded in prior review | open | [Open thread](review-comment:F1) |" in body
     assert "Old permission disappears" not in body
     assert "fabric-access-review:" + "a" * 40 + ":" + "b" * 40 in body
+
+
+def test_verification_status_records_time_head_and_each_request(tmp_path):
+    manifest = snapshot(tmp_path)
+    verified_at = datetime(2026, 11, 12, 13, 3, 55, tzinfo=timezone.utc)
+    line = evidence.verification_status_line(manifest, [101, 102], verified_at)
+    body = evidence.render_ledger(manifest, [], [], update_count=1,
+                                  summary="This PR updates permissions.", last_verification=line)
+    assert body.startswith("## Review 2\n\nThis PR updates permissions.")
+    assert "**Last verification:** 2026-11-12 13:03:55 UTC" in body
+    assert f"/commit/{'a' * 40}" in body
+    assert "#issuecomment-101" in body
+    assert "#issuecomment-102" in body
+    with pytest.raises(evidence.EvidenceError, match="unique positive"):
+        evidence.verification_status_line(manifest, [101, 101], verified_at)
 
 
 def test_same_head_rereview_increments_heading_and_retains_finding(tmp_path, monkeypatch, capsys):

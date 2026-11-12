@@ -10,6 +10,7 @@ import subprocess
 from pathlib import Path
 
 from public_comment_safety import PublicContentError, ensure_public_content
+from review_comment_footer import with_footer
 
 
 def add_payload_fields(command: list[str], payload: dict) -> None:
@@ -72,6 +73,7 @@ def main() -> None:
     parser.add_argument("--repo", required=True, help="GitHub owner/repository")
     parser.add_argument("--pr", required=True, type=int)
     parser.add_argument("--head-sha", required=True)
+    parser.add_argument("--status-url", help="Existing submitted status review URL, when available")
     parser.add_argument("--comments", required=True, type=Path)
     parser.add_argument("--ledger", type=Path, help="Ledger used to link carried findings in the status summary")
     parser.add_argument("--comment-links-output", type=Path,
@@ -134,7 +136,9 @@ def main() -> None:
         legacy_marker = f"<!-- fabric-access-finding:{ident} -->"
         if body.count(marker) + body.count(legacy_marker) != 1:
             parser.error(f"Inline comment {ident} is missing its idempotency marker")
-        comment["body"] = body.replace(legacy_marker, marker)
+        comment["body"] = with_footer(body.replace(legacy_marker, marker),
+                                      args.repo, args.pr, args.status_url)
+        ensure_public_content(comment["body"], f"Finding {ident}")
         if not isinstance(comment.get("path"), str) or not comment["path"]:
             parser.error(f"Inline comment {ident} needs a path")
         if not isinstance(comment.get("line"), int) or comment["line"] < 1:

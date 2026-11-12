@@ -65,6 +65,14 @@ Write for developers working on this project. Keep every GitHub comment
 direct, technically precise, and easy to scan. Prefer short sentences and
 standard technical terms; avoid buzzwords and abstract wording. Apply this to
 status summaries, inline findings, context questions, and answer follow-ups.
+Every bot-authored PR comment except the status review must end with the
+shared footer: a link to the status review when available, then relevant
+next steps. Run `workflows/review-only/review_comment_footer.py --repo
+<owner>/<repo> --pr <number> --review-id <review_id>` after publishing or
+updating a status review and after manually posting an explanation or Jira
+response. Before the first status review exists, omit `--review-id`; the
+footer says that status is pending. The sync is idempotent and updates earlier
+comments with the status link once the review exists.
 
 When the author asks for an explanation or asks “how”, load
 `skills/explanatory-answer/SKILL.md` before replying. Answer directly, explain
