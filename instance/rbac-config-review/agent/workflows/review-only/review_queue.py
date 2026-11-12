@@ -37,6 +37,7 @@ RESUMABLE = {"in_progress", "pr_changes"}
 PR_FIELDS = "number,title,url,headRefOid,baseRefOid,headRefName,isDraft,author,updatedAt"
 PR_STATE_FIELDS = "state,mergedAt,closedAt,headRefOid,baseRefOid,updatedAt,url,title,headRefName"
 REVIEWABLE_BOT_AUTHORS = {"platex-rehor-bot"}
+APPROVAL_WAITING_LABEL = "dev-bot-review-waiting-for-approval"
 
 
 def task_key(repo: str, number: int) -> str:
@@ -422,6 +423,67 @@ def _review_approval_id(chosen: dict, task: dict | None) -> str:
     return "RA-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
 
 
+def _api_status(result: subprocess.CompletedProcess) -> int | None:
+    response = result.stdout + "\n" + result.stderr
+    match = re.search(r"(?m)^HTTP/\S+\s+(\d{3})\b", response)
+    return int(match.group(1)) if match else None
+
+
+def _set_approval_waiting_label(repo: str, number: int, present: bool) -> None:
+    """Keep the approval-waiting label in sync with the approval state."""
+    label_path = f"repos/{repo}/labels/{quote(APPROVAL_WAITING_LABEL, safe='')}"
+    issue_label_path = f"repos/{repo}/issues/{number}/labels"
+    if present:
+        lookup = subprocess.run(
+            ["gh", "api", "--include", label_path],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+        status = _api_status(lookup)
+        if lookup.returncode and status == 404:
+            create = subprocess.run(
+                ["gh", "api", f"repos/{repo}/labels", "--method", "POST",
+                 "--field", f"name={APPROVAL_WAITING_LABEL}",
+                 "--field", "color=ededed",
+                 "--field", "description=Review is waiting for organization-member approval."],
+                capture_output=True, text=True, timeout=15, check=False,
+            )
+            if create.returncode:
+                # Another cycle may have created it after our lookup.
+                lookup = subprocess.run(
+                    ["gh", "api", "--include", label_path],
+                    capture_output=True, text=True, timeout=15, check=False,
+                )
+                if lookup.returncode or _api_status(lookup) != 200:
+                    raise RuntimeError(
+                        f"Cannot create approval label for {repo}: {create.stderr.strip()[:300]}"
+                    )
+        elif lookup.returncode or status != 200:
+            raise RuntimeError(
+                f"Cannot check approval label for {repo}: {lookup.stderr.strip()[:300]}"
+            )
+        result = subprocess.run(
+            ["gh", "api", issue_label_path, "--method", "POST",
+             "--field", f"labels[]={APPROVAL_WAITING_LABEL}"],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+        if result.returncode:
+            raise RuntimeError(
+                f"Cannot add approval label to {repo}#{number}: {result.stderr.strip()[:300]}"
+            )
+        return
+
+    result = subprocess.run(
+        ["gh", "api", "--include",
+         f"{issue_label_path}/{quote(APPROVAL_WAITING_LABEL, safe='')}",
+         "--method", "DELETE"],
+        capture_output=True, text=True, timeout=15, check=False,
+    )
+    if result.returncode and _api_status(result) != 404:
+        raise RuntimeError(
+            f"Cannot remove approval label from {repo}#{number}: {result.stderr.strip()[:300]}"
+        )
+
+
 def _request_review_approval(chosen: dict, task: dict | None) -> dict:
     """Ask for an organization member's approval, scoped to this revision."""
     approval_id = _review_approval_id(chosen, task)
@@ -447,13 +509,18 @@ def _request_review_approval(chosen: dict, task: dict | None) -> dict:
         else:
             reason = "The configured review label has no new label-add event."
         body = (
-            f"**Review approval required ({approval_id}).**\n\n{reason} "
-            f"Target revision: head `{chosen['head_sha'][:12]}`, "
-            f"base `{chosen['base_sha'][:12]}`. "
-            "No review will run until an organization member approves this revision. "
-            f"Reply `Review bot: yes {approval_id}` to approve or "
-            f"`Review bot: no {approval_id}` to decline.\n\n{marker}"
+            f"### Review approval required\n\n"
+            f"**Request:** `{approval_id}`\n\n"
+            f"**Reason:** {reason}\n\n"
+            "**Target revision**\n"
+            f"- **Head:** `{chosen['head_sha'][:12]}`\n"
+            f"- **Base:** `{chosen['base_sha'][:12]}`\n\n"
+            "No review will run until an organization member approves this exact revision.\n\n"
+            "**Reply with one option:**\n"
+            f"- `Review bot: yes {approval_id}` — approve and start the review.\n"
+            f"- `Review bot: no {approval_id}` — decline the review.\n\n{marker}"
         )
+        _set_approval_waiting_label(chosen["repo"], chosen["number"], True)
         result = subprocess.run(
             ["gh", "api", f"repos/{chosen['repo']}/issues/{chosen['number']}/comments",
              "--method", "POST", "--field", f"body={body}"],
@@ -492,8 +559,10 @@ def _request_review_approval(chosen: dict, task: dict | None) -> dict:
         if member:
             answers.append((created, ident, decisions.pop() == "yes", login))
     if not answers:
+        _set_approval_waiting_label(chosen["repo"], chosen["number"], True)
         return {"state": "waiting", "approval_id": approval_id}
     _at, response_id, approved, responder = max(answers, key=lambda item: (item[0], item[1]))
+    _set_approval_waiting_label(chosen["repo"], chosen["number"], False)
     return {
         "state": "approved" if approved else "declined",
         "approval_id": approval_id,

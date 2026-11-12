@@ -156,6 +156,8 @@ legacy-state reconciliation:
    response authorizes a full pass. Waiting or declining excludes that PR for
    this preflight run and the queue continues to other PRs. A brand-new review
    is skipped if 10 tasks are already active, even if otherwise authorized.
+   The bot applies `dev-bot-review-waiting-for-approval` while waiting and
+   removes it after a verified yes or no response.
    `/review-bot verify` needs no full-review approval; preflight accepts it only
    from a verified organization member and limits it to the prior ledger.
    An interrupted, already-authorized review resumes without asking again.

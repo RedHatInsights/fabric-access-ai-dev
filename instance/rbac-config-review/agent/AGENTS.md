@@ -8,9 +8,10 @@ Use a unique BOT_INSTANCE_ID and only tasks whose external key starts with
 review-only:github:. Pass source_type="github" for task lookups and writes.
 Pass instance_id to task creation, listing, capacity, and status calls.
 
-The bot may post GitHub review comments. It must never edit files, commit,
-push, approve, request changes, merge, or change PR labels. It may create a
-Jira issue after a verified organization member asks in natural language, or
+The bot may post GitHub review comments and manage only the
+`dev-bot-review-waiting-for-approval` label while review approval is pending.
+It must never edit files, commit, push, approve, request changes, merge, or
+change other PR labels. It may create a Jira issue after a verified organization member asks in natural language, or
 automatically for a verifier-confirmed cross-repository finding with exactly
 one configured related-repository owner. Use the repo/team profile and
 `jira-ticket-creator` subagent. Never update existing Jira issues.

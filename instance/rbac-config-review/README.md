@@ -327,10 +327,12 @@ inline threads for confirmed findings. The summary has a short description of
 the PR, a Findings table with inline-thread links, and prompts for requesting
 a re-review, verification, or explanation. A new top-level PR comment containing exactly
 `/review-bot re-review` asks for approval; it does not start a review. The bot
-posts a revision-bound approval ID, and any verified member of the repository's
-GitHub organization can reply `Review bot: yes <RA-ID>` or
-`Review bot: no <RA-ID>`. A verified yes starts the pass and preserves finding
-IDs while incrementing the review number in the summary. A new top-level
+posts a structured request with a revision-bound approval ID and separate
+bullet options. Any verified member of the repository's GitHub organization
+can reply `Review bot: yes <RA-ID>` or `Review bot: no <RA-ID>`. The bot applies
+`dev-bot-review-waiting-for-approval` while it waits and removes it after a
+verified yes or no. A verified yes starts the pass and preserves finding IDs
+while incrementing the review number in the summary. A new top-level
 `/review-bot verify` comment checks the existing open findings only, updates
 their status in the current summary without incrementing its review number,
 and resolves only threads for findings confirmed as addressed by the verifier.
