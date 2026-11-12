@@ -14,17 +14,12 @@ only conversation and status surface. Implementations stay with the existing
   toward the project or receive coordinator writes. An issue for another Team
   may be mentioned as an external blocker, never edited or counted as done.
 - The parent may be an Epic or a normal parent issue. The control ticket is a
-  direct child. Never add the implementation bot label to the parent, control,
-  or a POC ticket.
+  direct child. Never add the implementation bot label to the parent or
+  control ticket.
 - Phase labels (`phase:01`, `phase:02`, ...) live **only on implementation
   tickets**. The user applies the first phase label to the relevant tickets.
   The control ticket has exactly one state label: `coord:needs-plan`,
   `coord:active`, `coord:blocked`, or `coord:complete`.
-- The optional `coord-mode:poc` label on the control ticket pauses normal
-  handoff. POC creation requires an explicit new control comment requesting a
-  POC for a numbered phase; each new request can create another POC for that
-  phase. POC tickets have `[POC X]` in the title and no `phase:*` or
-  implementation bot label.
 
 ## Cycle
 
@@ -47,13 +42,12 @@ only conversation and status surface. Implementations stay with the existing
    next steps and required `relates to`/`blocks` links. Set
    `coord:needs-plan`. If a complete first phase already exists, validate it
    and continue to the active path.
-4. **New control comments**: treat a `/coord poc 01: <goal>` request first;
-   perform only POC work this cycle. `/coord status` gets a fresh status
-   comment. `/coord create P-1` may create one previously proposed normal
-   ticket. `/coord complete project` can finish the project only when all
-   same-Team implementation tickets are complete. All
-   other comments may clarify the plan, ask questions, or request proposals.
-   Do not execute historical comments on the first enrollment.
+4. **New control comments**: `/coord status` gets a fresh status comment.
+   `/coord create P-1` may create one previously proposed ticket.
+   `/coord complete project` can finish the project only when all same-Team
+   implementation tickets are complete. Other comments may clarify the plan,
+   ask questions, or request proposals. Do not execute historical comments on
+   the first enrollment.
 5. **Plan gate**: the first phase must exist; the path through its tickets,
    parallel work, and exit criteria must be clear. Tickets with no same-Team
    predecessor must `relate to` the control ticket. Use directional `blocks`
@@ -112,14 +106,13 @@ Actions and required request keys:
 |---|---|
 | `set-state` | `state` |
 | `handoff` | `ticket_key`, `repos` (list of repo names) |
-| `create-poc` | `request_comment_id`, `phase` (two digits), `summary`, `description` |
 | `create-ticket` | `request_comment_id`, `proposal_id`, `phase`, `summary`, `description` |
 | `comment` | `action_id`, `body` |
 
 Use a different request file per action or overwrite the temporary file only
 after the prior command completes. Inspect JSON output and nonzero exit codes.
-If an action partially succeeds, re-read Jira before retrying. POC and normal
-creation use `Coordinator request: <control>#<comment-id>` in the description
-to find an already-created ticket on retry. The action script copies the
-control ticket's Team field value into any created child and chooses the
-hierarchy field from the parent's issue type.
+If an action partially succeeds, re-read Jira before retrying. Ticket creation
+uses `Coordinator request: <control>#<comment-id>` in the description to find
+an already-created ticket on retry. The action script copies the control
+ticket's Team field value into any created child and chooses the hierarchy
+field from the parent's issue type.

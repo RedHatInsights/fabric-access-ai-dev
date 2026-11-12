@@ -91,15 +91,6 @@ def test_unphased_child_and_later_root_are_plan_gaps():
     assert result["ready"] == []
 
 
-def test_poc_ticket_cannot_receive_phase_or_implementation_label():
-    control = issue("RHCLOUD-101", labels=["dev-bot-control", "repo:rbac-config"])
-    first = issue("RHCLOUD-102", labels=["phase:01"], links=[relates("RHCLOUD-101")])
-    poc = issue("RHCLOUD-103", labels=["phase:01", CONFIG[3]], summary="[POC 1] Try routing")
-    result = coordinator.evaluate(control, [first, poc], {"rbac-config"}, CONFIG[3], False)
-    assert any("POC ticket" in gap for gap in result["gaps"])
-    assert result["ready"] == []
-
-
 def test_search_walks_cloud_cursor_and_server_offset(monkeypatch):
     pages = [
         {"issues": [{"key": "RHCLOUD-1"}], "next_page_token": "next", "total": -1},
@@ -130,7 +121,7 @@ def jira_store(monkeypatch):
     first = issue("RHCLOUD-102", labels=["phase:01"], links=[relates("RHCLOUD-101")])
     parent = issue("RHCLOUD-100", parent=None, summary="Parent")
     parent["fields"]["issuetype"] = {"name": "Epic"}
-    control["fields"]["comment"] = {"comments": [{"id": "500", "body": "/coord poc 01: Try routing"}]}
+    control["fields"]["comment"] = {"comments": [{"id": "500", "body": "/coord create P-1"}]}
     store = {item["key"]: item for item in (control, first, parent)}
     writes = []
 
@@ -160,7 +151,7 @@ def jira_store(monkeypatch):
     return store, writes
 
 
-def test_handoff_rechecks_team_and_blocks_poc_mode(jira_store):
+def test_handoff_rechecks_team(jira_store):
     store, writes = jira_store
     result = actions.handoff({"control_key": "RHCLOUD-101", "ticket_key": "RHCLOUD-102", "repos": ["rbac-config"]}, CONFIG)
     assert result["ticket_key"] == "RHCLOUD-102"
@@ -174,39 +165,16 @@ def test_handoff_rechecks_team_and_blocks_poc_mode(jira_store):
         actions.handoff({"control_key": "RHCLOUD-101", "ticket_key": "RHCLOUD-102", "repos": ["rbac-config"]}, CONFIG)
     assert len(writes) == write_count
 
-    store["RHCLOUD-102"]["fields"][TEAM_FIELD] = {"id": TEAM_ID}
-    store["RHCLOUD-101"]["fields"]["labels"].append("coord-mode:poc")
-    with pytest.raises(ValueError, match="POC mode"):
-        actions.handoff({"control_key": "RHCLOUD-101", "ticket_key": "RHCLOUD-102", "repos": ["rbac-config"]}, CONFIG)
-
-
-def test_poc_request_creates_once_and_never_labels_implementation(jira_store):
-    store, writes = jira_store
-    request = {"control_key": "RHCLOUD-101", "request_comment_id": "500", "phase": "01", "summary": "Try routing", "description": "Explore routing options"}
-    created = actions.create_child(request, CONFIG, poc=True)
-    assert created == {"ticket_key": "RHCLOUD-105", "created": True, "request_comment_id": "500"}
-    new_labels = store["RHCLOUD-105"]["fields"]["labels"]
-    assert new_labels == ["coord-poc"]
-    assert CONFIG[3] not in store["RHCLOUD-102"]["fields"]["labels"]
-    create_calls = [args for name, args in writes if name == "jira_create_issue"]
-    assert json.loads(create_calls[0]["additional_fields"])[TEAM_FIELD] == TEAM_ID
-    assert json.loads(create_calls[0]["additional_fields"])["epicKey"] == "RHCLOUD-100"
-
-    again = actions.create_child(request, CONFIG, poc=True)
-    assert again == {"ticket_key": "RHCLOUD-105", "created": False, "request_comment_id": "500"}
-    assert len([name for name, _ in writes if name == "jira_create_issue"]) == 1
-
-
 def test_subtask_inherits_parent_team_and_refuses_mismatch(jira_store):
     store, _ = jira_store
     parent = store["RHCLOUD-100"]
     parent["fields"]["issuetype"] = {"name": "Story"}
-    child_type, additional = actions.creation_fields(store["RHCLOUD-101"], TEAM_FIELD, ["coord-poc"])
+    child_type, additional = actions.creation_fields(store["RHCLOUD-101"], TEAM_FIELD, ["phase:01"])
     assert child_type == "Sub-task"
-    assert additional == {"parent": "RHCLOUD-100", "labels": ["coord-poc"]}
+    assert additional == {"parent": "RHCLOUD-100", "labels": ["phase:01"]}
     parent["fields"][TEAM_FIELD] = {"id": "another-team"}
     with pytest.raises(ValueError, match="inherits Team from parent"):
-        actions.creation_fields(store["RHCLOUD-101"], TEAM_FIELD, ["coord-poc"])
+        actions.creation_fields(store["RHCLOUD-101"], TEAM_FIELD, ["phase:01"])
 
 
 def test_normal_ticket_creation_requires_explicit_named_proposal(jira_store):
@@ -221,11 +189,11 @@ def test_normal_ticket_creation_requires_explicit_named_proposal(jira_store):
         "phase": "01", "summary": "Add routing test", "description": "Verify route selection",
     }
     with pytest.raises(ValueError, match="explicit user request"):
-        actions.create_child(request, CONFIG, poc=False)
+        actions.create_ticket(request, CONFIG)
     assert not any(name == "jira_create_issue" for name, _ in writes)
 
     control["fields"]["comment"]["comments"][-1]["body"] = "/coord create P-1"
-    created = actions.create_child(request, CONFIG, poc=False)
+    created = actions.create_ticket(request, CONFIG)
     assert created["ticket_key"] == "RHCLOUD-105"
     assert store["RHCLOUD-105"]["fields"]["labels"] == ["phase:01"]
 
@@ -264,18 +232,16 @@ def test_preflight_bootstrap_then_skips_unchanged_and_wakes_on_completion(monkey
     assert outputs[-1][0] == "start"
 
 
-def test_mode_label_wakes_preflight_but_state_label_does_not():
+def test_state_label_does_not_wake_preflight():
     control = issue("RHCLOUD-101", labels=["dev-bot-control", "coord:needs-plan"])
     parent = issue("RHCLOUD-100", parent=None)
     original = coordinator.fingerprint(parent, control, [], TEAM_FIELD)
     control["fields"]["labels"][-1] = "coord:blocked"
     assert coordinator.fingerprint(parent, control, [], TEAM_FIELD) == original
-    control["fields"]["labels"].append("coord-mode:poc")
-    assert coordinator.fingerprint(parent, control, [], TEAM_FIELD) != original
 
 
 def test_truncated_control_comments_fail_closed():
     control = issue("RHCLOUD-101", labels=["dev-bot-control"])
-    control["fields"]["comment"] = {"total": 101, "comments": [{"id": "1", "body": "/coord poc 01: test"}]}
+    control["fields"]["comment"] = {"total": 101, "comments": [{"id": "1", "body": "/coord status"}]}
     with pytest.raises(RuntimeError, match="only 1 of 101 comments"):
         coordinator.comments(control)

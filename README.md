@@ -104,15 +104,11 @@ The coordinator asks for missing pieces before adding the implementation bot
 label. It stores its state on the control ticket as exactly one of
 `coord:needs-plan`, `coord:active`, `coord:blocked`, and `coord:complete`.
 
-The user can request another POC for a numbered phase with a new
-`/coord poc 01: <goal>` control comment. Each request creates one `[POC X]`
-child with the same Team ID, a
-request marker for retry safety, and no phase or implementation label. The
-coordinator proposes normal ticket creation, edits, and closures; it creates
-a normal ticket only when a later comment says `/coord create P-1` for a named
-proposal. `/coord status` requests a fresh summary; `/coord complete project`
-can finish the project after all same-Team implementation tickets are complete.
-It never edits or closes implementation tickets.
+The coordinator proposes missing tickets, edits, and closures; it creates a
+ticket only when a later comment says `/coord create P-1` for a named proposal.
+`/coord status` requests a fresh summary; `/coord complete project` can finish
+the project after all same-Team implementation tickets are complete. It never
+edits or closes implementation tickets.
 
 The preflight is read-only and emits a session only when the parent, control,
 same-Team children, or user comments change. The workflow's `actions.py`

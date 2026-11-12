@@ -19,7 +19,6 @@ from jira_mcp import jira_call, jira_cleanup
 
 PHASE_RE = re.compile(r"^phase:(\d{2})$")
 JQL_VALUE_RE = re.compile(r"^[A-Za-z0-9:_-]+$")
-POC_RE = re.compile(r"^\[POC\s+\d+\]", re.IGNORECASE)
 COMPLETE_STATUSES = frozenset({"done", "closed", "resolved", "release pending"})
 START_STATUSES = frozenset({"new", "backlog", "refinement", "to do"})
 COORD_STATES = frozenset({"coord:needs-plan", "coord:active", "coord:blocked", "coord:complete"})
@@ -205,7 +204,6 @@ def summarize_child(issue: dict, control_key: str) -> dict:
         "assignee": bool(assignee),
         "sprint": bool(sprint),
         "description": str(value(issue, "description") or "")[:2000],
-        "poc": bool(POC_RE.match(str(value(issue, "summary") or ""))),
     }
 
 
@@ -232,13 +230,9 @@ def evaluate(control: dict, children: list[dict], repo_names: set[str], implemen
     tickets = [summarize_child(issue, control_key) for issue in children]
     for ticket, issue in zip(tickets, children):
         ticket["implementation_labeled"] = implementation_label in labels(issue)
-    implementation = [ticket for ticket in tickets if not ticket["poc"]]
-    for ticket in tickets:
-        if ticket["poc"] and (ticket["phase_labels"] or ticket["implementation_labeled"]):
-            gaps.append(f"POC ticket {ticket['key']} has a phase or implementation label")
-    by_key = {ticket["key"]: ticket for ticket in implementation}
+    by_key = {ticket["key"]: ticket for ticket in tickets}
     phases: dict[str, list[dict]] = defaultdict(list)
-    for ticket in implementation:
+    for ticket in tickets:
         phase_labels = ticket["phase_labels"]
         if not phase_labels:
             gaps.append(f"{ticket['key']} has no phase label")
@@ -249,11 +243,11 @@ def evaluate(control: dict, children: list[dict], repo_names: set[str], implemen
 
     if not phases.get("phase:01"):
         gaps.append("No same-Team implementation ticket has phase:01")
-    blockers_by_key = {ticket["key"]: set(ticket["blockers"]) for ticket in implementation}
+    blockers_by_key = {ticket["key"]: set(ticket["blockers"]) for ticket in tickets}
     if cyclic_dependencies(blockers_by_key):
         gaps.append("Implementation ticket dependency links form a cycle")
 
-    for ticket in implementation:
+    for ticket in tickets:
         internal_blockers = set(ticket["blockers"]) & set(by_key)
         if ticket["phase_labels"] and not internal_blockers and not ticket["relates_to_control"]:
             gaps.append(f"Root ticket {ticket['key']} must relate to the control ticket")
@@ -288,7 +282,6 @@ def evaluate(control: dict, children: list[dict], repo_names: set[str], implemen
 
     return {
         "state": state_labels[0] if len(state_labels) == 1 else None,
-        "mode": "poc" if "coord-mode:poc" in control_labels else "normal",
         "allowed_repos": sorted(allowed_repos),
         "current_phase": current_phase,
         "gaps": gaps,

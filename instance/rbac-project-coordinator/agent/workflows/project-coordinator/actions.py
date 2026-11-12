@@ -119,7 +119,7 @@ def set_state(request: dict, config: tuple[str, str, str, str]) -> dict:
             raise ValueError("Completion requires an explicit control comment ID")
         request_comment(control, comment_id, r"^\s*/coord\s+complete\s+project\s*$")
         children, assessment = fresh_assessment(control, config)
-        if assessment["gaps"] or any(not is_complete(child) for child in children if not re.match(r"^\[POC\s+\d+\]", str(value(child, "summary") or ""), re.IGNORECASE)):
+        if assessment["gaps"] or any(not is_complete(child) for child in children):
             raise ValueError("In-scope implementation tickets are not all complete")
     current = labels(control)
     updated = [label for label in current if label not in STATES]
@@ -151,8 +151,6 @@ def fresh_assessment(control: dict, config: tuple[str, str, str, str]) -> tuple[
 def handoff(request: dict, config: tuple[str, str, str, str]) -> dict:
     control = checked_control(request["control_key"], config)
     _, team_field_id, expected_team, implementation_label = config
-    if "coord-mode:poc" in labels(control):
-        raise ValueError("POC mode forbids implementation handoff")
     children, assessment = fresh_assessment(control, config)
     if assessment["gaps"]:
         raise ValueError("Plan gate failed: " + "; ".join(assessment["gaps"]))
@@ -211,48 +209,37 @@ def creation_fields(control: dict, team_field_id: str, extra_labels: list[str]) 
     return child_type, {**hierarchy, team_field_id: team_value, "labels": extra_labels}
 
 
-def create_child(request: dict, config: tuple[str, str, str, str], poc: bool) -> dict:
+def create_ticket(request: dict, config: tuple[str, str, str, str]) -> dict:
     control = checked_control(request["control_key"], config)
     _, team_field_id, expected_team, implementation_label = config
     comment_id = str(request.get("request_comment_id") or "")
     if not comment_id:
         raise ValueError("request_comment_id is required")
-    command_pattern = r"^\s*/coord\s+poc\s+\d{2}\b" if poc else r"^\s*/coord\s+create\s+P-\d+\b"
-    command = request_comment(control, comment_id, command_pattern)
+    command = request_comment(control, comment_id, r"^\s*/coord\s+create\s+P-\d+\b")
     summary = str(request.get("summary") or "").strip()
     description = str(request.get("description") or "").strip()
     if not summary or not description:
         raise ValueError("Summary and description are required")
-    if poc:
-        phase = str(request.get("phase") or "")
-        if not re.fullmatch(r"\d{2}", phase):
-            raise ValueError("POC phase must be two digits")
-        if not re.search(rf"^\s*/coord\s+poc\s+{phase}\b", comment_body(command), re.IGNORECASE):
-            raise ValueError("POC phase differs from request comment")
-        if not summary.startswith(f"[POC {int(phase)}]"):
-            summary = f"[POC {int(phase)}] {summary}"
-        issue_labels = ["coord-poc"]
-    else:
-        proposal_id = str(request.get("proposal_id") or "")
-        if not re.fullmatch(r"P-\d+", proposal_id) or not re.search(rf"^\s*/coord\s+create\s+{proposal_id}\b", comment_body(command), re.IGNORECASE):
-            raise ValueError("Creation request must name an existing proposal ID")
-        if not any(
-            item_body.startswith(OWN_COMMENT_PREFIX) and proposal_id in item_body
-            for item_body in (comment_body(item) for item in comments(control))
-        ):
-            raise ValueError("Proposal ID was not found in a coordinator comment")
-        phase = str(request.get("phase") or "")
-        if not re.fullmatch(r"\d{2}", phase):
-            raise ValueError("Implementation ticket phase must be two digits")
-        issue_labels = [f"phase:{phase}"]
+    proposal_id = str(request.get("proposal_id") or "")
+    if not re.fullmatch(r"P-\d+", proposal_id) or not re.search(rf"^\s*/coord\s+create\s+{proposal_id}\b", comment_body(command), re.IGNORECASE):
+        raise ValueError("Creation request must name an existing proposal ID")
+    if not any(
+        item_body.startswith(OWN_COMMENT_PREFIX) and proposal_id in item_body
+        for item_body in (comment_body(item) for item in comments(control))
+    ):
+        raise ValueError("Proposal ID was not found in a coordinator comment")
+    phase = str(request.get("phase") or "")
+    if not re.fullmatch(r"\d{2}", phase):
+        raise ValueError("Implementation ticket phase must be two digits")
+    issue_labels = [f"phase:{phase}"]
     marker = f"Coordinator request: {key_of(control)}#{comment_id}"
     siblings = search_all(f'parent = "{parent_key(control)}" ORDER BY key ASC')
     existing = [issue for issue in siblings if marker in str(value(issue, "description") or "")]
     if existing:
         return {"ticket_key": key_of(existing[0]), "created": False, "request_comment_id": comment_id}
     child_type, additional = creation_fields(control, team_field_id, issue_labels)
-    if implementation_label in additional["labels"] or any(PHASE_RE.fullmatch(label) for label in additional["labels"] if poc):
-        raise ValueError("POC ticket cannot have implementation or phase labels")
+    if implementation_label in additional["labels"]:
+        raise ValueError("Proposed ticket cannot have the implementation bot label")
     project_key = key_of(control).split("-", 1)[0]
     result = call_write(
         "jira_create_issue",
@@ -293,10 +280,8 @@ def dispatch(request: dict) -> dict:
         return set_state(request, config)
     if action == "handoff":
         return handoff(request, config)
-    if action == "create-poc":
-        return create_child(request, config, poc=True)
     if action == "create-ticket":
-        return create_child(request, config, poc=False)
+        return create_ticket(request, config)
     if action == "comment":
         return comment_control(request, config)
     raise ValueError("Unknown coordinator action")
