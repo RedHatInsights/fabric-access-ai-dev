@@ -171,6 +171,12 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
                             f"repositories.{repo_key}.jira.profiles.{profile_name}.{field} "
                             "must use a ${UPPERCASE_ENVIRONMENT_VARIABLE} reference"
                         )
+                if ("component_id_env" in profile
+                        and environment_variable_name(profile["component_id_env"]) is None):
+                    raise ReviewConfigError(
+                        f"repositories.{repo_key}.jira.profiles.{profile_name}.component_id_env "
+                        "must use a ${UPPERCASE_ENVIRONMENT_VARIABLE} reference"
+                    )
         if context.get("format") == "custom" and not context.get("skills"):
             raise ReviewConfigError(f"repositories.{repo_key}.format custom needs at least one skill")
         if "skills" in context:

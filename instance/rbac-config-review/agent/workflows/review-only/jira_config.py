@@ -42,6 +42,9 @@ def resolve(repo_key: str, target_repository: str,
     project = required("project_env")
     team_id = required("team_id_env")
     team_name = required("team_name_env")
+    component_id = required("component_id_env") if "component_id_env" in profile else None
+    if component_id is not None and not component_id.isdigit():
+        raise ReviewConfigError(f"Invalid Jira component ID for {repo_key}")
     labels_name = environment_variable_name(profile.get("labels_env"))
     if labels_name is None:
         raise ReviewConfigError(f"Invalid Jira environment reference for {repo_key}: labels_env")
@@ -60,7 +63,7 @@ def resolve(repo_key: str, target_repository: str,
     team_field = jira.get("team_field")
     if not isinstance(team_field, str) or not _TEAM_FIELD.fullmatch(team_field):
         raise ReviewConfigError(f"Invalid Jira Team field for {repo_key}")
-    return {
+    resolved = {
         "repo_key": repo_key,
         "target_repository": target_repository,
         "project": project,
@@ -69,6 +72,9 @@ def resolve(repo_key: str, target_repository: str,
         "team_name": team_name,
         "labels": labels,
     }
+    if component_id is not None:
+        resolved["component_id"] = component_id
+    return resolved
 
 
 def main() -> None:

@@ -24,11 +24,13 @@ or close existing issues.
 
 Use the configured project, `team_field`, `team_id`, and labels exactly. Set
 `additional_fields[team_field]` to `{"id":"<team_id>"}` in
-`jira_create_issue`. Before
-creation, confirm Jira resolves that configured value to the profile's
-`team_name` using field options or the reference issue. If the Team field or
-option cannot be confirmed, stop and report the missing field information; do
-not create an issue without the Team value.
+`jira_create_issue`. Before creation, confirm Jira resolves that configured
+value to the profile's `team_name` using field options or the reference issue.
+If `component_id` is configured, set
+`additional_fields.components` to `[{"id":"<component_id>"}]`. Do not infer
+or substitute a different component. If the Team field, Team option, or
+configured component cannot be confirmed, stop and report the missing field
+information; do not create an issue without those configured values.
 
 Build the issue summary and description only from the authorized finding or
 out-of-scope PR request and its pinned evidence. Include this deterministic
