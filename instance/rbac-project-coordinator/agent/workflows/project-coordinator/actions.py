@@ -25,6 +25,7 @@ from project_coordinator import (  # noqa: E402
     PHASE_RE,
     comments,
     comment_body,
+    cyclic_dependencies,
     evaluate,
     get_issue,
     key_of,
@@ -33,12 +34,17 @@ from project_coordinator import (  # noqa: E402
     parent_key,
     search_all,
     is_complete,
+    linked_issues,
     team_id,
     value,
 )
 
 STATES = COORD_STATES
 ISSUE_KEY_RE = re.compile(r"^[A-Z][A-Z0-9]+-\d+$")
+DEPENDENCY_REQUEST_RE = re.compile(
+    r"^\s*/coord\s+dependency\s+([A-Z][A-Z0-9]+-\d+)\s+blocks\s+([A-Z][A-Z0-9]+-\d+)\s*$",
+    re.IGNORECASE,
+)
 
 
 def require_config() -> tuple[str, str, str, str]:
@@ -175,6 +181,69 @@ def handoff(request: dict, config: tuple[str, str, str, str]) -> dict:
     return {"ticket_key": ticket_key, "released_repos": sorted(set(selected_repos)), "implementation_label": implementation_label}
 
 
+def link_dependency(request: dict, config: tuple[str, str, str, str]) -> dict:
+    control = checked_control(request["control_key"], config)
+    _, team_field_id, expected_team, _ = config
+    comment_id = str(request.get("request_comment_id") or "")
+    if not comment_id:
+        raise ValueError("request_comment_id is required")
+    command = request_comment(control, comment_id, DEPENDENCY_REQUEST_RE.pattern)
+    match = DEPENDENCY_REQUEST_RE.fullmatch(comment_body(command))
+    if not match:
+        raise ValueError("Dependency request must be '/coord dependency KEY blocks KEY'")
+
+    blocker_key, blocked_key = (key.upper() for key in match.groups())
+    requested_blocker = str(request.get("blocking_ticket_key") or "").upper()
+    requested_blocked = str(request.get("blocked_ticket_key") or "").upper()
+    if (requested_blocker, requested_blocked) != (blocker_key, blocked_key):
+        raise ValueError("Dependency action does not match the user's comment")
+    if blocker_key == blocked_key:
+        raise ValueError("A ticket cannot block itself")
+
+    blocker = checked_child(control, blocker_key, team_field_id, expected_team)
+    blocked = checked_child(control, blocked_key, team_field_id, expected_team)
+    control_label = config[0]
+    if control_label in labels(blocker) or control_label in labels(blocked):
+        raise ValueError("Dependency endpoints must be implementation tickets")
+
+    children, _ = fresh_assessment(control, config)
+    children_by_key = {key_of(child): child for child in children}
+    if blocker_key not in children_by_key or blocked_key not in children_by_key:
+        raise ValueError("Dependency endpoints must be same-Team project tickets")
+    blockers_by_key = {
+        key: linked_issues(child)[0]
+        for key, child in children_by_key.items()
+    }
+    if blocker_key in blockers_by_key[blocked_key]:
+        return {
+            "blocking_ticket_key": blocker_key,
+            "blocked_ticket_key": blocked_key,
+            "created": False,
+        }
+
+    blockers_by_key[blocked_key].add(blocker_key)
+    if cyclic_dependencies(blockers_by_key):
+        raise ValueError("Dependency would create a cycle")
+
+    # For Jira's Blocks type, the blocked issue is inward and its blocker is outward.
+    call_write(
+        "jira_create_issue_link",
+        {
+            "link_type": "Blocks",
+            "inward_issue_key": blocked_key,
+            "outward_issue_key": blocker_key,
+        },
+    )
+    verified_blockers, _ = linked_issues(get_issue(blocked_key))
+    if blocker_key not in verified_blockers:
+        raise RuntimeError(f"Jira did not confirm {blocker_key} blocks {blocked_key}")
+    return {
+        "blocking_ticket_key": blocker_key,
+        "blocked_ticket_key": blocked_key,
+        "created": True,
+    }
+
+
 def request_comment(control: dict, comment_id: str, command_pattern: str) -> dict:
     matches = [item for item in comments(control) if str(item.get("id") or "") == comment_id]
     if len(matches) != 1:
@@ -280,6 +349,8 @@ def dispatch(request: dict) -> dict:
         return set_state(request, config)
     if action == "handoff":
         return handoff(request, config)
+    if action == "link-dependency":
+        return link_dependency(request, config)
     if action == "create-ticket":
         return create_ticket(request, config)
     if action == "comment":

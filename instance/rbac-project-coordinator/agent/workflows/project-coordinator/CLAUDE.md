@@ -21,6 +21,16 @@ only conversation and status surface. Implementations stay with the existing
   The control ticket has exactly one state label: `coord:needs-plan`,
   `coord:active`, `coord:blocked`, or `coord:complete`.
 
+## Plan comments
+
+Whenever creating or revising a plan, analyze and list every same-Team
+implementation ticket on the control ticket: key, summary, status, current and
+suggested phase, dependencies, parallel group, and repo suggestion. Explain
+the proposed order and any gaps. Phase suggestions are advisory; never apply
+phase labels. Only create a `blocks` link after a new user comment explicitly
+requests `/coord dependency BLOCKER blocks BLOCKED` and the validated action
+confirms both tickets are in scope and the link will not create a cycle.
+
 ## Cycle
 
 1. Read the preflight JSON. If it reports Jira or memory unavailable, stop;
@@ -34,16 +44,26 @@ only conversation and status surface. Implementations stay with the existing
    workflow. Check the Team custom field by ID. Do not assume the display name
    is unique.
 3. **First enrollment** (control has `$BOT_LABEL`, no coordinator state):
-   analyze the parent's goal, current ticket status, same-Team coverage,
-   missing requirements, phase candidates, dependencies, and repo routing.
-   Post a control comment with a short status, specific gaps/questions,
-   proposed improvements, and a readable ASCII dependency diagram. Ask the
-   user to put `phase:01` on the first implementation tickets and supply the
-   next steps and required `relates to`/`blocks` links. Set
-   `coord:needs-plan`. If a complete first phase already exists, validate it
+   analyze every same-Team implementation ticket: summary, description,
+   acceptance criteria, status, phase labels, repo scope, and existing links.
+   Propose a complete plan with a suggested phase for each ticket, root links,
+   `blocks` dependencies, and parallel groups. Do not apply phase labels.
+   Comment on the control ticket with a list of every same-Team implementation
+   ticket (key, summary, status, current and suggested phase, dependencies,
+   parallel group, and repo suggestion), plus rationale, gaps, questions, and
+   a readable dependency diagram. Ask the user to apply the suggested phase
+   labels and correct or confirm the plan. A requested dependency can be set
+   with `/coord dependency RHCLOUD-123 blocks RHCLOUD-456`. Set
+   `coord:needs-plan`. If the first phase already passes the gate, validate it
    and continue to the active path.
 4. **New control comments**: `/coord status` gets a fresh status comment.
    `/coord create P-1` may create one previously proposed ticket.
+   `/coord dependency RHCLOUD-123 blocks RHCLOUD-456` requests a Jira
+   dependency link. Use the validated `link-dependency` action; both tickets
+   must be direct children with the configured Team ID, and the link must not
+   create a cycle. After the link is verified, refresh the full ticket plan in
+   the control comment. Ask for clarification if either ticket or direction is
+   ambiguous.
    `/coord complete project` can finish the project only when all same-Team
    implementation tickets are complete. Other comments may clarify the plan,
    ask questions, or request proposals. Do not execute historical comments on
@@ -106,6 +126,7 @@ Actions and required request keys:
 |---|---|
 | `set-state` | `state` |
 | `handoff` | `ticket_key`, `repos` (list of repo names) |
+| `link-dependency` | `request_comment_id`, `blocking_ticket_key`, `blocked_ticket_key` |
 | `create-ticket` | `request_comment_id`, `proposal_id`, `phase`, `summary`, `description` |
 | `comment` | `action_id`, `body` |
 

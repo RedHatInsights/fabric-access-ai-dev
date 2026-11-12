@@ -112,10 +112,14 @@ coordinator run:
    of this parent or include them in the plan.
 4. **Mark phases and dependencies.** Put exactly one `phase:NN` label on each
    implementation ticket, including later-phase tickets. At least one ticket
-   must have `phase:01`. Link each root ticket (no same-Team predecessor) with
-   `relates to` the control ticket. For ordering, link the predecessor as
-   `blocks` the next ticket; avoid dependency cycles. Tickets in the same phase
-   without dependencies can run in parallel.
+   must have `phase:01`. The planner will suggest a phase for each ticket and
+   show dependencies and parallel groups in its control-ticket comment; the
+   user applies the phase labels. Link each root ticket (no same-Team
+   predecessor) with `relates to` the control ticket. To ask the coordinator
+   to add an ordering link, comment
+   `/coord dependency RHCLOUD-123 blocks RHCLOUD-456` on the control ticket.
+   The coordinator checks that both tickets are same-Team children and that
+   the link will not create a cycle.
 5. **Make first handoffs possible.** Tickets ready for handoff must be
    unassigned and in `New`, `Backlog`, `Refinement`, or `To Do`. They need an
    active sprint unless `BOT_INCLUDE_BACKLOG` is enabled. The coordinator
@@ -164,10 +168,24 @@ flowchart TD
 | 4. Decide | Phase labels, root-ticket `relates to` links, `blocks` dependencies, acceptance criteria, repo choices, and implementation readiness. | If details are missing, asks on the control ticket. Otherwise identifies unblocked tickets in the lowest incomplete phase. |
 | 5. Act and save | User request, when present; selected ticket and repo; latest Jira state. | Validated actions update the control ticket or hand off ready work. Saves the snapshot and handled comment IDs for the next scan. |
 
-Users can comment `/coord status` for a summary, `/coord create P-1` to create
-a previously proposed ticket, or `/coord complete project` to request
-completion after all in-scope tickets are done. Jira remains the source of
-truth; the coordinator rereads relevant issues before acting.
+On the control ticket, users can request:
+
+```text
+/coord status
+/coord dependency RHCLOUD-123 blocks RHCLOUD-456
+/coord create P-1
+/coord complete project
+```
+
+`/coord create P-1` applies only to a previously proposed ticket;
+`/coord complete project` requires all in-scope tickets to be complete.
+During planning, the control comment lists every in-scope ticket with its
+current status and phase, plus suggested phases, dependencies, parallel
+groups, and repo routing. Dependency changes are applied only when the user
+requests the exact `blocks` direction in Jira; suggested phases remain
+suggestions. Jira remains the source of truth; the coordinator rereads
+relevant issues before acting. The shared Jira MCP service must expose
+`jira_create_issue_link` for requested dependencies.
 
 ## Build
 
