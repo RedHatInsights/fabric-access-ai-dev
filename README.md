@@ -127,10 +127,11 @@ coordinator run:
    ticket scope clear enough to identify the right repo.
 
 On first enrollment, the coordinator reports missing setup on the control
-ticket and normally sets `coord:needs-plan`. If the plan already passes the
-readiness gate, it can proceed to `coord:active`. The control ticket has one
-coordinator state label: `coord:needs-plan`, `coord:active`, `coord:blocked`,
-or `coord:complete`.
+ticket and normally sets `dev-bot-coordinator:needs-plan`. If the plan already
+passes the readiness gate, it can proceed to `dev-bot-coordinator:active`.
+The control ticket has one coordinator state label:
+`dev-bot-coordinator:needs-plan`, `dev-bot-coordinator:active`,
+`dev-bot-coordinator:blocked`, or `dev-bot-coordinator:complete`.
 
 The coordinator proposes missing tickets, edits, and closures; it creates a
 ticket only when a later comment says `/coord create P-1` for a named proposal.

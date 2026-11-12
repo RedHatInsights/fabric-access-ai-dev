@@ -117,7 +117,10 @@ def test_search_walks_cloud_cursor_and_server_offset(monkeypatch):
 
 @pytest.fixture
 def jira_store(monkeypatch):
-    control = issue("RHCLOUD-101", labels=["dev-bot-control", "repo:rbac-config", "coord:active"])
+    control = issue(
+        "RHCLOUD-101",
+        labels=["dev-bot-control", "repo:rbac-config", "dev-bot-coordinator:active"],
+    )
     first = issue("RHCLOUD-102", labels=["phase:01"], links=[relates("RHCLOUD-101")])
     parent = issue("RHCLOUD-100", parent=None, summary="Parent")
     parent["fields"]["issuetype"] = {"name": "Epic"}
@@ -223,7 +226,7 @@ def test_preflight_bootstrap_then_skips_unchanged_and_wakes_on_completion(monkey
     project = json.loads(outputs[-1][1])["projects"][0]
     assert project["first_run"] is True
     tasks["RHCLOUD-101"] = {"external_key": "RHCLOUD-101", "metadata": {"snapshot_hash": project["snapshot_hash"]}}
-    control["fields"]["labels"].append("coord:active")
+    control["fields"]["labels"].append("dev-bot-coordinator:active")
     coordinator.main()
     assert outputs[-1][0] == "skip"
 
@@ -233,10 +236,10 @@ def test_preflight_bootstrap_then_skips_unchanged_and_wakes_on_completion(monkey
 
 
 def test_state_label_does_not_wake_preflight():
-    control = issue("RHCLOUD-101", labels=["dev-bot-control", "coord:needs-plan"])
+    control = issue("RHCLOUD-101", labels=["dev-bot-control", "dev-bot-coordinator:needs-plan"])
     parent = issue("RHCLOUD-100", parent=None)
     original = coordinator.fingerprint(parent, control, [], TEAM_FIELD)
-    control["fields"]["labels"][-1] = "coord:blocked"
+    control["fields"]["labels"][-1] = "dev-bot-coordinator:blocked"
     assert coordinator.fingerprint(parent, control, [], TEAM_FIELD) == original
 
 

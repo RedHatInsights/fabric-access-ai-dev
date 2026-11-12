@@ -113,13 +113,16 @@ def set_state(request: dict, config: tuple[str, str, str, str]) -> dict:
     state = request.get("state")
     if state not in STATES:
         raise ValueError("Unknown coordinator state")
-    strict = state in {"coord:active", "coord:complete"}
+    strict = state in {
+        "dev-bot-coordinator:active",
+        "dev-bot-coordinator:complete",
+    }
     control = checked_control(request["control_key"], config, require_parent=strict, require_team=strict)
-    if state == "coord:active":
+    if state == "dev-bot-coordinator:active":
         _, assessment = fresh_assessment(control, config)
         if assessment["gaps"]:
             raise ValueError("Plan gate failed: " + "; ".join(assessment["gaps"]))
-    if state == "coord:complete":
+    if state == "dev-bot-coordinator:complete":
         comment_id = str(request.get("request_comment_id") or "")
         if not comment_id:
             raise ValueError("Completion requires an explicit control comment ID")

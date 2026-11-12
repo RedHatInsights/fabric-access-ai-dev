@@ -21,7 +21,14 @@ PHASE_RE = re.compile(r"^phase:(\d{2})$")
 JQL_VALUE_RE = re.compile(r"^[A-Za-z0-9:_-]+$")
 COMPLETE_STATUSES = frozenset({"done", "closed", "resolved", "release pending"})
 START_STATUSES = frozenset({"new", "backlog", "refinement", "to do"})
-COORD_STATES = frozenset({"coord:needs-plan", "coord:active", "coord:blocked", "coord:complete"})
+COORD_STATES = frozenset(
+    {
+        "dev-bot-coordinator:needs-plan",
+        "dev-bot-coordinator:active",
+        "dev-bot-coordinator:blocked",
+        "dev-bot-coordinator:complete",
+    }
+)
 OWN_COMMENT_PREFIX = "### Coordinator update"
 PAGE_SIZE = 50
 

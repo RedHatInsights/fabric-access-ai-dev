@@ -18,8 +18,9 @@ only conversation and status surface. Implementations stay with the existing
   control ticket.
 - Phase labels (`phase:01`, `phase:02`, ...) live **only on implementation
   tickets**. The user applies the first phase label to the relevant tickets.
-  The control ticket has exactly one state label: `coord:needs-plan`,
-  `coord:active`, `coord:blocked`, or `coord:complete`.
+  The control ticket has exactly one state label:
+  `dev-bot-coordinator:needs-plan`, `dev-bot-coordinator:active`,
+  `dev-bot-coordinator:blocked`, or `dev-bot-coordinator:complete`.
 
 ## Plan comments
 
@@ -54,8 +55,8 @@ confirms both tickets are in scope and the link will not create a cycle.
    a readable dependency diagram. Ask the user to apply the suggested phase
    labels and correct or confirm the plan. A requested dependency can be set
    with `/coord dependency RHCLOUD-123 blocks RHCLOUD-456`. Set
-   `coord:needs-plan`. If the first phase already passes the gate, validate it
-   and continue to the active path.
+   `dev-bot-coordinator:needs-plan`. If the first phase already passes the
+   gate, validate it and continue to the active path.
 4. **New control comments**: `/coord status` gets a fresh status comment.
    `/coord create P-1` may create one previously proposed ticket.
    `/coord dependency RHCLOUD-123 blocks RHCLOUD-456` requests a Jira
@@ -75,10 +76,12 @@ confirms both tickets are in scope and the link will not create a cycle.
    cycles and ambiguous repo selection before handoff. The mechanical
    preflight gaps must be empty, and you must judge that each runnable ticket
    has a clear outcome and acceptance criteria. If not, comment with the
-   missing details and keep `coord:needs-plan` (or `coord:blocked` if an
-   already-active project cannot progress).
-6. **Normal progress**: when the gate passes, set `coord:active`. Check each
-   same-Team ticket's status. `Release Pending` counts as implementation
+   missing details and keep `dev-bot-coordinator:needs-plan` (or
+   `dev-bot-coordinator:blocked` if an already-active project cannot
+   progress).
+6. **Normal progress**: when the gate passes, set
+   `dev-bot-coordinator:active`. Check each same-Team ticket's status.
+   `Release Pending` counts as implementation
    complete because the implementation bot sets it after PR merge; report
    release completion separately. For each unblocked ticket in the lowest
    incomplete phase, choose the correct `repo:` label from the control
@@ -90,10 +93,11 @@ confirms both tickets are in scope and the link will not create a cycle.
    enabled backlog intake. Do not assign the ticket to this coordinator.
 7. If no ticket is runnable, wait for a Jira change; do not post the same
    status repeatedly. When the current phase is complete and the next phase
-   has no plan, set `coord:needs-plan` and ask for the next phase and steps.
+   has no plan, set `dev-bot-coordinator:needs-plan` and ask for the next
+   phase and steps.
    Never mark the project complete merely because no more labeled tickets
-   exist. Set `coord:complete` only after an explicit user confirmation that
-   the same-Team project scope is finished and all planned implementation
+   exist. Set `dev-bot-coordinator:complete` only after an explicit user
+   confirmation that the same-Team project scope is finished and all planned implementation
    tickets are complete. Do not close the parent issue automatically.
 8. For missing normal tickets, ticket edits, or closures, **propose** the
    action on the control ticket with an ID (`P-1`, `P-2`, ...), reason, Team,
