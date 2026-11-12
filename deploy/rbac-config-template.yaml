@@ -11,6 +11,14 @@ parameters:
   required: true
 - name: BOT_LABEL
   value: hcc-ai-platform-accessmanagement
+- name: BOT_IMPLEMENTATION_LABEL
+  value: hcc-ai-platform-accessmanagement
+- name: BOT_JIRA_PROJECT
+  value: RHCLOUD
+- name: BOT_TEAM_FIELD_ID
+  value: ""
+- name: BOT_TEAM_ID
+  value: ""
 - name: BOT_JIRA_PROJECT_INSIGHTS_RBAC
   value: ""
 - name: BOT_JIRA_TEAM_ID_INSIGHTS_RBAC
@@ -320,6 +328,14 @@ objects:
           env:
           - name: BOT_LABEL
             value: ${BOT_LABEL}
+          - name: BOT_IMPLEMENTATION_LABEL
+            value: ${BOT_IMPLEMENTATION_LABEL}
+          - name: BOT_JIRA_PROJECT
+            value: ${BOT_JIRA_PROJECT}
+          - name: BOT_TEAM_FIELD_ID
+            value: ${BOT_TEAM_FIELD_ID}
+          - name: BOT_TEAM_ID
+            value: ${BOT_TEAM_ID}
           - name: BOT_JIRA_PROJECT_INSIGHTS_RBAC
             value: ${BOT_JIRA_PROJECT_INSIGHTS_RBAC}
           - name: BOT_JIRA_TEAM_ID_INSIGHTS_RBAC
