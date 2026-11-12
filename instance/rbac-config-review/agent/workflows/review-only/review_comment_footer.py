@@ -54,7 +54,7 @@ def with_footer(body: str, repo: str, pr: int, review_url: str | None = None) ->
         steps.append(f"- Approve with `Review bot: yes {approval.group(1)}` or decline with `Review bot: no {approval.group(1)}`.")
     if recovery:
         steps.append(f"- Approve a fresh review with `Review bot: yes {recovery.group(1)}` or decline with `Review bot: no {recovery.group(1)}`.")
-    steps.append("- Ask for an explanation or a diagram in a PR comment.")
+    steps.append("- Comment `/review-bot <question or request>` for an answer based on the pinned PR and review context.")
     if review_url:
         steps.extend([
             "- After changes, comment `/review-bot verify` to recheck existing findings.",

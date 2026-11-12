@@ -84,8 +84,8 @@ The per-repository settings are:
   selected skills define the detailed inline layout for findings attributed to
   them and must complete for publication. Other findings use the standard
   inline layout. Both formats use the same status summary template: a short
-  PR-purpose sentence, a Findings table with inline-thread links, and help for
-  requesting a re-review or explanation.
+  PR-purpose sentence, a Findings table with inline-thread links, and commands
+  for contextual answers, re-review, and verification.
 - **`jira`** (optional): Its presence enables Jira follow-up for that review
   repository. `team_field` is the Jira Team custom-field key; each profile maps
   a target repository to a Jira project, Team name/ID, and optional labels.
@@ -135,7 +135,7 @@ applies to status comments, inline findings, context questions, and answer
 follow-ups. The status comment has a short description of what the PR changes,
 then a Findings heading with counts and a table of plain-text finding IDs,
 severity, dimension, resolution state, and separate inline-comment links. It
-ends with the re-review command and a prompt for explanation questions.
+ends with contextual-answer, re-review, and verification commands.
 Detailed scenarios, evidence, and fixes belong in the inline comments.
 
 Every finding and feedback comment that describes behavior includes a realistic
@@ -335,8 +335,15 @@ stable across the summary, inline comments, and later review updates.
 
 The user-facing output is GitHub comments: one review summary and anchored
 inline threads for confirmed findings. The summary has a short description of
-the PR, a Findings table with inline-thread links, and prompts for requesting
-a re-review, verification, or explanation. A new top-level PR comment containing exactly
+the PR, a Findings table with inline-thread links, and prompts for contextual
+answers, re-review, or verification. A comment beginning with `/review-bot` in
+the PR conversation, an inline thread, or a submitted review body asks the agent
+to answer using a manifest pinned to the current PR revision. When available,
+the manifest includes the tracked status review, validated findings, and review
+threads. Generic requests do not run dimensions or increment the review number;
+inline and review body requests receive a top-level answer linked to their
+source. Up to five requests are answered per cycle; remaining requests stay
+queued for later cycles. A new top-level PR comment containing exactly
 `/review-bot re-review` asks for approval; it does not start a review. The bot
 posts a structured request with a revision-bound approval ID and separate
 bullet options. Any verified member of the repository's GitHub organization
