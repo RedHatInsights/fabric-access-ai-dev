@@ -110,11 +110,50 @@ ticket only when a later comment says `/coord create P-1` for a named proposal.
 the project after all same-Team implementation tickets are complete. It never
 edits or closes implementation tickets.
 
-The preflight is read-only and emits a session only when the parent, control,
-same-Team children, or user comments change. The workflow's `actions.py`
+The preflight is read-only. It starts a coordinator session on first enrollment,
+when project data or user comments change, or when a coordinator state label is
+missing. Otherwise, it skips the project. The workflow's `actions.py`
 revalidates Jira state before state, handoff, comment, or ticket-creation
 writes. New deployment parameters must be supplied by the deployment target;
 this repository does not deploy the coordinator by itself.
+
+### Coordination flow and inputs
+
+```mermaid
+flowchart TD
+    S["Scheduled cycle"] --> P["Read-only Jira preflight"]
+    J["Control ticket + parent +<br/>direct same-Team children"] --> P
+    M["Saved task snapshot and comments"] --> P
+    P -->|unchanged| SKIP["Skip; no coordinator session"]
+    P -->|first run, changed, or missing state| PAYLOAD["Preflight project payload"]
+    PAYLOAD --> A["Coordinator reviews one project"]
+    A <--> R["Re-read parent, control,<br/>relevant Jira tickets and comments"]
+    R --> G{"Plan ready?"}
+    G -->|No| Q["Comment gaps/questions;<br/>needs-plan or blocked"]
+    G -->|Yes| H["Set active; choose allowed repo;<br/>add repo and implementation labels"]
+    A --> C["Handle explicit Jira requests:<br/>status, proposed ticket, completion"]
+    Q --> W["Validated Jira actions"]
+    H --> W
+    C --> W
+    W --> U["Update saved snapshot and<br/>processed comment IDs"]
+    U --> S
+    H --> I["Existing implementation bot"]
+    I --> J
+    SKIP --> S
+```
+
+| Step | Inputs used | Result |
+|---|---|---|
+| 1. Find projects | `BOT_JIRA_PROJECT`, control label (`BOT_LABEL`), Team field ID and expected Team ID, allowed repositories, backlog setting, Jira issues, and saved tasks for `BOT_INSTANCE_ID`. | Finds matching control tickets, their parent, and direct children with the same Team ID. Other-Team children are excluded. Jira or memory errors stop the preflight rather than being treated as an empty project. |
+| 2. Compare project snapshot | Parent summary, description, and status; control summary, description, parent, Team, labels, and human comments; same-Team child summaries, descriptions, statuses, Teams, labels, links, assignees, and sprints. | Builds a fingerprint. Each child description in the preflight summary is capped at 2,000 characters. An unchanged fingerprint with a coordinator state skips the model session. |
+| 3. Prepare coordinator input | For a changed project: parent/control keys, Team IDs, snapshot hash, first-run flag, new control comments, current phase, plan gaps, ready/waiting tickets, allowed repos, implementation label, and same-Team child summaries with phase/repo labels, status, dependency links, assignee/sprint flags, and description. | Starts one coordinator cycle for one control ticket. The agent rereads the parent, control ticket, and relevant children in Jira before deciding. |
+| 4. Check readiness | Phase labels, `relates to` links for root tickets, directional `blocks` dependencies, dependency cycles, allowed repo labels, ticket acceptance criteria, status, assignee, and sprint/backlog eligibility. | If details are missing, comments with questions and keeps or sets `coord:needs-plan`/`coord:blocked`. If the plan is clear, identifies unblocked tickets in the lowest incomplete phase. |
+| 5. Coordinate work | The ready ticket details and `repo:` allowlist from the control ticket. Explicit user comments can request `/coord status`, `/coord create P-1` for a previously proposed ticket, or `/coord complete project`. | Sets `coord:active`, selects the repo for each ready ticket, and hands it to the implementation bot by adding the repo and implementation labels. A proposed ticket is created only after its explicit command; completion requires the explicit command and all in-scope tickets complete. |
+| 6. Record and verify actions | A structured action request plus freshly reread Jira data. | Validated scripts verify state, labels, comments, or ticket creation. The coordinator saves the latest snapshot hash and only marks handled user comment IDs as processed. |
+
+The coordinator's project payload is a compact assessment, not a replacement
+for Jira. Jira remains the source of truth, and the agent rereads relevant
+issues before it makes or executes a decision.
 
 ## Build
 
