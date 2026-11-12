@@ -92,17 +92,41 @@ Deploy another bot target using `deploy/template.yaml` or
 | `BOT_EXECUTION_ENGINE` | `coordinator` (the runner uses OpenCode for this workflow) |
 | `REHOR_OPENCODE_DEPLOYMENT_CONFIG` | `/home/botuser/app/instance/rbac-project-coordinator/opencode-deployment.json` |
 
-No control or parent Jira key is hardcoded. The control label enrolls a child
-issue, its parent defines the project, and its Team ID must match
-`BOT_TEAM_ID`. `repo:` labels on the control ticket define allowed repos;
-`project-repos.json` must contain them. The first phase is supplied by users
-with `phase:01` labels on implementation tickets, a `relates to` link from
-each ticket without a same-Team predecessor to the control ticket, and
-`blocks` links for sequencing. Every same-Team implementation ticket needs
-exactly one phase label, including tickets planned for later phases.
-The coordinator asks for missing pieces before adding the implementation bot
-label. It stores its state on the control ticket as exactly one of
-`coord:needs-plan`, `coord:active`, `coord:blocked`, and `coord:complete`.
+No parent or control ticket key is hardcoded. Prepare Jira before the first
+coordinator run:
+
+1. **Configure the bot.** Set the Team field ID and Team ID, implementation
+   label, and repository allowlist. The Team ID must be the Jira Team option
+   ID, not its display name. Each `repo:<name>` allowed on the control ticket
+   must match a key in `project-repos.json`.
+2. **Prepare the parent and control ticket.** Use an Epic or supported parent
+   issue with a clear project goal. Create exactly one direct child control
+   ticket for this Team, set its Team field to `BOT_TEAM_ID`, and add the
+   `dev-bot-control` label. Add the permitted `repo:<name>` labels to this
+   control ticket. Leave phase and implementation labels off it. The
+   coordinator sets its first state label when it enrolls the project.
+3. **Prepare implementation tickets.** Make each in-scope ticket a direct
+   child of the same parent with the same Team ID. Give each a clear outcome
+   and acceptance criteria. Every same-Team direct child other than the
+   control ticket is treated as project work, so keep unrelated tickets out
+   of this parent or include them in the plan.
+4. **Mark phases and dependencies.** Put exactly one `phase:NN` label on each
+   implementation ticket, including later-phase tickets. At least one ticket
+   must have `phase:01`. Link each root ticket (no same-Team predecessor) with
+   `relates to` the control ticket. For ordering, link the predecessor as
+   `blocks` the next ticket; avoid dependency cycles. Tickets in the same phase
+   without dependencies can run in parallel.
+5. **Make first handoffs possible.** Tickets ready for handoff must be
+   unassigned and in `New`, `Backlog`, `Refinement`, or `To Do`. They need an
+   active sprint unless `BOT_INCLUDE_BACKLOG` is enabled. The coordinator
+   chooses each ticket's repo from the control ticket's allowlist; make the
+   ticket scope clear enough to identify the right repo.
+
+On first enrollment, the coordinator reports missing setup on the control
+ticket and normally sets `coord:needs-plan`. If the plan already passes the
+readiness gate, it can proceed to `coord:active`. The control ticket has one
+coordinator state label: `coord:needs-plan`, `coord:active`, `coord:blocked`,
+or `coord:complete`.
 
 The coordinator proposes missing tickets, edits, and closures; it creates a
 ticket only when a later comment says `/coord create P-1` for a named proposal.
