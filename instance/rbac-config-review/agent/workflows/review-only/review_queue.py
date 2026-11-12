@@ -830,15 +830,8 @@ def pick_work(repos: dict, config: dict, tasks: list[dict],
                     continue
                 since = meta.get("last_seen_updated_at") or meta.get("last_reviewed_at") or "1970-01-01T00:00:00Z"
                 try:
-                    command_ids = _eligible_rereview_ids(item, task, since)
-                    if command_ids:
-                        item["rereview_comment_ids"] = command_ids
-                        item["kind"] = "review"
-                        item["priority"] = 1
-                        item["review_authorization"] = "approval_required"
                     verify_ids = []
-                    if (not command_ids
-                            and item.get("review_authorization") != "label_added"
+                    if (item.get("review_authorization") != "label_added"
                             and item["kind"] != "resume"):
                         verify_ids = _eligible_verify_ids(item, task, since)
                     if verify_ids:
@@ -846,6 +839,16 @@ def pick_work(repos: dict, config: dict, tasks: list[dict],
                         item["kind"] = "verify"
                         item["priority"] = 1
                         item.pop("review_authorization", None)
+                        # Verification is independent of full-review approval.
+                        # Leave any re-review command unseen for a later cycle.
+                        item.pop("rereview_comment_ids", None)
+                    else:
+                        command_ids = _eligible_rereview_ids(item, task, since)
+                        if command_ids:
+                            item["rereview_comment_ids"] = command_ids
+                            item["kind"] = "review"
+                            item["priority"] = 1
+                            item["review_authorization"] = "approval_required"
                     feedback_ids = external_feedback_ids(
                         repo, pr["number"], since, item["updated_at"], set(seen_feedback)
                     ) if task and item["kind"] in {"review", "feedback_check"} else []
@@ -906,22 +909,24 @@ def pick_work(repos: dict, config: dict, tasks: list[dict],
                 if (not isinstance(seen_feedback, list)
                         or any(not isinstance(ident, str) for ident in seen_feedback)):
                     raise ValueError("Invalid seen_feedback_comment_ids")
+                verify_ids = _eligible_verify_ids(
+                    probe, by_key.get(probe["task_key"]), since
+                )
+                command_ids = []
                 feedback_ids = external_feedback_ids(
                     probe["repo"], probe["number"], since, through, set(seen_feedback)
                 )
-                command_ids = _eligible_rereview_ids(probe, by_key.get(probe["task_key"]), since)
-                verify_ids = []
-                if not command_ids:
-                    verify_ids = _eligible_verify_ids(probe, by_key.get(probe["task_key"]), since)
-                if command_ids:
-                    probe["rereview_comment_ids"] = command_ids
-                    probe["kind"] = "review"
-                    probe["priority"] = 1
-                    probe["review_authorization"] = "approval_required"
-                elif verify_ids:
+                if verify_ids:
                     probe["verify_comment_ids"] = verify_ids
                     probe["kind"] = "verify"
                     probe["priority"] = 1
+                else:
+                    command_ids = _eligible_rereview_ids(probe, by_key.get(probe["task_key"]), since)
+                    if command_ids:
+                        probe["rereview_comment_ids"] = command_ids
+                        probe["kind"] = "review"
+                        probe["priority"] = 1
+                        probe["review_authorization"] = "approval_required"
                 if command_ids or feedback_ids:
                     probe["feedback_comment_ids"] = feedback_ids
                     found.append(probe)

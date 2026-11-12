@@ -718,11 +718,12 @@ look for new findings, and update the same summary with the next review number.
 A new top-level comment whose entire text is `/review-bot verify` requests
 verification of the existing open ledger only. Preflight accepts it only for
 an existing `pr_open` task with a tracked status review and from a verified
-organization member. It does not request full-review approval. Save and
-deduplicate its ID in `seen_verify_comment_ids` only after the status review
-update and addressed-thread resolutions succeed; follow **Verification-only
-command** above. If both commands appear in one window, the full re-review
-request takes precedence and still requires approval.
+organization member. It does not request full-review approval and takes
+precedence over a pending `/review-bot re-review` command, including while the
+full review is awaiting approval. Leave the re-review command unseen so it can
+be handled in a later cycle. Save and deduplicate the verify ID in
+`seen_verify_comment_ids` only after the status review update and addressed-
+thread resolutions succeed; follow **Verification-only command** above.
 
 Otherwise, compare authorized corrections or acceptances with current code.
 `memory_store` is denied — put useful feedback in task state only. Record
