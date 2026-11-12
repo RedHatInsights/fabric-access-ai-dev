@@ -75,3 +75,19 @@ repositories:
         url: https://github.com/project-kessel/insights-rbac
         relationship: Service consuming RBAC configuration.
     docs: []
+  insights-chrome:
+    docs:
+      - id: frontend-component-catalog
+        url: https://github.com/RedHatInsights/frontend-experience-docs/blob/master/pages/platform/component-catalog.md
+      - id: insights-chrome-component
+        url: https://github.com/RedHatInsights/frontend-experience-docs/blob/master/pages/platform/components/insights-chrome.md
+    jira:
+      team_field: customfield_10001
+      profiles:
+        insights-chrome:
+          target_repository: RedHatInsights/insights-chrome
+          team_name_env: ${BOT_JIRA_TEAM_NAME_INSIGHTS_CHROME}
+          project_env: ${BOT_JIRA_PROJECT_INSIGHTS_CHROME}
+          team_id_env: ${BOT_JIRA_TEAM_ID_INSIGHTS_CHROME}
+          component_id_env: ${BOT_JIRA_COMPONENT_ID_INSIGHTS_CHROME}
+          labels_env: ${BOT_JIRA_LABELS_INSIGHTS_CHROME}

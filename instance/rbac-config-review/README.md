@@ -89,6 +89,9 @@ The per-repository settings are:
 - **`jira`** (optional): Its presence enables Jira follow-up for that review
   repository. `team_field` is the Jira Team custom-field key; each profile maps
   a target repository to a Jira project, Team name/ID, and optional labels.
+  A profile may also configure `component_id_env`; when present, the Jira
+  creator sets that component on new issues. Component IDs, like Team IDs,
+  belong in App Interface rather than this public file.
   The `*_env` values use explicit `${ENV_NAME}` references. The Jira resolver
   reads those names from the process environment and rejects unmarked strings,
   so a variable name cannot be mistaken for a literal value. Labels are JSON
@@ -109,12 +112,17 @@ gets the intended context and skills; the loader validates the shape of each
 mapping but does not currently reject unmatched repository keys.
 
 In the current configuration, `project-repos.json` scans `insights-rbac`,
-`inventory-api`, `rbac-config`, `entitlements-api-go`, `uhc-auth-proxy`,
-`turnpike`, and `cloudwatch-aggregator`. Context entries exist for
-`insights-rbac`, `inventory-api`, and `rbac-config`; linked documents are
-configured for `insights-rbac` and `inventory-api`. The other allowlisted
-repositories can still be reviewed, but do not get those extra context sources
-unless entries are added for them.
+`insights-chrome`, `inventory-api`, `rbac-config`, `entitlements-api-go`,
+`uhc-auth-proxy`, `turnpike`, and `cloudwatch-aggregator`. Context entries exist
+for `insights-rbac`, `insights-chrome`, `inventory-api`, and `rbac-config`;
+linked documents are configured for `insights-rbac`, `insights-chrome`, and
+`inventory-api`. The insights-chrome docs are ordered with the platform catalog
+first, then the Console Shell component record. Together they establish that
+insights-chrome owns shell behavior such as navigation, authentication
+integration, micro-frontend hosting, and public Chrome APIs; hosted
+applications and shared package dependencies remain separate components. The
+other allowlisted repositories can still be reviewed, but do not get those
+extra context sources unless entries are added for them.
 
 ## Comment writing and context questions
 
@@ -373,6 +381,11 @@ review deployment settings are:
 | `BOT_JIRA_TEAM_ID_INVENTORY_API` | Console - Kessel Team value ID (set in App Interface) |
 | `BOT_JIRA_TEAM_NAME_INVENTORY_API` | `Console - Kessel` (set in App Interface) |
 | `BOT_JIRA_LABELS_INVENTORY_API` | JSON list, such as `[]` (set in App Interface) |
+| `BOT_JIRA_PROJECT_INSIGHTS_CHROME` | `RHCLOUD` (set in App Interface) |
+| `BOT_JIRA_TEAM_ID_INSIGHTS_CHROME` | Console - Framework Team value ID (set in App Interface) |
+| `BOT_JIRA_TEAM_NAME_INSIGHTS_CHROME` | `Console - Framework` (set in App Interface) |
+| `BOT_JIRA_COMPONENT_ID_INSIGHTS_CHROME` | Console Framework component ID (set in App Interface) |
+| `BOT_JIRA_LABELS_INSIGHTS_CHROME` | `["platform-experience-services"]` (set in App Interface) |
 
 `BOT_LABEL` is passed to the bot as a deployment label; it is separate from the
 GitHub PR label selected by `review-context.yaml: review_label`.
