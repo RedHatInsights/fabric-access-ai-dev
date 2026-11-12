@@ -76,11 +76,32 @@ repositories:
         relationship: Service consuming RBAC configuration.
     docs: []
   insights-chrome:
+    related:
+      - id: chrome-service-backend
+        url: https://github.com/RedHatInsights/chrome-service-backend
+        relationship: Provides runtime/configuration APIs and the browser-event bridge consumed by Console Shell; backend implementation and ownership remain separate.
+      - id: insights-rbac-ui
+        url: https://github.com/RedHatInsights/insights-rbac-ui
+        relationship: Hosted Console application consumes Chrome APIs; use it to check consumer compatibility while keeping application implementation separate.
+      - id: insights-rbac-api
+        url: https://github.com/project-kessel/insights-rbac
+        relationship: Upstream RBAC permission API used by access-aware UI; authorization policy and enforcement remain separate from shell behavior.
+      - id: inventory-api
+        url: https://github.com/project-kessel/inventory-api
+        relationship: Upstream inventory permission API referenced by shell access-aware integrations; inventory service ownership remains separate.
     docs:
       - id: frontend-component-catalog
         url: https://github.com/RedHatInsights/frontend-experience-docs/blob/master/pages/platform/component-catalog.md
       - id: insights-chrome-component
         url: https://github.com/RedHatInsights/frontend-experience-docs/blob/master/pages/platform/components/insights-chrome.md
+      - id: chrome-service-overview
+        url: https://github.com/RedHatInsights/frontend-experience-docs/blob/master/pages/platform/components/chrome-service.md
+      - id: pluggable-ui-framework
+        url: https://github.com/RedHatInsights/frontend-experience-docs/blob/master/pages/platform/components/pluggable-ui-framework.md
+      - id: frontend-configuration-discovery
+        url: https://github.com/RedHatInsights/frontend-experience-docs/blob/master/pages/platform/components/dynamic-navigation.md
+      - id: navigation-and-auth
+        url: https://github.com/RedHatInsights/frontend-experience-docs/blob/master/pages/platform/navigation-and-auth.md
     jira:
       team_field: customfield_10001
       profiles:

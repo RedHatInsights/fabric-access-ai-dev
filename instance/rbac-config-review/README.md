@@ -117,12 +117,15 @@ In the current configuration, `project-repos.json` scans `insights-rbac`,
 for `insights-rbac`, `insights-chrome`, `inventory-api`, and `rbac-config`;
 linked documents are configured for `insights-rbac`, `insights-chrome`, and
 `inventory-api`. The insights-chrome docs are ordered with the platform catalog
-first, then the Console Shell component record. Together they establish that
-insights-chrome owns shell behavior such as navigation, authentication
-integration, micro-frontend hosting, and public Chrome APIs; hosted
-applications and shared package dependencies remain separate components. The
-other allowlisted repositories can still be reviewed, but do not get those
-extra context sources unless entries are added for them.
+first, then the Console Shell component record, its runtime overview, Chrome API
+framework, configuration flow, and navigation/authentication guidance. These
+documents establish the shell's boundaries and its interfaces with the Chrome
+backend, hosted applications, and authorization providers. Related code
+snapshots are limited to the Chrome backend, RBAC UI consumer, RBAC API, and
+inventory API so reviews can check the documented contracts without treating
+those repositories as part of the shell. The other allowlisted repositories
+can still be reviewed, but do not get those extra context sources unless
+entries are added for them.
 
 ## Comment writing and context questions
 
