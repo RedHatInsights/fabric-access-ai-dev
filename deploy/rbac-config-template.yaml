@@ -46,7 +46,11 @@ parameters:
 - name: BOT_INCLUDE_BACKLOG
   value: "false"
 - name: BOT_INSTANCE_ID
-  value: ""
+  description: Stable instance ID used to check whether a review cycle is active during pod termination.
+  required: true
+- name: BOT_TERMINATION_GRACE_PERIOD_SECONDS
+  description: Must exceed the configured cycle timeout so an active review can finish before Kubernetes force-stops the pod.
+  value: "7800"
 - name: BOT_CONFIG_REPO
   value: ""
 - name: BOT_NAME
@@ -188,10 +192,124 @@ objects:
           app.kubernetes.io/component: bot
           app.kubernetes.io/part-of: devbot
       spec:
+        # Keep the pod alive for the configured cycle timeout (7,200s) plus cleanup margin.
+        terminationGracePeriodSeconds: ${{BOT_TERMINATION_GRACE_PERIOD_SECONDS}}
         dnsPolicy: ClusterFirst
+        # Native sidecars stay available until the bot exits, so local state services
+        # remain usable while the bot's preStop hook waits for an active review.
+        initContainers:
+        - name: postgres
+          restartPolicy: Always
+          image: registry.redhat.io/rhel9/postgresql-16:latest
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
+          env:
+          - name: POSTGRESQL_DATABASE
+            value: postgres
+          - name: POSTGRESQL_USER
+            value: postgres
+          - name: POSTGRESQL_PASSWORD
+            value: postgres
+          - name: PGPORT
+            value: "15432"
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "postgres"]
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "postgres"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 6
+          volumeMounts:
+          - name: pgdata
+            mountPath: /var/lib/pgsql/data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+        - name: redis
+          restartPolicy: Always
+          image: registry.redhat.io/rhel9/redis-7:latest
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
+          startupProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
         containers:
         - name: bot
           image: ${BOT_IMAGE}:${IMAGE_TAG}
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                - /bin/sh
+                - -c
+                - |
+                  python3 - <<'PY'
+                  import json
+                  import os
+                  import time
+                  from urllib.error import HTTPError, URLError
+                  from urllib.parse import quote
+                  from urllib.request import urlopen
+
+                  instance_id = os.environ["BOT_INSTANCE_ID"].strip()
+                  api_root = os.environ["BOT_MEMORY_URL"].removesuffix("/mcp").rstrip("/")
+                  url = f"{api_root}/api/instances/{quote(instance_id, safe='')}"
+                  last_message = None
+
+                  while True:
+                      try:
+                          with urlopen(url, timeout=5) as response:
+                              state = json.load(response).get("state")
+                      except HTTPError as error:
+                          if error.code == 404:
+                              print("No instance status exists; no active review is recorded.", flush=True)
+                              break
+                          state = None
+                      except (URLError, TimeoutError, OSError, ValueError):
+                          state = None
+
+                      if state in ("idle", "error"):
+                          print(f"Instance state is {state}; allowing pod termination.", flush=True)
+                          break
+
+                      message = f"Instance state is {state or 'unavailable'}; waiting for the review cycle to finish."
+                      if message != last_message:
+                          print(message, flush=True)
+                          last_message = message
+                      time.sleep(5)
+                  PY
           securityContext:
             runAsNonRoot: true
             allowPrivilegeEscalation: false
@@ -367,63 +485,6 @@ objects:
               cpu: "4"
               memory: 4Gi
               ephemeral-storage: 8Gi
-
-        - name: postgres
-          image: registry.redhat.io/rhel9/postgresql-16:latest
-          securityContext:
-            runAsNonRoot: true
-            allowPrivilegeEscalation: false
-            seccompProfile:
-              type: RuntimeDefault
-            capabilities:
-              drop: ["ALL"]
-          env:
-          - name: POSTGRESQL_DATABASE
-            value: postgres
-          - name: POSTGRESQL_USER
-            value: postgres
-          - name: POSTGRESQL_PASSWORD
-            value: postgres
-          - name: PGPORT
-            value: "15432"
-          readinessProbe:
-            exec:
-              command: ["pg_isready", "-U", "postgres", "-d", "postgres"]
-            initialDelaySeconds: 5
-            periodSeconds: 5
-            failureThreshold: 6
-          volumeMounts:
-          - name: pgdata
-            mountPath: /var/lib/pgsql/data
-          resources:
-            requests:
-              cpu: 100m
-              memory: 256Mi
-            limits:
-              cpu: 500m
-              memory: 512Mi
-
-        - name: redis
-          image: registry.redhat.io/rhel9/redis-7:latest
-          securityContext:
-            runAsNonRoot: true
-            allowPrivilegeEscalation: false
-            seccompProfile:
-              type: RuntimeDefault
-            capabilities:
-              drop: ["ALL"]
-          readinessProbe:
-            exec:
-              command: ["redis-cli", "ping"]
-            initialDelaySeconds: 5
-            periodSeconds: 5
-          resources:
-            requests:
-              cpu: 50m
-              memory: 64Mi
-            limits:
-              cpu: 200m
-              memory: 128Mi
 
         volumes:
         - name: pgdata

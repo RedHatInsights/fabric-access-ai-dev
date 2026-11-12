@@ -373,6 +373,7 @@ review deployment settings are:
 |---|---|
 | `BOT_NAME` | `devbot-fabric-access-review` |
 | `BOT_INSTANCE_ID` | `fabric-access-review` |
+| `BOT_TERMINATION_GRACE_PERIOD_SECONDS` | `7800` (7,200-second cycle timeout plus 10 minutes for shutdown) |
 | `BOT_CONFIG_REPO` | `https://github.com/RedHatInsights/fabric-access-ai-dev.git` |
 | `BOT_CONFIG_PATH` | `instance/rbac-config-review` |
 | `BOT_EXECUTION_ENGINE` | `coordinator` |
@@ -413,3 +414,15 @@ See the root [project README](../../README.md) for the overall bot repository
 and deployment layout, and [the workflow guide](agent/workflows/review-only/WORKFLOW.md)
 for detailed queue, evidence, ledger, and publishing behavior. The workload
 template is [`deploy/rbac-config-template.yaml`](../../deploy/rbac-config-template.yaml).
+
+When Kubernetes terminates the pod, the bot container's `preStop` hook polls
+the memory server for this instance's status. It waits while the state is
+`working` and allows termination after the state becomes `idle` or `error`.
+PostgreSQL and Redis run as native sidecars so they remain available until the
+bot exits. Keep `BOT_TERMINATION_GRACE_PERIOD_SECONDS` longer than
+`cycle_timeout_seconds` in `agent/instance.yaml`, with enough time for cleanup.
+If the memory server cannot report a terminal state before the grace period
+expires, Kubernetes can still force-stop the pod.
+The template uses Kubernetes native sidecars, which require the
+`SidecarContainers` feature (enabled by default starting with Kubernetes 1.29;
+see the [Kubernetes sidecar documentation](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/)).
