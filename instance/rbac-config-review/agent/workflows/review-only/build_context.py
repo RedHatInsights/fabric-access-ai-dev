@@ -15,6 +15,8 @@ from urllib.parse import quote
 
 from impact_analysis import make_impact_report
 from review_config import github_markdown_url, github_repo_url, load_config
+from review_comment_footer import status_url
+from review_ledger import LedgerPayloadMissing, decode_body
 from review_skills import prepare as prepare_review
 
 STOP_WORDS = {
@@ -40,6 +42,79 @@ def gh_json(endpoint: str) -> dict:
     if not isinstance(data, dict):
         raise ContextError(f"GitHub API did not return an object: {endpoint}")
     return data
+
+
+def gh_items(endpoint: str) -> list[dict]:
+    raw = run(["gh", "api", endpoint, "--paginate", "--slurp"])
+    pages = json.loads(raw)
+    if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
+        raise ContextError(f"GitHub did not return a list: {endpoint}")
+    return [item for page in pages for item in page if isinstance(item, dict)]
+
+
+def build_review_context(repo: str, pr_number: int, review_id: int | None) -> dict | None:
+    """Attach the tracked review and finding threads to command-answer context."""
+    if review_id is None:
+        return None
+    if not isinstance(review_id, int) or isinstance(review_id, bool) or review_id < 1:
+        raise ContextError("Tracked status review ID is invalid")
+    review = gh_json(f"repos/{repo}/pulls/{pr_number}/reviews/{review_id}")
+    actor = gh_json("user")
+    login = actor.get("login")
+    body = review.get("body")
+    marker = re.compile(r"<!-- dev-review-bot:fabric-access-review:[0-9a-f]{40}:[0-9a-f]{40} -->")
+    review_user = review.get("user")
+    review_login = review_user.get("login") if isinstance(review_user, dict) else None
+    if (review.get("state") != "COMMENTED" or not isinstance(login, str)
+            or not isinstance(review_login, str)
+            or review_login.casefold() != login.casefold()
+            or not isinstance(body, str) or not marker.search(body)
+            or review.get("html_url") != status_url(repo, pr_number, review_id)):
+        raise ContextError("Tracked status review is unavailable or not owned by this bot")
+
+    findings = None
+    try:
+        findings = decode_body(body, repo, pr_number)["findings"]
+    except LedgerPayloadMissing:
+        pass
+    public_body = re.sub(
+        r"\n*<!-- dev-review-bot:review-ledger:v1:[A-Za-z0-9_-]+ -->\s*\Z", "", body
+    ).strip()
+
+    comments = gh_items(f"repos/{repo}/pulls/{pr_number}/comments?per_page=100")
+    anchor_pattern = re.compile(
+        r"<!-- dev-review-bot:(?:fabric-access-finding|missing-context|command-response):"
+    )
+    anchors = []
+    for comment in comments:
+        author = comment.get("user") or {}
+        comment_body = comment.get("body")
+        if (isinstance(author, dict) and isinstance(author.get("login"), str)
+                and author["login"].casefold() == login.casefold()
+                and isinstance(comment_body, str) and anchor_pattern.search(comment_body)):
+            anchors.append(comment)
+    anchor_ids = {item.get("id") for item in anchors if isinstance(item.get("id"), int)}
+    thread_comments = []
+    for comment in comments:
+        if comment in anchors or comment.get("in_reply_to_id") in anchor_ids:
+            thread_comments.append({
+                key: comment.get(key) for key in (
+                    "id", "in_reply_to_id", "path", "line", "html_url",
+                    "created_at", "user", "body",
+                ) if key in comment
+            })
+    thread_comments = thread_comments[-200:]
+    for comment in thread_comments:
+        if isinstance(comment.get("body"), str) and len(comment["body"]) > 12000:
+            comment["body"] = comment["body"][:12000] + "\n[truncated]"
+
+    return {
+        "status_review_id": review_id,
+        "status_review_url": status_url(repo, pr_number, review_id),
+        "status_review_body": public_body,
+        "findings": findings,
+        "finding_threads": thread_comments,
+    }
 
 
 def diff_terms(patch: str, limit: int = 24) -> list[str]:
@@ -112,7 +187,7 @@ def fetch_doc(url: str) -> tuple[str, str]:
 
 def build(repo_key: str, pr_number: int, expected_head: str, expected_base: str, output_root: Path,
           focus: list[str] | None = None, level: str | None = None,
-          verification_only: bool = False) -> dict:
+          verification_only: bool = False, status_review_id: int | None = None) -> dict:
     config = load_config()
     project_repos = json.loads((Path.cwd() / "project-repos.json").read_text())
     entry = project_repos.get(repo_key)
@@ -186,6 +261,8 @@ def build(repo_key: str, pr_number: int, expected_head: str, expected_base: str,
         "format": context.get("format", "standard"),
         "format_skills": context.get("skills", []) if context.get("format") == "custom" else [],
     }
+    if status_review_id is not None:
+        manifest["review_context"] = build_review_context(target, pr_number, status_review_id)
     impact_path = snapshot / "impact.json"
     impact_path.write_text(json.dumps(make_impact_report(manifest, patch), indent=2))
     manifest["impact_path"] = str(impact_path)
@@ -210,14 +287,18 @@ def main() -> None:
     parser.add_argument("--output-root", type=Path, default=Path("data/review-context"))
     parser.add_argument("--focus", help="Comma-separated dimension names")
     parser.add_argument("--level", help="Configured dimension level")
-    parser.add_argument("--verification-only", action="store_true",
-                        help="Build pinned evidence context without selecting or generating review dimensions")
+    parser.add_argument("--status-review-id", type=int,
+                        help="Include the tracked status review and its finding threads")
+    parser.add_argument("--context-only", "--verification-only", dest="context_only",
+                        action="store_true",
+                        help="Build pinned PR context without selecting or generating review dimensions")
     args = parser.parse_args()
     try:
         focus = args.focus.split(",") if args.focus else None
         print(json.dumps(build(args.repo_key, args.pr, args.head_sha, args.base_sha, args.output_root,
                                focus=focus, level=args.level,
-                               verification_only=args.verification_only), indent=2))
+                               verification_only=args.context_only,
+                               status_review_id=args.status_review_id), indent=2))
     except (ContextError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
         parser.exit(1, f"Context build failed: {exc}\n")
 

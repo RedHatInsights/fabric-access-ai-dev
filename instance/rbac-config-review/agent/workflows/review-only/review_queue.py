@@ -8,7 +8,7 @@ import os
 import re
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote, urlencode
 
@@ -25,6 +25,10 @@ from review_ledger import (
     status_summary,
     write_cycle_ledger,
 )
+from review_bot_commands import (
+    MAX_COMMANDS_PER_CYCLE,
+    requests as bot_command_requests,
+)
 from rereview_requests import (
     VERIFY_COMMAND,
     fetch_comments,
@@ -34,6 +38,7 @@ from rereview_requests import (
 
 TASK_PREFIX = "review-only:github:"
 ACTIVE = {"in_progress", "pr_open", "pr_changes"}
+COMMANDABLE = ACTIVE | {"done"}
 RESUMABLE = {"in_progress", "pr_changes"}
 PR_FIELDS = "number,title,url,headRefOid,baseRefOid,headRefName,isDraft,author,updatedAt"
 PR_STATE_FIELDS = "state,mergedAt,closedAt,headRefOid,baseRefOid,updatedAt,url,title,headRefName"
@@ -631,6 +636,34 @@ def external_feedback_ids(repo: str, number: int, since: str, through: str,
     return found
 
 
+def _eligible_bot_commands(chosen: dict, since: str, seen_ids: set[str]) -> list[dict]:
+    """Return contextual commands from organization members on either PR comment surface."""
+    repo, number = chosen["repo"], chosen["number"]
+    through = datetime.now(timezone.utc).isoformat()
+    bot_login = _bot_login()
+    found = bot_command_requests(
+        fetch_comments(repo, number), "issue", repo, number,
+        since, through, seen_ids, bot_login,
+    )
+    found.extend(bot_command_requests(
+        _api_items(f"repos/{repo}/pulls/{number}/comments?per_page=100"),
+        "review-comment", repo, number, since, through, seen_ids, bot_login,
+    ))
+    found.extend(bot_command_requests(
+        _api_items(f"repos/{repo}/pulls/{number}/reviews?per_page=100"),
+        "review", repo, number, since, through, seen_ids, bot_login,
+    ))
+    org = repo.split("/", 1)[0]
+    eligible = []
+    for request in sorted(found, key=lambda item: (
+            _parse_timestamp(item["created_at"]), item["source"], item["id"])):
+        if _is_org_member(org, request["login"]):
+            eligible.append(request)
+        if len(eligible) >= MAX_COMMANDS_PER_CYCLE:
+            break
+    return eligible
+
+
 def _eligible_rereview_ids(chosen: dict, task: dict | None, since: str) -> list[int]:
     if task is None:
         return []
@@ -821,7 +854,8 @@ def pick_work(repos: dict, config: dict, tasks: list[dict],
                 probe = candidate(pr, repo_key, repo, task, pending_rereview=True)
                 meta = _metadata(task)
                 since, through = meta.get("last_seen_updated_at"), pr.get("updatedAt")
-                if probe and probe["kind"] == "feedback_check" and since and through and since <= through:
+                if (probe and probe["kind"] == "feedback_check" and since
+                        and isinstance(through, str)):
                     boundary_probes.append((probe, meta, since, through))
             if item and item["kind"] != "resume":
                 try:
@@ -842,7 +876,30 @@ def pick_work(repos: dict, config: dict, tasks: list[dict],
                     errors.append(f"{repo}#{pr['number']}: Invalid seen_feedback_comment_ids")
                     continue
                 since = meta.get("last_seen_updated_at") or meta.get("last_reviewed_at") or "1970-01-01T00:00:00Z"
+                command_scan_done = not (task and task.get("status") in COMMANDABLE)
                 try:
+                    command_requests = []
+                    if task and task.get("status") in COMMANDABLE:
+                        command_requests = _eligible_bot_commands(
+                            item, since, set(seen_feedback)
+                        )
+                        command_scan_done = True
+                    if command_requests:
+                        item["kind"] = "command_reply"
+                        item["priority"] = 1
+                        item["command_requests"] = command_requests
+                        item["feedback_comment_ids"] = [
+                            request["feedback_id"] for request in command_requests
+                        ]
+                        item["task_status"] = task.get("status")
+                        review_id = meta.get("review_id")
+                        if type(review_id) is int and review_id > 0:
+                            item["status_review_id"] = review_id
+                        item.pop("review_authorization", None)
+                        item.pop("review_label_event_id", None)
+                        found.append(item)
+                        continue
+
                     verify_ids = []
                     if (item.get("review_authorization") != "label_added"
                             and item["kind"] != "resume"):
@@ -869,7 +926,8 @@ def pick_work(repos: dict, config: dict, tasks: list[dict],
                         item["feedback_comment_ids"] = feedback_ids
                         found.append(item)
                 except (RuntimeError, subprocess.TimeoutExpired, ValueError, json.JSONDecodeError) as exc:
-                    if item["kind"] == "feedback_check":
+                    if (not command_scan_done
+                            or item["kind"] in {"feedback_check", "command_reply"}):
                         errors.append(f"{repo}#{pr['number']}: {exc}")
                         continue
                     # An unverified comment must not authorize or trigger a
@@ -900,6 +958,36 @@ def pick_work(repos: dict, config: dict, tasks: list[dict],
         except (RuntimeError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
             errors.append(f"{repo}#{number}: {exc}")
             continue
+        if state.get("state") == "OPEN" and status in COMMANDABLE:
+            seen_feedback = meta.get("seen_feedback_comment_ids") or []
+            if (not isinstance(seen_feedback, list)
+                    or any(not isinstance(ident, str) for ident in seen_feedback)):
+                errors.append(f"{repo}#{number}: Invalid seen_feedback_comment_ids")
+                continue
+            since = meta.get("last_seen_updated_at") or meta.get("last_reviewed_at") or "1970-01-01T00:00:00Z"
+            probe = candidate(state, repo_key, repo, task, pending_rereview=True)
+            if probe is None:
+                continue
+            try:
+                command_requests = _eligible_bot_commands(
+                    probe, since, set(seen_feedback)
+                )
+                if command_requests:
+                    probe["kind"] = "command_reply"
+                    probe["priority"] = 1
+                    probe["command_requests"] = command_requests
+                    probe["feedback_comment_ids"] = [
+                        request["feedback_id"] for request in command_requests
+                    ]
+                    probe["task_status"] = status
+                    review_id = meta.get("review_id")
+                    if type(review_id) is int and review_id > 0:
+                        probe["status_review_id"] = review_id
+                    found.append(probe)
+                    continue
+            except (RuntimeError, subprocess.TimeoutExpired, ValueError, json.JSONDecodeError) as exc:
+                errors.append(f"{repo}#{number}: {exc}")
+                continue
         item = lifecycle_work(task, repo_key, repo, number, state)
         if item:
             found.append(item)
@@ -911,6 +999,27 @@ def pick_work(repos: dict, config: dict, tasks: list[dict],
             if probe["task_key"] in excluded_task_keys:
                 continue
             try:
+                seen_feedback = meta.get("seen_feedback_comment_ids") or []
+                if (not isinstance(seen_feedback, list)
+                        or any(not isinstance(ident, str) for ident in seen_feedback)):
+                    raise ValueError("Invalid seen_feedback_comment_ids")
+                command_requests = _eligible_bot_commands(
+                    probe, since, set(seen_feedback)
+                )
+                if command_requests:
+                    probe["kind"] = "command_reply"
+                    probe["priority"] = 1
+                    probe["command_requests"] = command_requests
+                    probe["feedback_comment_ids"] = [
+                        request["feedback_id"] for request in command_requests
+                    ]
+                    probe["task_status"] = by_key[probe["task_key"]].get("status")
+                    review_id = meta.get("review_id")
+                    if type(review_id) is int and review_id > 0:
+                        probe["status_review_id"] = review_id
+                    found.append(probe)
+                    break
+
                 label_event = _latest_review_label_event(
                     probe["repo"], probe["number"], config["review_label"]
                 )
@@ -918,10 +1027,6 @@ def pick_work(repos: dict, config: dict, tasks: list[dict],
                     _apply_review_label_event(probe, label_event, by_key.get(probe["task_key"]))
                     found.append(probe)
                     break
-                seen_feedback = meta.get("seen_feedback_comment_ids") or []
-                if (not isinstance(seen_feedback, list)
-                        or any(not isinstance(ident, str) for ident in seen_feedback)):
-                    raise ValueError("Invalid seen_feedback_comment_ids")
                 verify_ids = _eligible_verify_ids(
                     probe, by_key.get(probe["task_key"]), since
                 )

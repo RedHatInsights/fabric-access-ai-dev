@@ -10,7 +10,7 @@ finding ID in the summary and inline comment. The summary has a one-sentence
 purpose statement followed by a Findings table with plain-text IDs, severity,
 dimension, resolution state, and a separate link to each inline thread.
 Scenarios, evidence, and fixes stay in the inline comments. The summary ends
-with re-review, verification, and explanation commands. Its hidden
+with contextual-answer, re-review, and verification commands. Its hidden
 versioned ledger payload is restored from GitHub at the start of later cycles,
 so review history does not depend on an instance-local file surviving.
 
@@ -55,7 +55,7 @@ cycle so bot-authored updates alone do not start a model session.
 | Context builder | `build_context.py` | Script | Checks out the PR head read-only, clones related repos at a pinned SHA, fetches configured Markdown docs at a pinned commit, writes `manifest.json` |
 | Skill preparation | `review_skills.py` | Script | Selects dimensions, reads selected recipe YAML at a pinned commit, and generates per-run review skills |
 | Impact analysis | `impact_analysis.py` | Script | Deterministically (no LLM) extracts changed identifiers from the diff and `git grep`-matches them in related repos → `impact.json`'s `consumer_usages` (candidates, not confirmed breakage) |
-| PR command detection | `rereview_requests.py`, `review_queue.py` | Script | Finds exact re-review and verification commands; the runner verifies each author's organization membership before acting |
+| PR command detection | `rereview_requests.py`, `review_bot_commands.py`, `review_queue.py` | Script | Finds exact verification/re-review commands and new `/review-bot` requests in top-level comments, inline threads, and submitted review bodies; the runner answers generic requests from pinned context after organization-membership checks |
 | Jira issue creation | `.opencode/agents/jira-ticket-creator.md`, `jira_config.py` | **AI** (subagent) + script | Handles an explicit Jira request or an authorized cross-repo follow-up using the target repository's App Interface profile and an idempotency marker |
 | Model routing | `review_skills.py` + `dimensions.yaml` | Script | Resolves each pass's model preference to the configured Terra or Luna subagent in `review_plan` |
 | Review criteria | `skills/dimensional-review/SKILL.md` | **AI** (review-terra / review-luna) | Multi-dimension review over pinned context using the configured model profile; results are deduped and consensus-scored |
@@ -132,6 +132,7 @@ legacy-state reconciliation:
    | `resume` | Task status is `in_progress`/`pr_changes` and its stored active head/base pair matches the PR | 0 (highest) |
    | `review` | A new event added the configured label, or the current head/base pair differs from the stored review pair and needs approval | 1 |
    | `verify` | A new exact `/review-bot verify` comment from an organization member asks to check existing findings only | 1 |
+   | `command_reply` | A tracked, unpaused task has one or more organization-member top-level, inline, or submitted-review comments beginning with `/review-bot` that are not an exact top-level `verify` or `re-review` command | 1 |
    | `feedback_check` | SHA unchanged and preflight finds unseen human issue/review feedback; `/review-bot re-review` requests approval for a fresh pass | 2 |
    | `merge_complete` | GitHub confirms a tracked PR has merged | 0 |
    | `closed_unmerged` | GitHub confirms a tracked PR closed without merging | 0 |
@@ -181,6 +182,14 @@ Ordinary feedback does not trigger a full review. Before starting a feedback
 session, preflight checks issue comments, review comments, and submitted reviews
 for unseen human-authored activity. Bot-authored updates alone do not invoke the
 model. Same-second feedback IDs are saved to prevent replay.
+New comments beginning with `/review-bot` on a tracked, unpaused PR are answered
+one comment at a time using a context-only manifest pinned to the current head
+and base. When available, the manifest includes the tracked status review,
+validated ledger findings, and finding threads with replies. Generic requests
+do not run dimensions or increment the review counter. Exact top-level
+`/review-bot verify` and `/review-bot re-review` commands retain their
+verification and approval-gated review behavior. Replies to inline or review-
+body comments are posted as top-level PR comments linked to the source.
 Requests arriving after a review starts are left for a later cycle. A validated
 but unfinished publication is recorded in task state so retries reuse its body
 and number rather than counting another review.
@@ -521,7 +530,7 @@ This PR aligns the documented role response with the fields returned by the hand
 
 - **Re-review:** Add a new top-level PR comment containing `/review-bot re-review`; the bot will ask for approval before reviewing.
 - **Verify findings:** Add a new top-level PR comment containing `/review-bot verify`; the bot checks existing findings only.
-- **Explanation:** Ask a question about a finding in a PR comment; the bot will answer with pinned context.
+- **Ask the bot:** Comment `/review-bot <question or request>` for an answer based on the pinned PR and review context.
 
 <!-- dev-review-bot:fabric-access-review:<head_sha>:<base_sha> -->
 <!-- dev-review-bot:review-ledger:v1:<compressed-public-ledger> -->
@@ -562,7 +571,7 @@ The linked inline comment carries the evidence needed to act:
 **Status Comment:** [View review status](https://github.com/org/repo/pull/42#pullrequestreview-123)
 
 **Next steps:**
-- Ask for an explanation or a diagram in a PR comment.
+- Comment `/review-bot <question or request>` for an answer based on the pinned PR and review context.
 - After changes, comment `/review-bot verify` to recheck existing findings.
 - Comment `/review-bot re-review` to request a full review (approval required).
 <!-- dev-review-bot:comment-footer:end -->

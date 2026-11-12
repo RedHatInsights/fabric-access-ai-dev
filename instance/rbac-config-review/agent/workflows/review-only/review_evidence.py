@@ -468,10 +468,10 @@ def render_status_review(manifest: dict, findings: list[dict], review_number: in
         *([last_verification, ""] if last_verification else []),
         "---",
         "",
+        "- **Ask the bot:** Comment `/review-bot <question or request>` for an answer based on the pinned PR and review context.",
         "- **Re-review:** Add a new top-level PR comment containing `/review-bot re-review`.",
         "- **Verify findings:** Add a new top-level PR comment containing `/review-bot verify`; the bot checks existing findings only.",
         "- **Jira:** Ask for a ticket for out-of-scope work; confirmed cross-repo findings with one configured owner are tracked automatically.",
-        "- **Explanation:** Ask a question about a finding in a PR comment; the bot will answer with pinned context.",
         "",
         f"<!-- dev-review-bot:fabric-access-review:{pr['head_sha']}:{pr['base_sha']} -->",
     ]
