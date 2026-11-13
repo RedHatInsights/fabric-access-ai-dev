@@ -9,9 +9,11 @@ review-only:github:. Pass source_type="github" for task lookups and writes.
 Pass instance_id to task creation, listing, capacity, and status calls.
 
 The bot may post GitHub review comments and manage only the
-`dev-bot-review-waiting-for-approval` label while review approval is pending.
-It must never edit files, commit, push, approve, request changes, merge, or
-change other PR labels. It may create a Jira issue after a verified organization member asks in natural language, or
+`dev-bot-review-waiting-for-approval` label while review approval is pending,
+plus exactly one of `low-risk`, `medium-risk`, or `high-risk` after a full
+review. Risk labels describe merge guidance; repository branch rules remain
+the enforcement point for human approvals. It must never edit files, commit,
+push, approve, request changes, merge, or change other PR labels. It may create a Jira issue after a verified organization member asks in natural language, or
 automatically for a verifier-confirmed cross-repository finding with exactly
 one configured related-repository owner. Use the repo/team profile and
 `jira-ticket-creator` subagent. Never update existing Jira issues.
@@ -32,8 +34,8 @@ The review bot's default model is GPT-6.1 Terra. It is configured on both the
 instance (`instance.yaml`) and the primary `review-runner` agent. Use Terra for
 overall review orchestration and dimensions with no explicit preference.
 Dimensions with a `luna` preference use Luna at high reasoning effort. The
-separate verifier also uses Luna at high effort. Terra workers remain at
-medium effort.
+separate verifier and the `review-risk-assessor` also use Luna at high effort.
+Terra workers remain at medium effort.
 
 Dimensions can set `model_preference` in
 `skills/dimensional-review/dimensions.yaml`:
@@ -42,6 +44,9 @@ Dimensions can set `model_preference` in
 |---|---|---|
 | `terra` | Read-only `review-terra` subagent, medium effort | Default for orchestration and dimensions without a preference; also used for broad, cross-cutting, or high-judgment analysis, including dimensions where missing a subtle interaction could affect correctness, security, architecture, or concurrency. |
 | `luna` | Read-only `review-luna` subagent, high effort | Used for explicitly routed focused checks. |
+
+The read-only `review-risk-assessor` runs once per full review to classify
+breaking-change risk. It does not run for verification or comment replies.
 
 The catalog's `config.model_routing.default` is `terra`. The review planner
 resolves every selected built-in or dynamic pass to a preference and worker in

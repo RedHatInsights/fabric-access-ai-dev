@@ -16,7 +16,7 @@ from urllib.parse import quote
 from impact_analysis import make_impact_report
 from review_config import github_markdown_url, github_repo_url, load_config
 from review_comment_footer import status_url
-from review_ledger import LedgerPayloadMissing, decode_body
+from review_ledger import LedgerPayloadMissing, decode_body, risk_assessment_from_body
 from review_skills import prepare as prepare_review
 
 STOP_WORDS = {
@@ -77,8 +77,12 @@ def build_review_context(repo: str, pr_number: int, review_id: int | None) -> di
         findings = decode_body(body, repo, pr_number)["findings"]
     except LedgerPayloadMissing:
         pass
+    risk_assessment = risk_assessment_from_body(body)
     public_body = re.sub(
         r"\n*<!-- dev-review-bot:review-ledger:v1:[A-Za-z0-9_-]+ -->\s*\Z", "", body
+    ).strip()
+    public_body = re.sub(
+        r"\n*<!-- dev-review-bot:risk-assessment:v1:[A-Za-z0-9_-]+ -->", "", public_body
     ).strip()
 
     comments = gh_items(f"repos/{repo}/pulls/{pr_number}/comments?per_page=100")
@@ -113,6 +117,7 @@ def build_review_context(repo: str, pr_number: int, review_id: int | None) -> di
         "status_review_url": status_url(repo, pr_number, review_id),
         "status_review_body": public_body,
         "findings": findings,
+        "risk_assessment": risk_assessment,
         "finding_threads": thread_comments,
     }
 

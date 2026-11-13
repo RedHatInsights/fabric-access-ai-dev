@@ -21,6 +21,7 @@ from review_ledger import (
     LedgerPayloadMissing,
     decode_body,
     public_ledger,
+    risk_assessment_from_body,
     restore_from_review,
     status_summary,
     write_cycle_ledger,
@@ -294,12 +295,16 @@ def restore_prior_ledger(chosen: dict, task: dict | None) -> bool:
         if isinstance(pending_body, str):
             try:
                 pending_ledger = decode_body(pending_body, chosen["repo"], chosen["number"])
+                pending_risk = risk_assessment_from_body(pending_body)
             except LedgerPayloadMissing:
                 pending_ledger = None
+                pending_risk = None
             if (pending_ledger is not None
                     and pending_ledger["head_sha"] == chosen["head_sha"]
                     and pending_ledger["base_sha"] == chosen["base_sha"]):
                 pending_ledger["status_summary"] = status_summary(pending_body)
+                if pending_risk is not None:
+                    pending_ledger["risk_assessment"] = pending_risk
                 payload = pending_ledger
 
     if payload is None:
@@ -335,6 +340,8 @@ def restore_prior_ledger(chosen: dict, task: dict | None) -> bool:
         ledger_available = True
         if isinstance(payload.get("status_summary"), str):
             chosen["pr_summary"] = payload["status_summary"]
+        if isinstance(payload.get("risk_assessment"), dict):
+            chosen["risk_assessment"] = payload["risk_assessment"]
 
     if chosen.get("kind") == "verify" and not ledger_available:
         chosen["ledger_recovery_state"] = "unavailable"

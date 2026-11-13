@@ -11,7 +11,7 @@ it does not edit files, commit, push, approve, request changes, or merge PRs.
 |---|---|
 | [`agent/instance.yaml`](agent/instance.yaml) | Selects the scheduled workflow, runtime, provider, and model. |
 | [`opencode-deployment.json`](opencode-deployment.json) | Defines the Rehor provider and available Luna and Terra models. |
-| [`agent/.opencode/agents/`](agent/.opencode/agents/) | Configures the runner, review workers, missing-context detector, and verifier models and permissions. |
+| [`agent/.opencode/agents/`](agent/.opencode/agents/) | Configures the runner, review workers, missing-context detector, verifier, risk assessor, models, and permissions. |
 | [`agent/project-repos.json`](agent/project-repos.json) | Allowlist of repositories whose GitHub PR queues are scanned. |
 | [`agent/review-context.yaml`](agent/review-context.yaml) | GitHub label to watch and per-repository context, required skills, and comment format. |
 | [`agent/skills/dimensional-review/dimensions.yaml`](agent/skills/dimensional-review/dimensions.yaml) | Review levels, dimensions, applicability rules, and dynamic recipe sources. |
@@ -133,6 +133,7 @@ Write comments for developers working on this project: direct, technically
 precise, and easy to scan. Use short sentences and standard terminology. This
 applies to status comments, inline findings, context questions, and answer
 follow-ups. The status comment has a short description of what the PR changes,
+a Change risk section with the assessed level, rationale, and merge guidance,
 then a Findings heading with counts and a table of plain-text finding IDs,
 severity, dimension, resolution state, and separate inline-comment links. It
 ends with contextual-answer, re-review, and verification commands.
@@ -335,8 +336,8 @@ stable across the summary, inline comments, and later review updates.
 
 The user-facing output is GitHub comments: one review summary and anchored
 inline threads for confirmed findings. The summary has a short description of
-the PR, a Findings table with inline-thread links, and prompts for contextual
-answers, re-review, or verification. A comment beginning with `/review-bot` in
+the PR, a Change risk section and Findings table with inline-thread links, and
+prompts for contextual answers, re-review, or verification. A comment beginning with `/review-bot` in
 the PR conversation, an inline thread, or a submitted review body asks the agent
 to answer using a manifest pinned to the current PR revision. When available,
 the manifest includes the tracked status review, validated findings, and review
@@ -411,19 +412,39 @@ review deployment settings are:
 `BOT_LABEL` is passed to the bot as a deployment label; it is separate from the
 GitHub PR label selected by `review-context.yaml: review_label`.
 
+## Review risk labels
+
+After a full review, the Luna `review-risk-assessor` evaluates the pinned diff,
+produces a short rationale and changed-file evidence, and the publisher applies
+exactly one of these labels:
+
+| Label | Merge guidance |
+|---|---|
+| `low-risk` | Auto-merge may be considered after required checks and repository rules pass. |
+| `medium-risk` | One human approval is required before merge. |
+| `high-risk` | Two human approvals are required before merge. |
+
+The status review includes the risk explanation and the same guidance. The bot
+does not merge PRs or change branch protection; repository rules must enforce
+the human approval counts. Verification and comment-answer cycles do not run
+the risk assessor or change labels. When a full review finds a different risk,
+the publisher replaces the previous risk label.
+
 | Profile | Agent | Configured model | Reasoning effort |
 |---|---|---|---|
 | `terra` | `review-runner`, `review-terra` | `rehor-openai/gpt-6.1-terra` | Medium |
-| `luna` | `review-luna`, `review-verifier` | `rehor-openai/gpt-6-luna` | High |
+| `luna` | `review-luna`, `review-verifier`, `review-risk-assessor` | `rehor-openai/gpt-6-luna` | High |
 
 The primary `review-runner` uses Terra for orchestration. Dimension passes are
 dispatched in batches of at most four concurrent workers to `review-terra` or
 `review-luna` according to the resolved model preference. Results are recorded
-by dimension before the next batch. The separate `review-verifier` subagent
-also uses Luna to refute proposed findings. See the [runner config](agent/.opencode/agents/review-runner.md),
+by dimension before the next batch. The `review-verifier` uses Luna to refute
+proposed findings, and `review-risk-assessor` uses Luna to classify risk once
+per full review. See the [runner config](agent/.opencode/agents/review-runner.md),
 [Terra reviewer config](agent/.opencode/agents/review-terra.md),
 [Luna reviewer config](agent/.opencode/agents/review-luna.md),
-[verifier config](agent/.opencode/agents/review-verifier.md), and
+[verifier config](agent/.opencode/agents/review-verifier.md),
+[risk assessor config](agent/.opencode/agents/review-risk-assessor.md), and
 [OpenCode deployment config](opencode-deployment.json).
 
 See the root [project README](../../README.md) for the overall bot repository
