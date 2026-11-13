@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import urllib.parse
 from collections import defaultdict
 
@@ -51,10 +52,45 @@ def key_of(issue: dict | str | None) -> str:
 
 
 def team_id(issue: dict, field_id: str) -> str:
-    team = value(issue, field_id)
-    if isinstance(team, dict):
-        return str(team.get("id") or team.get("teamId") or "")
-    return str(team) if team is not None else ""
+    """Read Jira Team IDs across the field shapes returned by Jira/MCP."""
+    def extract(raw, *, allow_scalar: bool = True) -> str:
+        if isinstance(raw, dict):
+            for key in ("id", "teamId", "team_id", "teamID"):
+                item = raw.get(key)
+                if item is not None and not isinstance(item, (dict, list)):
+                    result = str(item).strip()
+                    if result:
+                        return result
+            for key in ("team", "option", "value", "data"):
+                item = raw.get(key)
+                if isinstance(item, (dict, list)):
+                    result = extract(item, allow_scalar=False)
+                    if result:
+                        return result
+                elif isinstance(item, (int, float)) and not isinstance(item, bool):
+                    return str(item)
+                elif isinstance(item, str) and re.fullmatch(r"[A-Za-z0-9_-]+", item.strip()):
+                    return item.strip()
+            return ""
+        if isinstance(raw, list):
+            ids = {extract(item, allow_scalar=False) for item in raw}
+            ids.discard("")
+            return next(iter(ids)) if len(ids) == 1 else ""
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            return str(raw)
+        if isinstance(raw, str):
+            item = raw.strip()
+            if item.startswith(("{", "[")):
+                try:
+                    parsed = json.loads(item)
+                except json.JSONDecodeError:
+                    parsed = None
+                if isinstance(parsed, (dict, list)):
+                    return extract(parsed, allow_scalar=False)
+            return item if allow_scalar else ""
+        return ""
+
+    return extract(value(issue, field_id))
 
 
 def labels(issue: dict) -> list[str]:
@@ -194,6 +230,68 @@ def cyclic_dependencies(blockers_by_key: dict[str, set[str]]) -> bool:
     return any(visit(key) for key in blockers_by_key)
 
 
+def open_pr_snapshot(children: list[dict], implementation_label: str, project_repos: dict) -> tuple[dict[str, list[dict]], dict[str, str]]:
+    """Read open GitHub PRs for handed-off tickets so PR-only changes wake the coordinator."""
+    tickets_by_repo: dict[str, set[str]] = defaultdict(set)
+    for child in children:
+        child_labels = labels(child)
+        if implementation_label not in child_labels:
+            continue
+        for label in child_labels:
+            if label.startswith("repo:"):
+                tickets_by_repo[label[5:]].add(key_of(child))
+
+    snapshot: dict[str, list[dict]] = {key: [] for keys in tickets_by_repo.values() for key in keys}
+    errors: dict[str, str] = {}
+    for repo_name, ticket_keys in sorted(tickets_by_repo.items()):
+        config = project_repos.get(repo_name)
+        url = ""
+        if isinstance(config, dict):
+            url = config.get("upstream") or config.get("url") or ""
+        match = re.fullmatch(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?", str(url or ""))
+        if not match:
+            # GitLab repos have no GitHub review queue.
+            continue
+        upstream = f"{match.group(1)}/{match.group(2)}"
+        try:
+            result = subprocess.run(
+                ["gh", "pr", "list", "--repo", upstream, "--state", "open", "--limit", "1000", "--json", "number,title,labels,url"],
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+            if result.returncode:
+                raise RuntimeError(result.stderr.strip()[:300] or "gh pr list failed")
+            prs = json.loads(result.stdout)
+            if not isinstance(prs, list):
+                raise RuntimeError("gh pr list returned an invalid list")
+        except Exception as error:
+            errors[repo_name] = str(error)
+            continue
+        for pr in prs:
+            if not isinstance(pr, dict) or not isinstance(pr.get("number"), int):
+                continue
+            title = str(pr.get("title") or "")
+            names = sorted(
+                item["name"] for item in (pr.get("labels") or [])
+                if isinstance(item, dict) and isinstance(item.get("name"), str)
+            )
+            for ticket_key in ticket_keys:
+                marker = re.compile(rf"(?<![A-Za-z0-9])\[{re.escape(ticket_key)}\](?![A-Za-z0-9])", re.IGNORECASE)
+                if marker.search(title):
+                    snapshot[ticket_key].append({
+                        "repo": upstream,
+                        "number": pr["number"],
+                        "title": title,
+                        "url": pr.get("url") or f"https://github.com/{upstream}/pull/{pr['number']}",
+                        "labels": names,
+                    })
+    for prs in snapshot.values():
+        prs.sort(key=lambda item: (item["repo"], item["number"]))
+    return snapshot, errors
+
+
 def summarize_child(issue: dict, control_key: str) -> dict:
     blockers, related = linked_issues(issue)
     issue_labels = labels(issue)
@@ -298,7 +396,7 @@ def evaluate(control: dict, children: list[dict], repo_names: set[str], implemen
     }
 
 
-def fingerprint(parent: dict, control: dict, children: list[dict], team_field_id: str) -> str:
+def fingerprint(parent: dict, control: dict, children: list[dict], team_field_id: str, pull_requests: dict | None = None) -> str:
     """Ignore coordinator comments/state labels to avoid waking on own reports."""
     human_comments = [
         {"id": str(comment.get("id") or ""), "body": comment_body(comment)}
@@ -325,6 +423,7 @@ def fingerprint(parent: dict, control: dict, children: list[dict], team_field_id
             }
             for child in sorted(children, key=key_of)
         ],
+        "open_pull_requests": pull_requests or {},
     }
     raw = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
     return hashlib.sha256(raw.encode()).hexdigest()
@@ -398,10 +497,14 @@ def main() -> None:
             if other_controls:
                 assessment["gaps"].append("Parent has multiple same-Team control tickets")
                 assessment["ready"] = []
-            digest = fingerprint(parent_issue, control, children, team_field_id)
+            pull_requests, github_pr_errors = open_pr_snapshot(children, implementation_label, load_project_repos())
+            digest = fingerprint(parent_issue, control, children, team_field_id, {
+                "tickets": pull_requests,
+                "errors": github_pr_errors,
+            })
             task = tasks.get(control_key) or {}
             old_digest = (task.get("metadata") or {}).get("snapshot_hash")
-            if not old_digest or old_digest != digest or not assessment["state"]:
+            if not old_digest or old_digest != digest or not assessment["state"] or github_pr_errors:
                 actionable.append({
                     "control_key": control_key,
                     "parent_key": parent,
@@ -415,6 +518,8 @@ def main() -> None:
                         if not comment_body(comment).startswith(OWN_COMMENT_PREFIX)
                         and str(comment.get("id") or "") not in set((task.get("metadata") or {}).get("processed_comment_ids") or [])
                     ],
+                    "open_pull_requests": pull_requests,
+                    "github_pr_errors": github_pr_errors,
                     **assessment,
                 })
         if actionable:

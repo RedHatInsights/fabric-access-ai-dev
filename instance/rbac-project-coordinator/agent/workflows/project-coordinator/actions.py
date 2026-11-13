@@ -11,8 +11,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
+
+import yaml
 
 sys.path.insert(0, str(Path.cwd() / ".claude" / "skills"))
 sys.path.insert(0, str(Path.cwd() / "presets" / "shared" / "preflight"))
@@ -23,6 +26,7 @@ from project_coordinator import (  # noqa: E402
     JQL_VALUE_RE,
     OWN_COMMENT_PREFIX,
     PHASE_RE,
+    START_STATUSES,
     comments,
     comment_body,
     cyclic_dependencies,
@@ -41,8 +45,14 @@ from project_coordinator import (  # noqa: E402
 
 STATES = COORD_STATES
 ISSUE_KEY_RE = re.compile(r"^[A-Z][A-Z0-9]+-\d+$")
+LABEL_RE = re.compile(r"^[A-Za-z0-9:_-]+$")
 DEPENDENCY_REQUEST_RE = re.compile(
     r"^\s*/coord\s+dependency\s+([A-Z][A-Z0-9]+-\d+)\s+blocks\s+([A-Z][A-Z0-9]+-\d+)\s*$",
+    re.IGNORECASE,
+)
+SETUP_PROPOSAL_RE = re.compile(r"```coordinator-setup\s*(.*?)\s*```", re.DOTALL)
+SETUP_APPROVAL_RE = re.compile(
+    r"^\s*(?:/coord\s+approve\s+setup|approved|approve|setup\s+approved|plan\s+approved)\s*[.!]?\s*$",
     re.IGNORECASE,
 )
 
@@ -102,6 +112,61 @@ def call_write(tool: str, arguments: dict) -> dict:
     if not isinstance(result, dict) or result.get("isError") or result.get("success") is False:
         raise RuntimeError(f"{tool} failed: {result}")
     return result
+
+
+def review_context() -> dict:
+    """Load the review bot's shared label settings from this config checkout."""
+    config_path = Path.cwd() / "instance" / "rbac-config-review" / "agent" / "review-context.yaml"
+    if not config_path.is_file():
+        raise ValueError(f"Review context is unavailable: {config_path}")
+    try:
+        data = yaml.safe_load(config_path.read_text())
+    except yaml.YAMLError as error:
+        raise ValueError(f"Review context YAML is invalid: {error}") from error
+    if not isinstance(data, dict):
+        raise ValueError("Review context must be a YAML mapping")
+    review_label = data.get("review_label")
+    if not isinstance(review_label, str) or not LABEL_RE.fullmatch(review_label):
+        raise ValueError("Review context review_label must be a valid GitHub label")
+    repositories = data.get("repositories")
+    if not isinstance(repositories, dict):
+        raise ValueError("Review context repositories must be a mapping")
+    return data
+
+
+def repository_handoff_labels(repo_names: list[str], implementation_label: str) -> list[str]:
+    """Return configured Jira labels for the selected repositories."""
+    repositories = review_context()["repositories"]
+    configured: list[str] = []
+    for repo_name in repo_names:
+        repo_config = repositories.get(repo_name)
+        repo_labels = repo_config.get("dev-bot-labels") if isinstance(repo_config, dict) else None
+        if not isinstance(repo_labels, list) or not repo_labels:
+            raise ValueError(f"No dev-bot-labels configured for repository {repo_name}")
+        if any(not isinstance(label, str) or not LABEL_RE.fullmatch(label) for label in repo_labels):
+            raise ValueError(f"Invalid dev-bot-labels configured for repository {repo_name}")
+        if f"repo:{repo_name}" not in repo_labels:
+            raise ValueError(f"Repository {repo_name} dev-bot-labels must include repo:{repo_name}")
+        if implementation_label not in repo_labels:
+            raise ValueError(f"Repository {repo_name} dev-bot-labels must include {implementation_label}")
+        configured.extend(repo_labels)
+    return sorted(set(configured))
+
+
+def github_repo(repo_config: dict) -> str:
+    """Resolve the upstream GitHub repository from project-repos.json."""
+    url = repo_config.get("upstream") or repo_config.get("url")
+    match = re.fullmatch(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?", str(url or ""))
+    if not match:
+        raise ValueError("Selected repository does not have a valid upstream GitHub URL")
+    return f"{match.group(1)}/{match.group(2)}"
+
+
+def run_gh(arguments: list[str]) -> str:
+    result = subprocess.run(["gh", *arguments], capture_output=True, text=True, timeout=30, check=False)
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip()[:500] or f"gh {' '.join(arguments)} failed")
+    return result.stdout
 
 
 def set_labels(issue_key: str, new_labels: list[str]) -> None:
@@ -188,9 +253,85 @@ def handoff(request: dict, config: tuple[str, str, str]) -> dict:
     existing_repos = {label[5:] for label in labels(child) if label.startswith("repo:")}
     if existing_repos and existing_repos != set(selected_repos):
         raise ValueError("Existing ticket repo labels differ from selected repos")
-    updated = labels(child) + [f"repo:{name}" for name in selected_repos] + [implementation_label]
+    handoff_labels = repository_handoff_labels(selected_repos, implementation_label)
+    updated = labels(child) + handoff_labels
     set_labels(ticket_key, updated)
-    return {"ticket_key": ticket_key, "released_repos": sorted(set(selected_repos)), "implementation_label": implementation_label}
+    return {
+        "ticket_key": ticket_key,
+        "released_repos": sorted(set(selected_repos)),
+        "released_labels": handoff_labels,
+    }
+
+
+def label_review_prs(request: dict, config: tuple[str, str, str]) -> dict:
+    """Add the review queue label to open PRs whose title names this Jira ticket."""
+    control = checked_control(request["control_key"], config)
+    _, team_field_id, implementation_label = config
+    ticket_key = request.get("ticket_key")
+    child = checked_child(control, ticket_key, team_field_id)
+    child_labels = labels(child)
+    if implementation_label not in child_labels:
+        raise ValueError("Ticket has not been released to the implementation bot")
+
+    allowed_repos = {label[5:] for label in labels(control) if label.startswith("repo:")}
+    selected_repos = {label[5:] for label in child_labels if label.startswith("repo:")}
+    if not selected_repos or selected_repos - allowed_repos:
+        raise ValueError("Ticket repo labels must be present on the control ticket allowlist")
+
+    context = review_context()
+    review_label = context["review_label"]
+    project_repos = load_project_repos()
+    labeled: list[dict] = []
+    already_labeled: list[dict] = []
+    for repo_name in sorted(selected_repos):
+        repo_config = project_repos.get(repo_name)
+        if not isinstance(repo_config, dict):
+            raise ValueError(f"Repository {repo_name} is missing from project-repos.json")
+        upstream = github_repo(repo_config)
+        try:
+            prs = json.loads(run_gh([
+                "pr", "list", "--repo", upstream, "--state", "open", "--limit", "1000",
+                "--json", "number,title,labels",
+            ]))
+        except (json.JSONDecodeError, TypeError) as error:
+            raise RuntimeError(f"Could not read open pull requests from {upstream}") from error
+        if not isinstance(prs, list):
+            raise RuntimeError(f"gh pr list returned an invalid list for {upstream}")
+        title_marker = re.compile(rf"(?<![A-Za-z0-9])\[{re.escape(ticket_key)}\](?![A-Za-z0-9])", re.IGNORECASE)
+        for pr in prs:
+            if not isinstance(pr, dict) or not isinstance(pr.get("number"), int):
+                continue
+            if not title_marker.search(str(pr.get("title") or "")):
+                continue
+            current = pr.get("labels") or []
+            current_names = {
+                item.get("name") for item in current
+                if isinstance(item, dict) and isinstance(item.get("name"), str)
+            }
+            entry = {"repo": upstream, "number": pr["number"], "url": f"https://github.com/{upstream}/pull/{pr['number']}"}
+            if review_label in current_names:
+                already_labeled.append(entry)
+                continue
+            run_gh([
+                "pr", "edit", str(pr["number"]), "--repo", upstream,
+                "--add-label", review_label,
+            ])
+            verified = json.loads(run_gh([
+                "pr", "view", str(pr["number"]), "--repo", upstream, "--json", "labels",
+            ]))
+            verified_names = {
+                item.get("name") for item in verified.get("labels", [])
+                if isinstance(item, dict) and isinstance(item.get("name"), str)
+            } if isinstance(verified, dict) else set()
+            if review_label not in verified_names:
+                raise RuntimeError(f"Review label update was not verified for {upstream}#{pr['number']}")
+            labeled.append(entry)
+    return {
+        "ticket_key": ticket_key,
+        "review_label": review_label,
+        "labeled": labeled,
+        "already_labeled": already_labeled,
+    }
 
 
 def link_dependency(request: dict, config: tuple[str, str, str]) -> dict:
@@ -265,6 +406,177 @@ def request_comment(control: dict, comment_id: str, command_pattern: str) -> dic
     if body.startswith(OWN_COMMENT_PREFIX) or not re.search(command_pattern, body, re.IGNORECASE):
         raise ValueError("Comment is not an explicit user request")
     return item
+
+
+def setup_proposal(control: dict, approval_comment_id: str) -> dict:
+    """Read the latest coordinator setup proposal before the explicit approval."""
+    items = comments(control)
+    approval_indexes = [
+        index for index, item in enumerate(items)
+        if str(item.get("id") or "") == approval_comment_id
+    ]
+    if len(approval_indexes) != 1:
+        raise ValueError("Setup approval comment not found or ambiguous")
+    approval_index = approval_indexes[0]
+    approved_comment = request_comment(
+        control,
+        approval_comment_id,
+        SETUP_APPROVAL_RE.pattern,
+    )
+    if str(approved_comment.get("id") or "") != approval_comment_id:
+        raise ValueError("Setup approval comment changed during validation")
+    if any(
+        not comment_body(item).startswith(OWN_COMMENT_PREFIX)
+        for item in items[approval_index + 1:]
+    ):
+        raise ValueError("Setup approval is stale; review the latest user feedback and approve again")
+    for proposal_index in range(approval_index - 1, -1, -1):
+        item = items[proposal_index]
+        body = comment_body(item)
+        if not body.startswith(OWN_COMMENT_PREFIX):
+            continue
+        match = SETUP_PROPOSAL_RE.search(body)
+        if not match:
+            continue
+        try:
+            proposal = json.loads(match.group(1))
+        except json.JSONDecodeError as error:
+            raise ValueError("Coordinator setup proposal is invalid JSON") from error
+        if not isinstance(proposal, dict):
+            raise ValueError("Coordinator setup proposal must be an object")
+        intervening_user_comments = [
+            entry for entry in items[proposal_index + 1:approval_index]
+            if not comment_body(entry).startswith(OWN_COMMENT_PREFIX)
+        ]
+        if intervening_user_comments:
+            raise ValueError("Setup proposal is stale; refresh it after the latest user feedback")
+        return proposal
+    raise ValueError("No coordinator setup proposal exists before this approval")
+
+
+def approve_setup(request: dict, config: tuple[str, str, str]) -> dict:
+    """Apply the latest proposed repo, phase, and root-link setup after approval."""
+    control = checked_control(request["control_key"], config)
+    _, team_field_id, implementation_label = config
+    comment_id = str(request.get("request_comment_id") or "")
+    if not comment_id:
+        raise ValueError("request_comment_id is required")
+    proposal = setup_proposal(control, comment_id)
+
+    repo_name = proposal.get("repository")
+    repo_names = set(load_project_repos())
+    if not isinstance(repo_name, str) or repo_name not in repo_names:
+        raise ValueError("Setup proposal repository is not configured")
+    repository_handoff_labels([repo_name], implementation_label)
+
+    assignments = proposal.get("phase_assignments")
+    roots = proposal.get("root_tickets")
+    if not isinstance(assignments, dict) or not isinstance(roots, list):
+        raise ValueError("Setup proposal must include phase_assignments and root_tickets")
+    phase_by_ticket: dict[str, str] = {}
+    for phase, ticket_keys in assignments.items():
+        if not isinstance(phase, str) or not PHASE_RE.fullmatch(phase) or not isinstance(ticket_keys, list):
+            raise ValueError("Setup proposal has invalid phase assignments")
+        for ticket_key in ticket_keys:
+            if not isinstance(ticket_key, str) or not ISSUE_KEY_RE.fullmatch(ticket_key):
+                raise ValueError("Setup proposal has an invalid implementation ticket key")
+            if ticket_key in phase_by_ticket:
+                raise ValueError(f"{ticket_key} appears in more than one proposed phase")
+            phase_by_ticket[ticket_key] = phase
+    if not phase_by_ticket or "phase:01" not in assignments:
+        raise ValueError("Setup proposal must assign at least one phase:01 ticket")
+    if any(not isinstance(ticket_key, str) or not ISSUE_KEY_RE.fullmatch(ticket_key) for ticket_key in roots):
+        raise ValueError("Setup proposal has an invalid root ticket key")
+    root_keys = set(roots)
+    if len(root_keys) != len(roots):
+        raise ValueError("Setup proposal has duplicate root ticket keys")
+
+    parent = parent_key(control)
+    siblings = search_all(f'parent = "{parent}" ORDER BY key ASC')
+    control_team = team_id(control, team_field_id)
+    children = [
+        item for item in siblings
+        if key_of(item) != key_of(control) and team_id(item, team_field_id) == control_team
+    ]
+    control_label = config[0]
+    if any(control_label in labels(item) for item in children):
+        raise ValueError("Parent has multiple same-Team control tickets")
+    child_keys = {key_of(item) for item in children}
+    if set(phase_by_ticket) != child_keys:
+        missing = child_keys - set(phase_by_ticket)
+        unknown = set(phase_by_ticket) - child_keys
+        raise ValueError(
+            "Setup proposal must assign every same-Team implementation ticket"
+            + (f"; missing {', '.join(sorted(missing))}" if missing else "")
+            + (f"; out of scope {', '.join(sorted(unknown))}" if unknown else "")
+        )
+    children_by_key = {key_of(item): item for item in children}
+    blockers_by_key = {
+        key: linked_issues(item)[0]
+        for key, item in children_by_key.items()
+    }
+    expected_roots = {
+        key for key, blockers in blockers_by_key.items()
+        if not blockers.intersection(child_keys)
+    }
+    if root_keys != expected_roots:
+        raise ValueError("Setup proposal roots do not match the current same-Team dependency graph")
+
+    # Re-read every ticket and validate before performing any Jira writes.
+    fresh_children = {key: checked_child(control, key, team_field_id) for key in sorted(child_keys)}
+    current_control_labels = labels(control)
+    if any(PHASE_RE.fullmatch(label) for label in current_control_labels):
+        raise ValueError("Phase labels belong on implementation tickets, not the control ticket")
+    current_states = set(current_control_labels) & COORD_STATES
+    if "dev-bot-coordinator:active" in current_states or "dev-bot-coordinator:complete" in current_states:
+        raise ValueError("Setup approval cannot change an active or complete project plan")
+
+    phase_updates: dict[str, list[str]] = {}
+    for ticket_key, phase in phase_by_ticket.items():
+        child = fresh_children[ticket_key]
+        existing = labels(child)
+        existing_phases = {label for label in existing if PHASE_RE.fullmatch(label)}
+        if existing_phases - {phase}:
+            status = value(child, "status") or {}
+            status = str(status.get("name", "") if isinstance(status, dict) else status).lower()
+            if implementation_label in existing or status not in START_STATUSES:
+                raise ValueError(f"Cannot rephase handed-off or started ticket {ticket_key}")
+        updated = [label for label in existing if not PHASE_RE.fullmatch(label)] + [phase]
+        phase_updates[ticket_key] = updated
+
+    missing_root_links = [
+        key for key in sorted(root_keys)
+        if key_of(control) not in linked_issues(fresh_children[key])[1]
+    ]
+    control_repo_label = f"repo:{repo_name}"
+    if control_repo_label not in current_control_labels:
+        set_labels(key_of(control), current_control_labels + [control_repo_label])
+    updated_phases: list[str] = []
+    for ticket_key, updated in sorted(phase_updates.items()):
+        if set(updated) != set(labels(fresh_children[ticket_key])):
+            set_labels(ticket_key, updated)
+            updated_phases.append(ticket_key)
+    linked_roots: list[str] = []
+    for ticket_key in missing_root_links:
+        call_write(
+            "jira_create_issue_link",
+            {
+                "link_type": "Relates",
+                "inward_issue_key": ticket_key,
+                "outward_issue_key": key_of(control),
+            },
+        )
+        if key_of(control) not in linked_issues(get_issue(ticket_key))[1]:
+            raise RuntimeError(f"Jira did not confirm relates-to link for {ticket_key}")
+        linked_roots.append(ticket_key)
+    return {
+        "control_key": key_of(control),
+        "repository": repo_name,
+        "control_repo_label_added": control_repo_label not in current_control_labels,
+        "phase_labels_updated": updated_phases,
+        "root_links_added": linked_roots,
+        "approval_comment_id": comment_id,
+    }
 
 
 def creation_fields(control: dict, team_field_id: str, extra_labels: list[str]) -> tuple[str, dict]:
@@ -345,12 +657,28 @@ def comment_control(request: dict, config: tuple[str, str, str]) -> dict:
     control = checked_control(request["control_key"], config, require_parent=False, require_team=False)
     action_id = str(request.get("action_id") or "")
     body = str(request.get("body") or "").strip()
+    next_steps = request.get("next_steps")
     if not action_id or not body:
         raise ValueError("action_id and body are required")
+    if not isinstance(next_steps, list) or not 1 <= len(next_steps) <= 5:
+        raise ValueError("next_steps must contain between one and five suggestions")
+    if any(
+        not isinstance(step, str)
+        or not step.strip()
+        or len(step.strip()) > 280
+        or "\n" in step
+        or "\r" in step
+        for step in next_steps
+    ):
+        raise ValueError("Each next step must be a non-empty single-line suggestion of at most 280 characters")
+    if re.search(r"(?im)^#{1,6}\s+possible next steps\s*$", body):
+        raise ValueError("Pass next_steps separately; the action adds the footer")
     marker = f"Coordinator action: {action_id}"
     if any(marker in comment_body(item) for item in comments(control)):
         return {"control_key": key_of(control), "commented": False, "action_id": action_id}
-    call_write("jira_add_comment", {"issue_key": key_of(control), "comment": f"{OWN_COMMENT_PREFIX}\n\n{body}\n\n{marker}"})
+    footer = "### Possible next steps\n" + "\n".join(f"- {step.strip()}" for step in next_steps)
+    comment = f"{OWN_COMMENT_PREFIX}\n\n{body}\n\n{footer}\n\n{marker}"
+    call_write("jira_add_comment", {"issue_key": key_of(control), "comment": comment})
     return {"control_key": key_of(control), "commented": True, "action_id": action_id}
 
 
@@ -359,8 +687,12 @@ def dispatch(request: dict) -> dict:
     action = request.get("action")
     if action == "set-state":
         return set_state(request, config)
+    if action == "approve-setup":
+        return approve_setup(request, config)
     if action == "handoff":
         return handoff(request, config)
+    if action == "label-review-prs":
+        return label_review_prs(request, config)
     if action == "link-dependency":
         return link_dependency(request, config)
     if action == "create-ticket":
