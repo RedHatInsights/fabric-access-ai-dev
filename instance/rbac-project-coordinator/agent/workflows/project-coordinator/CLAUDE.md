@@ -58,9 +58,11 @@ confirms both tickets are in scope and the link will not create a cycle.
    a readable dependency diagram. If the repo choice and setup are clear,
    include a `coordinator-setup` JSON block containing `repository`, a complete
    `phase_assignments` mapping, and the exact `root_tickets` list. Ask the user
-   to correct any suggestion or simply reply `Approved` to approve the complete
-   setup. The user approves the suggestion; they do not edit Jira labels or
-   links. Do not apply setup before that approval. If the Team field cannot be
+   to correct any suggestion or reply with `approve` or `approved` to approve
+   the complete setup. Approval detection reads Jira rich-text comments,
+   including mentions and surrounding formatting. The user approves the
+   suggestion; they do not edit Jira labels or links. Do not apply setup before
+   that approval. If the Team field cannot be
    parsed, stop and report the parser issue; never ask the user to re-enter a
    valid Team value. Set `dev-bot-coordinator:needs-plan`.
 
@@ -69,8 +71,9 @@ confirms both tickets are in scope and the link will not create a cycle.
    ```coordinator-setup
    {"repository":"insights-rbac","phase_assignments":{"phase:01":["RHCLOUD-123"]},"root_tickets":["RHCLOUD-123"]}
    ```
-4. **New control comments**: `Approved` or `/coord approve setup` applies the
-   latest proposed repository label to the control ticket, phase labels to all
+4. **New control comments**: a user comment containing the word `approve` or
+   `approved` (including `/coord approve setup`) applies the latest proposed
+   repository label to the control ticket, phase labels to all
    listed implementation tickets, and `relates to` links from the listed roots
    to the control ticket. Use only the validated `approve-setup` action. It
    reads the proposal from the preceding coordinator comment and rechecks Team,
@@ -90,8 +93,8 @@ confirms both tickets are in scope and the link will not create a cycle.
    implementation tickets are complete. Other comments may clarify the plan,
    answer setup questions, correct the repo or phase proposal, or request
    proposals. After any user correction, refresh the setup proposal and wait
-   for a new `Approved` comment; never apply an older proposal. Do not execute
-   historical comments on the first enrollment.
+   for a new `approve` or `approved` comment; never apply an older proposal.
+   Do not execute historical comments on the first enrollment.
 5. **Plan gate**: the first phase must exist; the path through its tickets,
    parallel work, and exit criteria must be clear. Tickets with no same-Team
    predecessor must `relate to` the control ticket. Use directional `blocks`
@@ -166,7 +169,7 @@ Actions and required request keys:
 | Action | Keys in addition to `action`, `control_key` |
 |---|---|
 | `set-state` | `state` |
-| `approve-setup` | `request_comment_id` (new `Approved` or `/coord approve setup` comment) |
+| `approve-setup` | `request_comment_id` (new user comment containing `approve` or `approved`) |
 | `handoff` | `ticket_key`, `repos` (list of repo names) |
 | `label-review-prs` | `ticket_key` (implementation ticket with the bot label) |
 | `link-dependency` | `request_comment_id`, `blocking_ticket_key`, `blocked_ticket_key` |
