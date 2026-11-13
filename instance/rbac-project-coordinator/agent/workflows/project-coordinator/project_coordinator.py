@@ -181,6 +181,16 @@ def comment_body(comment: dict) -> str:
                 parts.append(text)
             return
         content = node.get("content")
+        if node_type == "codeBlock":
+            attrs = node.get("attrs") or {}
+            language = attrs.get("language") if isinstance(attrs, dict) else None
+            if not isinstance(language, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", language):
+                language = ""
+            parts.append(f"```{language}\n")
+            if isinstance(content, list):
+                collect(content)
+            parts.append("\n```\n")
+            return
         if isinstance(content, list):
             collect(content)
         elif isinstance(node.get("text"), str):
@@ -191,6 +201,18 @@ def comment_body(comment: dict) -> str:
     collect(body)
     flattened = "".join(parts).strip()
     return flattened if flattened else json.dumps(body, sort_keys=True)
+
+
+def is_own_comment(comment: dict) -> bool:
+    """Recognize coordinator comments after Jira normalizes Markdown to ADF."""
+    body = comment_body(comment)
+    lines = [line.strip() for line in body.splitlines() if line.strip()]
+    if not lines:
+        return False
+    heading = lines[0].lstrip("#").strip()
+    if heading == "Coordinator update":
+        return True
+    return any(line.startswith("Coordinator action:") for line in lines[-2:])
 
 
 def search_all(jql: str, requested_fields: str = "*all") -> list[dict]:
@@ -446,7 +468,7 @@ def fingerprint(parent: dict, control: dict, children: list[dict], team_field_id
     human_comments = [
         {"id": str(comment.get("id") or ""), "body": comment_body(comment)}
         for comment in comments(control)
-        if not comment_body(comment).startswith(OWN_COMMENT_PREFIX)
+        if not is_own_comment(comment)
     ]
     payload = {
         "parent": {"key": key_of(parent), "summary": value(parent, "summary"), "description": value(parent, "description"), "status": status_name(parent)},
@@ -560,7 +582,7 @@ def main() -> None:
                     "new_comments": [
                         {"id": str(comment.get("id") or ""), "body": comment_body(comment), "created": comment.get("created")}
                         for comment in comments(control)
-                        if not comment_body(comment).startswith(OWN_COMMENT_PREFIX)
+                        if not is_own_comment(comment)
                         and str(comment.get("id") or "") not in set((task.get("metadata") or {}).get("processed_comment_ids") or [])
                     ],
                     "open_pull_requests": pull_requests,

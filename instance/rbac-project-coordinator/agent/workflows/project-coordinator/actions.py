@@ -32,6 +32,7 @@ from project_coordinator import (  # noqa: E402
     cyclic_dependencies,
     evaluate,
     get_issue,
+    is_own_comment,
     key_of,
     labels,
     load_project_repos,
@@ -50,7 +51,7 @@ DEPENDENCY_REQUEST_RE = re.compile(
     r"^\s*/coord\s+dependency\s+([A-Z][A-Z0-9]+-\d+)\s+blocks\s+([A-Z][A-Z0-9]+-\d+)\s*$",
     re.IGNORECASE,
 )
-SETUP_PROPOSAL_RE = re.compile(r"```coordinator-setup\s*(.*?)\s*```", re.DOTALL)
+SETUP_PROPOSAL_RE = re.compile(r"```(?:[A-Za-z0-9_-]+)?\s*(.*?)\s*```", re.DOTALL)
 SETUP_APPROVAL_RE = re.compile(r"\b(?:approve|approved)\b", re.IGNORECASE)
 
 
@@ -400,7 +401,7 @@ def request_comment(control: dict, comment_id: str, command_pattern: str) -> dic
         raise ValueError("Request comment not found or ambiguous")
     item = matches[0]
     body = comment_body(item)
-    if body.startswith(OWN_COMMENT_PREFIX) or not re.search(command_pattern, body, re.IGNORECASE):
+    if is_own_comment(item) or not re.search(command_pattern, body, re.IGNORECASE):
         raise ValueError("Comment is not an explicit user request")
     return item
 
@@ -423,14 +424,14 @@ def setup_proposal(control: dict, approval_comment_id: str) -> dict:
     if str(approved_comment.get("id") or "") != approval_comment_id:
         raise ValueError("Setup approval comment changed during validation")
     if any(
-        not comment_body(item).startswith(OWN_COMMENT_PREFIX)
+        not is_own_comment(item)
         for item in items[approval_index + 1:]
     ):
         raise ValueError("Setup approval is stale; review the latest user feedback and approve again")
     for proposal_index in range(approval_index - 1, -1, -1):
         item = items[proposal_index]
         body = comment_body(item)
-        if not body.startswith(OWN_COMMENT_PREFIX):
+        if not is_own_comment(item):
             continue
         match = SETUP_PROPOSAL_RE.search(body)
         if not match:
@@ -443,7 +444,7 @@ def setup_proposal(control: dict, approval_comment_id: str) -> dict:
             raise ValueError("Coordinator setup proposal must be an object")
         intervening_user_comments = [
             entry for entry in items[proposal_index + 1:approval_index]
-            if not comment_body(entry).startswith(OWN_COMMENT_PREFIX)
+            if not is_own_comment(entry)
         ]
         if intervening_user_comments:
             raise ValueError("Setup proposal is stale; refresh it after the latest user feedback")
@@ -614,8 +615,8 @@ def create_ticket(request: dict, config: tuple[str, str, str]) -> dict:
     if not re.fullmatch(r"P-\d+", proposal_id) or not re.search(rf"^\s*/coord\s+create\s+{proposal_id}\b", comment_body(command), re.IGNORECASE):
         raise ValueError("Creation request must name an existing proposal ID")
     if not any(
-        item_body.startswith(OWN_COMMENT_PREFIX) and proposal_id in item_body
-        for item_body in (comment_body(item) for item in comments(control))
+        is_own_comment(item) and proposal_id in comment_body(item)
+        for item in comments(control)
     ):
         raise ValueError("Proposal ID was not found in a coordinator comment")
     phase = str(request.get("phase") or "")
