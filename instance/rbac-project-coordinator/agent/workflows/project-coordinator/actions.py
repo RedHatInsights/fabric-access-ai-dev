@@ -11,8 +11,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
+
+import yaml
 
 sys.path.insert(0, str(Path.cwd() / ".claude" / "skills"))
 sys.path.insert(0, str(Path.cwd() / "presets" / "shared" / "preflight"))
@@ -41,6 +44,7 @@ from project_coordinator import (  # noqa: E402
 
 STATES = COORD_STATES
 ISSUE_KEY_RE = re.compile(r"^[A-Z][A-Z0-9]+-\d+$")
+LABEL_RE = re.compile(r"^[A-Za-z0-9:_-]+$")
 DEPENDENCY_REQUEST_RE = re.compile(
     r"^\s*/coord\s+dependency\s+([A-Z][A-Z0-9]+-\d+)\s+blocks\s+([A-Z][A-Z0-9]+-\d+)\s*$",
     re.IGNORECASE,
@@ -102,6 +106,61 @@ def call_write(tool: str, arguments: dict) -> dict:
     if not isinstance(result, dict) or result.get("isError") or result.get("success") is False:
         raise RuntimeError(f"{tool} failed: {result}")
     return result
+
+
+def review_context() -> dict:
+    """Load the review bot's shared label settings from this config checkout."""
+    config_path = Path.cwd() / "instance" / "rbac-config-review" / "agent" / "review-context.yaml"
+    if not config_path.is_file():
+        raise ValueError(f"Review context is unavailable: {config_path}")
+    try:
+        data = yaml.safe_load(config_path.read_text())
+    except yaml.YAMLError as error:
+        raise ValueError(f"Review context YAML is invalid: {error}") from error
+    if not isinstance(data, dict):
+        raise ValueError("Review context must be a YAML mapping")
+    review_label = data.get("review_label")
+    if not isinstance(review_label, str) or not LABEL_RE.fullmatch(review_label):
+        raise ValueError("Review context review_label must be a valid GitHub label")
+    repositories = data.get("repositories")
+    if not isinstance(repositories, dict):
+        raise ValueError("Review context repositories must be a mapping")
+    return data
+
+
+def repository_handoff_labels(repo_names: list[str], implementation_label: str) -> list[str]:
+    """Return configured Jira labels for the selected repositories."""
+    repositories = review_context()["repositories"]
+    configured: list[str] = []
+    for repo_name in repo_names:
+        repo_config = repositories.get(repo_name)
+        repo_labels = repo_config.get("dev-bot-labels") if isinstance(repo_config, dict) else None
+        if not isinstance(repo_labels, list) or not repo_labels:
+            raise ValueError(f"No dev-bot-labels configured for repository {repo_name}")
+        if any(not isinstance(label, str) or not LABEL_RE.fullmatch(label) for label in repo_labels):
+            raise ValueError(f"Invalid dev-bot-labels configured for repository {repo_name}")
+        if f"repo:{repo_name}" not in repo_labels:
+            raise ValueError(f"Repository {repo_name} dev-bot-labels must include repo:{repo_name}")
+        if implementation_label not in repo_labels:
+            raise ValueError(f"Repository {repo_name} dev-bot-labels must include {implementation_label}")
+        configured.extend(repo_labels)
+    return sorted(set(configured))
+
+
+def github_repo(repo_config: dict) -> str:
+    """Resolve the upstream GitHub repository from project-repos.json."""
+    url = repo_config.get("upstream") or repo_config.get("url")
+    match = re.fullmatch(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?", str(url or ""))
+    if not match:
+        raise ValueError("Selected repository does not have a valid upstream GitHub URL")
+    return f"{match.group(1)}/{match.group(2)}"
+
+
+def run_gh(arguments: list[str]) -> str:
+    result = subprocess.run(["gh", *arguments], capture_output=True, text=True, timeout=30, check=False)
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip()[:500] or f"gh {' '.join(arguments)} failed")
+    return result.stdout
 
 
 def set_labels(issue_key: str, new_labels: list[str]) -> None:
@@ -188,9 +247,85 @@ def handoff(request: dict, config: tuple[str, str, str]) -> dict:
     existing_repos = {label[5:] for label in labels(child) if label.startswith("repo:")}
     if existing_repos and existing_repos != set(selected_repos):
         raise ValueError("Existing ticket repo labels differ from selected repos")
-    updated = labels(child) + [f"repo:{name}" for name in selected_repos] + [implementation_label]
+    handoff_labels = repository_handoff_labels(selected_repos, implementation_label)
+    updated = labels(child) + handoff_labels
     set_labels(ticket_key, updated)
-    return {"ticket_key": ticket_key, "released_repos": sorted(set(selected_repos)), "implementation_label": implementation_label}
+    return {
+        "ticket_key": ticket_key,
+        "released_repos": sorted(set(selected_repos)),
+        "released_labels": handoff_labels,
+    }
+
+
+def label_review_prs(request: dict, config: tuple[str, str, str]) -> dict:
+    """Add the review queue label to open PRs whose title names this Jira ticket."""
+    control = checked_control(request["control_key"], config)
+    _, team_field_id, implementation_label = config
+    ticket_key = request.get("ticket_key")
+    child = checked_child(control, ticket_key, team_field_id)
+    child_labels = labels(child)
+    if implementation_label not in child_labels:
+        raise ValueError("Ticket has not been released to the implementation bot")
+
+    allowed_repos = {label[5:] for label in labels(control) if label.startswith("repo:")}
+    selected_repos = {label[5:] for label in child_labels if label.startswith("repo:")}
+    if not selected_repos or selected_repos - allowed_repos:
+        raise ValueError("Ticket repo labels must be present on the control ticket allowlist")
+
+    context = review_context()
+    review_label = context["review_label"]
+    project_repos = load_project_repos()
+    labeled: list[dict] = []
+    already_labeled: list[dict] = []
+    for repo_name in sorted(selected_repos):
+        repo_config = project_repos.get(repo_name)
+        if not isinstance(repo_config, dict):
+            raise ValueError(f"Repository {repo_name} is missing from project-repos.json")
+        upstream = github_repo(repo_config)
+        try:
+            prs = json.loads(run_gh([
+                "pr", "list", "--repo", upstream, "--state", "open", "--limit", "1000",
+                "--json", "number,title,labels",
+            ]))
+        except (json.JSONDecodeError, TypeError) as error:
+            raise RuntimeError(f"Could not read open pull requests from {upstream}") from error
+        if not isinstance(prs, list):
+            raise RuntimeError(f"gh pr list returned an invalid list for {upstream}")
+        title_marker = re.compile(rf"(?<![A-Za-z0-9])\[{re.escape(ticket_key)}\](?![A-Za-z0-9])", re.IGNORECASE)
+        for pr in prs:
+            if not isinstance(pr, dict) or not isinstance(pr.get("number"), int):
+                continue
+            if not title_marker.search(str(pr.get("title") or "")):
+                continue
+            current = pr.get("labels") or []
+            current_names = {
+                item.get("name") for item in current
+                if isinstance(item, dict) and isinstance(item.get("name"), str)
+            }
+            entry = {"repo": upstream, "number": pr["number"], "url": f"https://github.com/{upstream}/pull/{pr['number']}"}
+            if review_label in current_names:
+                already_labeled.append(entry)
+                continue
+            run_gh([
+                "pr", "edit", str(pr["number"]), "--repo", upstream,
+                "--add-label", review_label,
+            ])
+            verified = json.loads(run_gh([
+                "pr", "view", str(pr["number"]), "--repo", upstream, "--json", "labels",
+            ]))
+            verified_names = {
+                item.get("name") for item in verified.get("labels", [])
+                if isinstance(item, dict) and isinstance(item.get("name"), str)
+            } if isinstance(verified, dict) else set()
+            if review_label not in verified_names:
+                raise RuntimeError(f"Review label update was not verified for {upstream}#{pr['number']}")
+            labeled.append(entry)
+    return {
+        "ticket_key": ticket_key,
+        "review_label": review_label,
+        "labeled": labeled,
+        "already_labeled": already_labeled,
+    }
 
 
 def link_dependency(request: dict, config: tuple[str, str, str]) -> dict:
@@ -361,6 +496,8 @@ def dispatch(request: dict) -> dict:
         return set_state(request, config)
     if action == "handoff":
         return handoff(request, config)
+    if action == "label-review-prs":
+        return label_review_prs(request, config)
     if action == "link-dependency":
         return link_dependency(request, config)
     if action == "create-ticket":

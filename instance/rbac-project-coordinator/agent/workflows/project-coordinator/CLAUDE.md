@@ -1,7 +1,7 @@
 # Jira project coordinator workflow
 
 Coordinate one parent issue through one child control ticket labeled
-`$BOT_LABEL` (`dev-bot-control` for this instance). The control ticket is the
+`$BOT_LABEL` (`dev-bot-coordinator` for this instance). The control ticket is the
 only conversation and status surface. Implementations stay with the existing
 `rbac-config` Jira bot. Do not edit repositories or open PRs.
 
@@ -58,7 +58,10 @@ confirms both tickets are in scope and the link will not create a cycle.
    with `/coord dependency RHCLOUD-123 blocks RHCLOUD-456`. Set
    `dev-bot-coordinator:needs-plan`. If the first phase already passes the
    gate, validate it and continue to the active path.
-4. **New control comments**: `/coord status` gets a fresh status comment.
+4. **New control comments**: `/coord start` asks the coordinator to recheck the
+   plan gate and release currently runnable tickets. It uses the same validated
+   handoff and repo label mapping as an automatic progress cycle. `/coord status`
+   gets a fresh status comment.
    `/coord create P-1` may create one previously proposed ticket.
    `/coord dependency RHCLOUD-123 blocks RHCLOUD-456` requests a Jira
    dependency link. Use the validated `link-dependency` action; both tickets
@@ -88,10 +91,18 @@ confirms both tickets are in scope and the link will not create a cycle.
    incomplete phase, choose the correct `repo:` label from the control
    ticket's allowed repos according to that ticket's scope. If multiple repos
    are plausible, ask on the control ticket. Then call the validated handoff
-   action, which adds chosen `repo:` labels and `$BOT_IMPLEMENTATION_LABEL`.
-   Parallel tickets can be handed off in one cycle. The implementation bot
-   requires a not-started status, suitable assignee, and active sprint or
+   action. It reads `dev-bot-labels` for each chosen repository from
+   `instance/rbac-config-review/agent/review-context.yaml` and applies those
+   labels to the implementation ticket. Do not invent or hardcode handoff
+   labels. Parallel tickets can be handed off in one cycle. The implementation
+   bot requires a not-started status, suitable assignee, and active sprint or
    enabled backlog intake. Do not assign the ticket to this coordinator.
+   For every same-Team ticket already carrying the implementation label, run
+   `label-review-prs` on every cycle. It finds open PRs in the ticket's selected
+   upstream repos whose title contains the exact Jira key in brackets, then
+   adds `review-context.yaml: review_label` (`dev-bot-review`) if absent.
+   This lets the review bot pick up the PR. Report newly labeled PRs and any
+   failures on the control ticket; an already-labeled PR is left unchanged.
 7. If no ticket is runnable, wait for a Jira change; do not post the same
    status repeatedly. When the current phase is complete and the next phase
    has no plan, set `dev-bot-coordinator:needs-plan` and ask for the next
@@ -131,6 +142,7 @@ Actions and required request keys:
 |---|---|
 | `set-state` | `state` |
 | `handoff` | `ticket_key`, `repos` (list of repo names) |
+| `label-review-prs` | `ticket_key` (implementation ticket with the bot label) |
 | `link-dependency` | `request_comment_id`, `blocking_ticket_key`, `blocked_ticket_key` |
 | `create-ticket` | `request_comment_id`, `proposal_id`, `phase`, `summary`, `description` |
 | `comment` | `action_id`, `body` |

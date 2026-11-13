@@ -23,7 +23,7 @@ import project_coordinator as coordinator  # noqa: E402
 
 TEAM_FIELD = "customfield_12345"
 TEAM_ID = "42"
-CONFIG = ("dev-bot-control", TEAM_FIELD, "hcc-ai-platform-accessmanagement")
+CONFIG = ("dev-bot-coordinator", TEAM_FIELD, "hcc-ai-platform-accessmanagement")
 
 
 def issue(key: str, *, parent: str | None = "RHCLOUD-100", team: str = TEAM_ID, labels=None, status="New", links=None, summary=None, description="Clear acceptance criteria") -> dict:
@@ -54,7 +54,7 @@ def blocked_by(key: str) -> dict:
 
 
 def test_parallel_first_tickets_and_release_pending_unblock_next_phase():
-    control = issue("RHCLOUD-101", labels=["dev-bot-control", "repo:rbac-config"])
+    control = issue("RHCLOUD-101", labels=["dev-bot-coordinator", "repo:rbac-config"])
     first = issue("RHCLOUD-102", labels=["phase:01"], links=[relates("RHCLOUD-101")])
     parallel = issue("RHCLOUD-103", labels=["phase:01"], links=[relates("RHCLOUD-101")])
     later = issue("RHCLOUD-104", labels=["phase:02"], links=[blocked_by("RHCLOUD-102"), blocked_by("RHCLOUD-103")])
@@ -72,7 +72,7 @@ def test_parallel_first_tickets_and_release_pending_unblock_next_phase():
 
 
 def test_control_phase_and_missing_first_link_stop_handoff():
-    control = issue("RHCLOUD-101", labels=["dev-bot-control", "repo:rbac-config", "phase:01"])
+    control = issue("RHCLOUD-101", labels=["dev-bot-coordinator", "repo:rbac-config", "phase:01"])
     first = issue("RHCLOUD-102", labels=["phase:01"])
     result = coordinator.evaluate(control, [first], {"rbac-config"}, CONFIG[2], False)
     assert any("control ticket" in gap.lower() for gap in result["gaps"])
@@ -81,7 +81,7 @@ def test_control_phase_and_missing_first_link_stop_handoff():
 
 
 def test_unphased_child_and_later_root_are_plan_gaps():
-    control = issue("RHCLOUD-101", labels=["dev-bot-control", "repo:rbac-config"])
+    control = issue("RHCLOUD-101", labels=["dev-bot-coordinator", "repo:rbac-config"])
     first = issue("RHCLOUD-102", labels=["phase:01"], links=[relates("RHCLOUD-101")])
     unphased = issue("RHCLOUD-103")
     later_root = issue("RHCLOUD-104", labels=["phase:02"])
@@ -119,7 +119,7 @@ def test_search_walks_cloud_cursor_and_server_offset(monkeypatch):
 def jira_store(monkeypatch):
     control = issue(
         "RHCLOUD-101",
-        labels=["dev-bot-control", "repo:rbac-config", "dev-bot-coordinator:active"],
+        labels=["dev-bot-coordinator", "repo:rbac-config", "dev-bot-coordinator:active"],
     )
     first = issue("RHCLOUD-102", labels=["phase:01"], links=[relates("RHCLOUD-101")])
     parent = issue("RHCLOUD-100", parent=None, summary="Parent")
@@ -159,6 +159,7 @@ def test_handoff_rechecks_team(jira_store):
     result = actions.handoff({"control_key": "RHCLOUD-101", "ticket_key": "RHCLOUD-102", "repos": ["rbac-config"]}, CONFIG)
     assert result["ticket_key"] == "RHCLOUD-102"
     assert CONFIG[2] in store["RHCLOUD-102"]["fields"]["labels"]
+    assert "repo:rbac-config" in store["RHCLOUD-102"]["fields"]["labels"]
     assert any(name == "jira_update_issue" for name, _ in writes)
 
     store["RHCLOUD-102"]["fields"]["labels"] = ["phase:01"]
@@ -167,6 +168,57 @@ def test_handoff_rechecks_team(jira_store):
     with pytest.raises(ValueError, match="Plan gate failed"):
         actions.handoff({"control_key": "RHCLOUD-101", "ticket_key": "RHCLOUD-102", "repos": ["rbac-config"]}, CONFIG)
     assert len(writes) == write_count
+
+
+def test_review_label_is_added_to_matching_open_prs_only(jira_store, monkeypatch):
+    store, _ = jira_store
+    child = store["RHCLOUD-102"]
+    child["fields"]["labels"].extend(["repo:rbac-config", CONFIG[2]])
+    monkeypatch.setattr(actions, "review_context", lambda: {"review_label": "dev-bot-review", "repositories": {}})
+    monkeypatch.setattr(actions, "load_project_repos", lambda: {
+        "rbac-config": {"upstream": "https://github.com/project-kessel/rbac-config.git"},
+    })
+    gh_calls = []
+
+    def run_gh(args):
+        gh_calls.append(args)
+        if args[:3] == ["pr", "list", "--repo"]:
+            return json.dumps([
+                {"number": 7, "title": "[RHCLOUD-102] Add permission check", "labels": []},
+                {"number": 8, "title": "[RHCLOUD-1020] Similar key", "labels": []},
+                {"number": 9, "title": "[RHCLOUD-102] Docs", "labels": [{"name": "dev-bot-review"}]},
+            ])
+        if args[:2] == ["pr", "view"]:
+            return json.dumps({"labels": [{"name": "dev-bot-review"}]})
+        return ""
+
+    monkeypatch.setattr(actions, "run_gh", run_gh)
+    result = actions.label_review_prs({"control_key": "RHCLOUD-101", "ticket_key": "RHCLOUD-102"}, CONFIG)
+    assert result["review_label"] == "dev-bot-review"
+    assert [item["number"] for item in result["labeled"]] == [7]
+    assert [item["number"] for item in result["already_labeled"]] == [9]
+    assert any(call[:2] == ["pr", "edit"] for call in gh_calls)
+
+
+def test_open_pr_snapshot_detects_pr_only_changes(jira_store, monkeypatch):
+    store, _ = jira_store
+    child = store["RHCLOUD-102"]
+    child["fields"]["labels"].extend(["repo:rbac-config", CONFIG[2]])
+    monkeypatch.setattr(coordinator.subprocess, "run", lambda *_args, **_kwargs: types.SimpleNamespace(
+        returncode=0,
+        stdout=json.dumps([
+            {"number": 12, "title": "[RHCLOUD-102] Implement access check", "labels": [{"name": "dev-bot-review"}], "url": "https://github.com/project-kessel/rbac-config/pull/12"},
+            {"number": 13, "title": "[RHCLOUD-1020] Similar key", "labels": [], "url": "https://github.com/project-kessel/rbac-config/pull/13"},
+        ]),
+        stderr="",
+    ))
+    repos = {"rbac-config": {"upstream": "https://github.com/project-kessel/rbac-config.git"}}
+    snapshot, errors = coordinator.open_pr_snapshot([child], CONFIG[2], repos)
+    assert errors == {}
+    assert [pr["number"] for pr in snapshot["RHCLOUD-102"]] == [12]
+    before = coordinator.fingerprint(store["RHCLOUD-100"], store["RHCLOUD-101"], [child], TEAM_FIELD)
+    after = coordinator.fingerprint(store["RHCLOUD-100"], store["RHCLOUD-101"], [child], TEAM_FIELD, snapshot)
+    assert before != after
 
 def test_subtask_inherits_parent_team_and_refuses_mismatch(jira_store):
     store, _ = jira_store
@@ -202,7 +254,7 @@ def test_normal_ticket_creation_requires_explicit_named_proposal(jira_store):
 
 
 def test_preflight_bootstrap_then_skips_unchanged_and_wakes_on_completion(monkeypatch):
-    control = issue("RHCLOUD-101", labels=["dev-bot-control", "repo:rbac-config"])
+    control = issue("RHCLOUD-101", labels=["dev-bot-coordinator", "repo:rbac-config"])
     first = issue("RHCLOUD-102", labels=["phase:01"], links=[relates("RHCLOUD-101")])
     parent = issue("RHCLOUD-100", parent=None)
     outputs = []
@@ -235,7 +287,7 @@ def test_preflight_bootstrap_then_skips_unchanged_and_wakes_on_completion(monkey
 
 
 def test_state_label_does_not_wake_preflight():
-    control = issue("RHCLOUD-101", labels=["dev-bot-control", "dev-bot-coordinator:needs-plan"])
+    control = issue("RHCLOUD-101", labels=["dev-bot-coordinator", "dev-bot-coordinator:needs-plan"])
     parent = issue("RHCLOUD-100", parent=None)
     original = coordinator.fingerprint(parent, control, [], TEAM_FIELD)
     control["fields"]["labels"][-1] = "dev-bot-coordinator:blocked"
@@ -243,7 +295,7 @@ def test_state_label_does_not_wake_preflight():
 
 
 def test_truncated_control_comments_fail_closed():
-    control = issue("RHCLOUD-101", labels=["dev-bot-control"])
+    control = issue("RHCLOUD-101", labels=["dev-bot-coordinator"])
     control["fields"]["comment"] = {"total": 101, "comments": [{"id": "1", "body": "/coord status"}]}
     with pytest.raises(RuntimeError, match="only 1 of 101 comments"):
         coordinator.comments(control)

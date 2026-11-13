@@ -72,7 +72,7 @@ No Dockerfile in this repo — Konflux points at `dev-bot/Dockerfile.runner`.
 
 `instance/rbac-project-coordinator` is a separate bot instance using the
 `project-coordinator` workflow. It discovers RHCLOUD control tickets labeled
-`dev-bot-control`, checks the parent and direct children against a configured
+`dev-bot-coordinator`, checks the parent and direct children against the
 Jira Team ID, and posts project plans and progress on the control ticket. It
 never writes code. Implementation stays with the `rbac-config` Jira bot.
 
@@ -83,7 +83,7 @@ Deploy another bot target using `deploy/template.yaml` or
 | Parameter | Value |
 |---|---|
 | `BOT_CONFIG_PATH` | `instance/rbac-project-coordinator` |
-| `BOT_LABEL` | `dev-bot-control` |
+| `BOT_LABEL` | `dev-bot-coordinator` |
 | `BOT_IMPLEMENTATION_LABEL` | The implementation bot's actual Jira label, currently `hcc-ai-platform-accessmanagement` |
 | `BOT_JIRA_PROJECT` | `RHCLOUD` |
 | `BOT_TEAM_FIELD_ID` | Jira's Team custom field key: `customfield_10001` (also used by this instance's review profiles) |
@@ -101,7 +101,7 @@ coordinator run:
    `project-repos.json`.
 2. **Prepare the parent and control ticket.** Use an Epic or supported parent
    issue with a clear project goal. Create exactly one direct child control
-   ticket for this Team, set its Jira Team field, and add the `dev-bot-control`
+   ticket for this Team, set its Jira Team field, and add the `dev-bot-coordinator`
    label. The coordinator reads the Team ID from this field and uses it to
    scope the project. Add the permitted `repo:<name>` labels to this
    control ticket. Leave phase and implementation labels off it. The
@@ -127,25 +127,40 @@ coordinator run:
    chooses each ticket's repo from the control ticket's allowlist; make the
    ticket scope clear enough to identify the right repo.
 
-On first enrollment, the coordinator reports missing setup on the control
-ticket and normally sets `dev-bot-coordinator:needs-plan`. If the plan already
-passes the readiness gate, it can proceed to `dev-bot-coordinator:active`.
+On first enrollment, the coordinator analyzes all same-Team implementation
+tickets and posts a proposed order, phase suggestions, dependencies, parallel
+groups, repo choices, gaps, and questions on the control ticket. It normally
+sets `dev-bot-coordinator:needs-plan` and waits for you to add the suggested
+phase labels to implementation tickets and clarify or request dependencies.
+After a scheduled run sees the plan gate pass, it sets
+`dev-bot-coordinator:active` and releases the unblocked tickets in the earliest
+incomplete phase to the implementation bot. It takes the handoff labels from
+`instance/rbac-config-review/agent/review-context.yaml` for each selected repo.
+When an implementation ticket has an open PR titled with its Jira key in
+brackets, the coordinator adds the same YAML's `review_label` (currently
+`dev-bot-review`) so the review bot can pick it up. It reports each handoff and
+newly labeled PR on the control ticket. If the plan already passes the gate on
+first enrollment, it can start handoffs on that run.
 The control ticket has one coordinator state label:
 `dev-bot-coordinator:needs-plan`, `dev-bot-coordinator:active`,
 `dev-bot-coordinator:blocked`, or `dev-bot-coordinator:complete`.
 
 The coordinator proposes missing tickets, edits, and closures; it creates a
 ticket only when a later comment says `/coord create P-1` for a named proposal.
-`/coord status` requests a fresh summary; `/coord complete project` can finish
-the project after all same-Team implementation tickets are complete. It never
-edits or closes implementation tickets.
+`/coord start` asks it to recheck the plan gate and hand off currently runnable
+tickets. `/coord status` requests a fresh summary; `/coord complete project`
+can finish the project after all same-Team implementation tickets are complete.
+It never edits or closes implementation tickets.
 
 The preflight is read-only. It starts a coordinator session on first enrollment,
-when project data or user comments change, or when a coordinator state label is
-missing. Otherwise, it skips the project. The workflow's `actions.py`
-revalidates Jira state before state, handoff, comment, or ticket-creation
-writes. New deployment parameters must be supplied by the deployment target;
-this repository does not deploy the coordinator by itself.
+when project data, a matching open PR, or user comments change, or when a
+coordinator state label is missing. Otherwise, it skips the project. The
+app-interface deployment
+currently schedules the instance on weekdays during its configured Europe and
+US operating windows; no manual run command is needed. The workflow's
+`actions.py` revalidates Jira state before writes and verifies GitHub PR labels
+after adding them. New deployment parameters must be supplied by the deployment
+target; this repository does not deploy the coordinator by itself.
 
 ### Coordination cycle
 
