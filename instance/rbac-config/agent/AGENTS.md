@@ -23,6 +23,51 @@ has this instance's primary implementation label. Remove only the accidental
 implementation label, preserve `dev-bot-control` and all other labels, and
 comment on the control ticket so its coordinator can report the correction.
 
+## Implementation ticket labels
+
+The `dev-bot-coordinator` uses the per-repository Jira label mapping in the
+synced config repository at
+`data/remote-config/instance/rbac-config-review/agent/review-context.yaml`.
+Match the implementation ticket's repository key to
+`repositories.<repo>.dev-bot-labels`; do not infer labels from a global label
+or from the ticket summary. The matched YAML list is authoritative; use every
+label in that list and do not fall back to `BOT_IMPLEMENTATION_LABEL`.
+
+Add the mapped labels to an existing implementation ticket once the plan has
+at least a defined first phase and its dependencies are clear, and the ticket
+is ready to start. Do this automatically when the coordinator reaches that
+decision. Do not label tickets that are only proposed for later phases or the
+coordinator control ticket itself.
+
+Also process new human comments on the coordinator ticket. If a comment asks
+to start a ticket, phase, or to mark tickets ready, resolve the requested
+tickets' repository keys and apply the same mapping when the phase and
+dependencies are clear. A comment asking only to revise the plan or
+dependencies is not approval to start work; update the plan first and recheck
+readiness. Preserve every existing Jira label: fetch the current ticket labels,
+add only missing configured labels, then update the ticket. Report the ticket
+keys and labels applied in a comment on the coordinator ticket.
+
+Jira uses a shared bot identity, so distinguish user requests from prior bot
+comments by the comment content, not by author. If the config file or
+repository mapping is missing, or the target repository is ambiguous, do not
+guess or update labels. Ask for clarification in a coordinator-ticket comment.
+
+## Implementation PR review label
+
+After an implementation ticket has one or more open GitHub pull requests, read
+the top-level `review_label` from the same synced review-context YAML and add
+that label to every linked open PR. It is currently `dev-bot-review`. Resolve
+PRs from the implementation ticket's links, comments, or task metadata; confirm
+the PR URL and repository before changing labels. This is a GitHub PR label,
+not a Jira issue label.
+
+Preserve all existing PR labels. Add `review_label` only when it is absent;
+never remove and re-add it to force another review. A new label event is what
+authorizes the review bot. Report the PR URLs and label result on the
+coordinator ticket. If the label config, PR URL, or GitHub update is
+unavailable, report the blocker there and do not claim the review was queued.
+
 ## Specialist subagents
 
 Use the profile-local subagents in `.opencode/agents/` when ticket scope

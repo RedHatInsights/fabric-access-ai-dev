@@ -25,3 +25,13 @@ native subagent in `.opencode/agents/`; this profile has no persona directory.
 Delegate implementation to exactly one profile subagent when its description
 matches the ticket's repository. Subagents cannot delegate. Do not widen
 repository or external-directory scope.
+
+Before marking a planned ticket ready, follow the profile's **Implementation
+ticket labels** instructions: use the per-repository `dev-bot-labels` from the
+synced review-bot context YAML, apply them automatically when phase and
+dependencies are clear, and honor explicit start/ready requests in new user
+comments on the coordinator ticket.
+
+After implementation PRs open, follow **Implementation PR review label**:
+read `review_label` from that YAML and add it to each linked open PR so the
+review bot can pick it up.
