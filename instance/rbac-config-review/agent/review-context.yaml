@@ -1,6 +1,9 @@
 review_label: dev-bot-review
 repositories:
   insights-rbac:
+    dev-bot-labels:
+      - repo:insights-rbac
+      - hcc-ai-platform-accessmanagement
     related:
       - id: rbac-config
         url: https://github.com/project-kessel/rbac-config
@@ -70,6 +73,9 @@ repositories:
       - id: hbi-kessel-effects
         url: https://github.com/RedHatInsights/insights-host-inventory/blob/master/docs/kessel-effects-on-hbi.md
   rbac-config:
+    dev-bot-labels:
+      - repo:rbac-config
+      - hcc-ai-platform-accessmanagement
     related:
       - id: insights-rbac
         url: https://github.com/project-kessel/insights-rbac

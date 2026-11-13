@@ -66,6 +66,11 @@ repositories:
 
 The per-repository settings are:
 
+- **`dev-bot-labels`** (optional): Jira labels the Fabric Access coordinator
+  adds to an implementation ticket when it is ready to start. The coordinator
+  reads the list from the matching repository entry; these labels do not
+  affect review queue selection. For example, `insights-rbac` uses
+  `repo:insights-rbac` and `hcc-ai-platform-accessmanagement`.
 - **`related`** (optional): GitHub repositories whose pinned source may help
   check cross-repository contracts. Each entry needs a unique lowercase `id`,
   an HTTPS GitHub repository `url`, and a short `relationship` description.
