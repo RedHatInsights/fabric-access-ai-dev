@@ -47,23 +47,22 @@ DEPENDENCY_REQUEST_RE = re.compile(
 )
 
 
-def require_config() -> tuple[str, str, str, str]:
+def require_config() -> tuple[str, str, str]:
     control_label = os.environ.get("BOT_LABEL", "")
     team_field_id = os.environ.get("BOT_TEAM_FIELD_ID", "")
-    expected_team = os.environ.get("BOT_TEAM_ID", "")
     implementation_label = os.environ.get("BOT_IMPLEMENTATION_LABEL", "")
-    if not all((control_label, team_field_id, expected_team, implementation_label)):
-        raise ValueError("BOT_LABEL, BOT_TEAM_FIELD_ID, BOT_TEAM_ID, and BOT_IMPLEMENTATION_LABEL are required")
+    if not all((control_label, team_field_id, implementation_label)):
+        raise ValueError("BOT_LABEL, BOT_TEAM_FIELD_ID, and BOT_IMPLEMENTATION_LABEL are required")
     if not re.fullmatch(r"customfield_\d+", team_field_id):
         raise ValueError("BOT_TEAM_FIELD_ID must be a customfield_ number")
-    if not all(JQL_VALUE_RE.fullmatch(item) for item in (control_label, expected_team, implementation_label)):
-        raise ValueError("Invalid label or Team ID configuration")
-    return control_label, team_field_id, expected_team, implementation_label
+    if not all(JQL_VALUE_RE.fullmatch(item) for item in (control_label, implementation_label)):
+        raise ValueError("Invalid label configuration")
+    return control_label, team_field_id, implementation_label
 
 
 def checked_control(
     control_key: str,
-    config: tuple[str, str, str, str],
+    config: tuple[str, str, str],
     *,
     require_parent: bool = True,
     require_team: bool = True,
@@ -71,24 +70,27 @@ def checked_control(
     if not ISSUE_KEY_RE.fullmatch(control_key):
         raise ValueError("Invalid control issue key")
     control = get_issue(control_key)
-    control_label, team_field_id, expected_team, _ = config
+    control_label, team_field_id, _ = config
     if control_label not in labels(control):
         raise ValueError("Control marker is missing")
     actual_team = team_id(control, team_field_id)
-    if actual_team != expected_team and (require_team or actual_team):
-        raise ValueError("Control Team ID differs from configured Team ID")
+    if require_team and not actual_team:
+        raise ValueError("Control ticket has no Jira Team ID")
     if require_parent and not parent_key(control):
         raise ValueError("Control ticket has no parent")
     return control
 
 
-def checked_child(control: dict, ticket_key: str, team_field_id: str, expected_team: str) -> dict:
+def checked_child(control: dict, ticket_key: str, team_field_id: str) -> dict:
     if not ISSUE_KEY_RE.fullmatch(ticket_key):
         raise ValueError("Invalid child issue key")
     child = get_issue(ticket_key)
     if parent_key(child) != parent_key(control):
         raise ValueError("Ticket is not a direct child of the control ticket's parent")
-    if team_id(child, team_field_id) != expected_team:
+    control_team_id = team_id(control, team_field_id)
+    if not control_team_id:
+        raise ValueError("Control ticket has no Jira Team ID")
+    if team_id(child, team_field_id) != control_team_id:
         raise ValueError("Ticket Team ID differs from control Team ID")
     if ticket_key == key_of(control):
         raise ValueError("Control ticket cannot be an implementation ticket")
@@ -109,17 +111,20 @@ def set_labels(issue_key: str, new_labels: list[str]) -> None:
         raise RuntimeError(f"Label update not verified for {issue_key}")
 
 
-def set_state(request: dict, config: tuple[str, str, str, str]) -> dict:
+def set_state(request: dict, config: tuple[str, str, str]) -> dict:
     state = request.get("state")
     if state not in STATES:
         raise ValueError("Unknown coordinator state")
-    strict = state in {"coord:active", "coord:complete"}
+    strict = state in {
+        "dev-bot-coordinator:active",
+        "dev-bot-coordinator:complete",
+    }
     control = checked_control(request["control_key"], config, require_parent=strict, require_team=strict)
-    if state == "coord:active":
+    if state == "dev-bot-coordinator:active":
         _, assessment = fresh_assessment(control, config)
         if assessment["gaps"]:
             raise ValueError("Plan gate failed: " + "; ".join(assessment["gaps"]))
-    if state == "coord:complete":
+    if state == "dev-bot-coordinator:complete":
         comment_id = str(request.get("request_comment_id") or "")
         if not comment_id:
             raise ValueError("Completion requires an explicit control comment ID")
@@ -135,11 +140,18 @@ def set_state(request: dict, config: tuple[str, str, str, str]) -> dict:
     return {"control_key": key_of(control), "state": state}
 
 
-def fresh_assessment(control: dict, config: tuple[str, str, str, str]) -> tuple[list[dict], dict]:
-    _, team_field_id, expected_team, implementation_label = config
+def fresh_assessment(control: dict, config: tuple[str, str, str]) -> tuple[list[dict], dict]:
+    _, team_field_id, implementation_label = config
+    control_team_id = team_id(control, team_field_id)
+    if not control_team_id:
+        raise ValueError("Control ticket has no Jira Team ID")
     parent = parent_key(control)
     siblings = search_all(f'parent = "{parent}" ORDER BY key ASC')
-    children = [issue for issue in siblings if key_of(issue) != key_of(control) and team_id(issue, team_field_id) == expected_team]
+    children = [
+        issue
+        for issue in siblings
+        if key_of(issue) != key_of(control) and team_id(issue, team_field_id) == control_team_id
+    ]
     other_controls = [issue for issue in children if os.environ["BOT_LABEL"] in labels(issue)]
     assessment = evaluate(
         control,
@@ -154,9 +166,9 @@ def fresh_assessment(control: dict, config: tuple[str, str, str, str]) -> tuple[
     return children, assessment
 
 
-def handoff(request: dict, config: tuple[str, str, str, str]) -> dict:
+def handoff(request: dict, config: tuple[str, str, str]) -> dict:
     control = checked_control(request["control_key"], config)
-    _, team_field_id, expected_team, implementation_label = config
+    _, team_field_id, implementation_label = config
     children, assessment = fresh_assessment(control, config)
     if assessment["gaps"]:
         raise ValueError("Plan gate failed: " + "; ".join(assessment["gaps"]))
@@ -164,7 +176,7 @@ def handoff(request: dict, config: tuple[str, str, str, str]) -> dict:
     ready = {item["key"]: item for item in assessment["ready"]}
     if ticket_key not in ready:
         raise ValueError("Ticket is not an unblocked runnable ticket")
-    child = checked_child(control, ticket_key, team_field_id, expected_team)
+    child = checked_child(control, ticket_key, team_field_id)
     if not any(PHASE_RE.fullmatch(label) for label in labels(child)):
         raise ValueError("Implementation ticket has no phase label")
     selected_repos = request.get("repos") or []
@@ -181,9 +193,9 @@ def handoff(request: dict, config: tuple[str, str, str, str]) -> dict:
     return {"ticket_key": ticket_key, "released_repos": sorted(set(selected_repos)), "implementation_label": implementation_label}
 
 
-def link_dependency(request: dict, config: tuple[str, str, str, str]) -> dict:
+def link_dependency(request: dict, config: tuple[str, str, str]) -> dict:
     control = checked_control(request["control_key"], config)
-    _, team_field_id, expected_team, _ = config
+    _, team_field_id, _ = config
     comment_id = str(request.get("request_comment_id") or "")
     if not comment_id:
         raise ValueError("request_comment_id is required")
@@ -200,8 +212,8 @@ def link_dependency(request: dict, config: tuple[str, str, str, str]) -> dict:
     if blocker_key == blocked_key:
         raise ValueError("A ticket cannot block itself")
 
-    blocker = checked_child(control, blocker_key, team_field_id, expected_team)
-    blocked = checked_child(control, blocked_key, team_field_id, expected_team)
+    blocker = checked_child(control, blocker_key, team_field_id)
+    blocked = checked_child(control, blocked_key, team_field_id)
     control_label = config[0]
     if control_label in labels(blocker) or control_label in labels(blocked):
         raise ValueError("Dependency endpoints must be implementation tickets")
@@ -278,9 +290,9 @@ def creation_fields(control: dict, team_field_id: str, extra_labels: list[str]) 
     return child_type, {**hierarchy, team_field_id: team_value, "labels": extra_labels}
 
 
-def create_ticket(request: dict, config: tuple[str, str, str, str]) -> dict:
+def create_ticket(request: dict, config: tuple[str, str, str]) -> dict:
     control = checked_control(request["control_key"], config)
-    _, team_field_id, expected_team, implementation_label = config
+    _, team_field_id, implementation_label = config
     comment_id = str(request.get("request_comment_id") or "")
     if not comment_id:
         raise ValueError("request_comment_id is required")
@@ -323,13 +335,13 @@ def create_ticket(request: dict, config: tuple[str, str, str, str]) -> dict:
     ticket_key = result.get("key") or key_of(result.get("issue"))
     if not ticket_key:
         raise RuntimeError("Jira create returned no issue key; inspect parent before retry")
-    child = checked_child(control, ticket_key, team_field_id, expected_team)
+    child = checked_child(control, ticket_key, team_field_id)
     if implementation_label in labels(child):
         raise RuntimeError("Created ticket unexpectedly has implementation bot label")
     return {"ticket_key": ticket_key, "created": True, "request_comment_id": comment_id}
 
 
-def comment_control(request: dict, config: tuple[str, str, str, str]) -> dict:
+def comment_control(request: dict, config: tuple[str, str, str]) -> dict:
     control = checked_control(request["control_key"], config, require_parent=False, require_team=False)
     action_id = str(request.get("action_id") or "")
     body = str(request.get("body") or "").strip()

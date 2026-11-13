@@ -21,7 +21,14 @@ PHASE_RE = re.compile(r"^phase:(\d{2})$")
 JQL_VALUE_RE = re.compile(r"^[A-Za-z0-9:_-]+$")
 COMPLETE_STATUSES = frozenset({"done", "closed", "resolved", "release pending"})
 START_STATUSES = frozenset({"new", "backlog", "refinement", "to do"})
-COORD_STATES = frozenset({"coord:needs-plan", "coord:active", "coord:blocked", "coord:complete"})
+COORD_STATES = frozenset(
+    {
+        "dev-bot-coordinator:needs-plan",
+        "dev-bot-coordinator:active",
+        "dev-bot-coordinator:blocked",
+        "dev-bot-coordinator:complete",
+    }
+)
 OWN_COMMENT_PREFIX = "### Coordinator update"
 PAGE_SIZE = 50
 
@@ -327,16 +334,19 @@ def main() -> None:
     project = os.environ.get("BOT_JIRA_PROJECT", "RHCLOUD")
     control_label = os.environ.get("BOT_LABEL", "")
     team_field_id = os.environ.get("BOT_TEAM_FIELD_ID", "")
-    expected_team_id = os.environ.get("BOT_TEAM_ID", "")
     implementation_label = os.environ.get("BOT_IMPLEMENTATION_LABEL", "")
     include_backlog = os.environ.get("BOT_INCLUDE_BACKLOG", "").lower() in {"1", "true", "yes"}
-    required = {"BOT_LABEL": control_label, "BOT_TEAM_FIELD_ID": team_field_id, "BOT_TEAM_ID": expected_team_id, "BOT_IMPLEMENTATION_LABEL": implementation_label}
+    required = {
+        "BOT_LABEL": control_label,
+        "BOT_TEAM_FIELD_ID": team_field_id,
+        "BOT_IMPLEMENTATION_LABEL": implementation_label,
+    }
     missing = [name for name, item in required.items() if not item]
     if missing:
         output_result("error", f"Missing configuration: {', '.join(missing)}")
         return
-    if not all(JQL_VALUE_RE.fullmatch(item) for item in (project, control_label, expected_team_id, implementation_label)):
-        output_result("error", "Invalid Jira project, label, or Team ID configuration")
+    if not all(JQL_VALUE_RE.fullmatch(item) for item in (project, control_label, implementation_label)):
+        output_result("error", "Invalid Jira project or label configuration")
         return
     if not re.fullmatch(r"customfield_\d+", team_field_id):
         output_result("error", "BOT_TEAM_FIELD_ID must be a customfield_ number")
@@ -350,9 +360,7 @@ def main() -> None:
         for candidate in candidates:
             control_key = key_of(candidate)
             control = get_issue(control_key)
-            actual_team = team_id(control, team_field_id)
-            if actual_team and actual_team != expected_team_id:
-                continue
+            control_team_id = team_id(control, team_field_id)
             parent = parent_key(control)
             if not parent:
                 task = tasks.get(control_key) or {}
@@ -360,7 +368,7 @@ def main() -> None:
                 if (task.get("metadata") or {}).get("snapshot_hash") != digest:
                     actionable.append({
                         "control_key": control_key,
-                        "team_id": expected_team_id,
+                        "team_id": control_team_id,
                         "team_field_id": team_field_id,
                         "snapshot_hash": digest,
                         "error": "Control ticket has no parent issue",
@@ -368,10 +376,23 @@ def main() -> None:
                 continue
             parent_issue = get_issue(parent)
             siblings = search_all(f'parent = "{parent}" ORDER BY key ASC')
-            children = [issue for issue in siblings if key_of(issue) != control_key and team_id(issue, team_field_id) == expected_team_id]
-            other_controls = [issue for issue in siblings if key_of(issue) != control_key and control_label in labels(issue) and team_id(issue, team_field_id) == expected_team_id]
+            children = [
+                issue
+                for issue in siblings
+                if control_team_id
+                and key_of(issue) != control_key
+                and team_id(issue, team_field_id) == control_team_id
+            ]
+            other_controls = [
+                issue
+                for issue in siblings
+                if control_team_id
+                and key_of(issue) != control_key
+                and control_label in labels(issue)
+                and team_id(issue, team_field_id) == control_team_id
+            ]
             assessment = evaluate(control, children, repo_names, implementation_label, include_backlog)
-            if not actual_team:
+            if not control_team_id:
                 assessment["gaps"].append("Control ticket has no Jira Team ID")
                 assessment["ready"] = []
             if other_controls:
@@ -384,7 +405,7 @@ def main() -> None:
                 actionable.append({
                     "control_key": control_key,
                     "parent_key": parent,
-                    "team_id": expected_team_id,
+                    "team_id": control_team_id,
                     "team_field_id": team_field_id,
                     "snapshot_hash": digest,
                     "first_run": not bool(old_digest),
@@ -399,7 +420,7 @@ def main() -> None:
         if actionable:
             output_result("start", json.dumps({"projects": actionable, "implementation_label": implementation_label}, default=str))
         else:
-            output_result("skip", f"No changed {project} control tickets for Team {expected_team_id}")
+            output_result("skip", f"No changed {project} control tickets")
     except Exception as error:
         output_result("error", str(error))
     finally:
