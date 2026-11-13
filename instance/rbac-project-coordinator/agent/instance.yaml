@@ -2,7 +2,7 @@ workflow: ./workflows/project-coordinator
 source: scheduled
 runtime: opencode
 provider: rehor-openai
-model: gpt-6.1-sol
+model: gpt-6.1-terra
 envs: []
 claude_md:
   strategy: ignore

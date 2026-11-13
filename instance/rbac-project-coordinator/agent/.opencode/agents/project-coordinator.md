@@ -1,7 +1,7 @@
 ---
 description: Coordinates one Jira parent project through its control ticket.
 mode: primary
-model: rehor-openai/gpt-6.1-sol
+model: rehor-openai/gpt-6.1-terra
 request:
   body:
     reasoning:
