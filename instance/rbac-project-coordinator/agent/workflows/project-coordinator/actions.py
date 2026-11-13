@@ -51,10 +51,7 @@ DEPENDENCY_REQUEST_RE = re.compile(
     re.IGNORECASE,
 )
 SETUP_PROPOSAL_RE = re.compile(r"```coordinator-setup\s*(.*?)\s*```", re.DOTALL)
-SETUP_APPROVAL_RE = re.compile(
-    r"^\s*(?:/coord\s+approve\s+setup|approved|approve|setup\s+approved|plan\s+approved)\s*[.!]?\s*$",
-    re.IGNORECASE,
-)
+SETUP_APPROVAL_RE = re.compile(r"\b(?:approve|approved)\b", re.IGNORECASE)
 
 
 def require_config() -> tuple[str, str, str]:

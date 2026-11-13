@@ -145,7 +145,52 @@ def load_tasks() -> dict[str, dict]:
 
 def comment_body(comment: dict) -> str:
     body = comment.get("body") or ""
-    return body if isinstance(body, str) else json.dumps(body, sort_keys=True)
+    if isinstance(body, str):
+        stripped = body.strip()
+        if stripped.startswith(("{", "[")):
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, (dict, list)):
+                body = parsed
+            else:
+                return body
+        else:
+            return body
+
+    parts: list[str] = []
+
+    def collect(node) -> None:
+        if isinstance(node, list):
+            for item in node:
+                collect(item)
+            return
+        if not isinstance(node, dict):
+            return
+        node_type = node.get("type")
+        if node_type == "text":
+            text = node.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+            return
+        if node_type == "mention":
+            attrs = node.get("attrs") or {}
+            text = attrs.get("text") if isinstance(attrs, dict) else None
+            if isinstance(text, str):
+                parts.append(text)
+            return
+        content = node.get("content")
+        if isinstance(content, list):
+            collect(content)
+        elif isinstance(node.get("text"), str):
+            parts.append(node["text"])
+        if node_type in {"paragraph", "heading", "listItem", "blockquote", "codeBlock"}:
+            parts.append("\n")
+
+    collect(body)
+    flattened = "".join(parts).strip()
+    return flattened if flattened else json.dumps(body, sort_keys=True)
 
 
 def search_all(jql: str, requested_fields: str = "*all") -> list[dict]:
