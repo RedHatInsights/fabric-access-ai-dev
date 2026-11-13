@@ -13,6 +13,7 @@ from urllib.parse import quote
 
 from impact_analysis import changed_lines
 from public_comment_safety import ensure_public_content
+from review_ledger import encode_risk_assessment
 
 
 class EvidenceError(ValueError):
@@ -407,6 +408,56 @@ def validate_pr_summary(data: object, manifest: dict) -> str:
     return summary
 
 
+def validate_risk_assessment(data: object, manifest: dict,
+                             *, allow_stale: bool = False) -> dict:
+    """Validate a classifier result and bind it to changed files and revision."""
+    if not isinstance(data, dict):
+        raise EvidenceError("Risk assessment must be a JSON object")
+    required = {"risk", "explanation", "evidence_files"}
+    optional = {"head_sha", "base_sha", "stale"}
+    if not required <= data.keys() or not data.keys() <= (required | optional):
+        raise EvidenceError("Risk assessment has an unsupported shape")
+    level = data.get("risk")
+    if not isinstance(level, str) or level not in {"low", "medium", "high"}:
+        raise EvidenceError("Risk must be low, medium, or high")
+    explanation = required_text(data.get("explanation"), "risk_assessment.explanation")
+    if len(explanation) > 1000 or "<!--" in explanation or "-->" in explanation:
+        raise EvidenceError("Risk explanation is too long or contains an HTML comment")
+    files = data.get("evidence_files")
+    if (not isinstance(files, list) or not 1 <= len(files) <= 8
+            or any(not isinstance(path, str) or not path.strip() for path in files)):
+        raise EvidenceError("Risk assessment needs one to eight changed evidence files")
+    files = [path.strip() for path in files]
+    if len(files) != len(set(files)):
+        raise EvidenceError("Risk evidence files must be unique")
+    pr = manifest.get("pr", {})
+    head, base = pr.get("head_sha"), pr.get("base_sha")
+    if not isinstance(head, str) or not isinstance(base, str):
+        raise EvidenceError("Risk assessment needs pinned PR revisions")
+    assessed_head, assessed_base = data.get("head_sha", head), data.get("base_sha", base)
+    if (not isinstance(assessed_head, str) or not isinstance(assessed_base, str)
+            or not re.fullmatch(r"[0-9a-f]{40}", assessed_head)
+            or not re.fullmatch(r"[0-9a-f]{40}", assessed_base)):
+        raise EvidenceError("Risk assessment revision is invalid")
+    stale = assessed_head != head or assessed_base != base
+    if stale and not allow_stale:
+        raise EvidenceError("Risk assessment does not match the current PR revision")
+    if not stale:
+        changed_files = {item["file"] for item in changed_lines(Path(pr["diff_path"]).read_text())}
+        if any(path not in changed_files for path in files):
+            raise EvidenceError("Risk evidence_files must name files changed in this PR")
+    result = {
+        "risk": level,
+        "explanation": explanation,
+        "evidence_files": files,
+        "head_sha": assessed_head,
+        "base_sha": assessed_base,
+        "stale": stale,
+    }
+    ensure_public_content(json.dumps(result, ensure_ascii=False), "Risk assessment")
+    return result
+
+
 def table_cell(value: object) -> str:
     """Keep generated finding text on one valid Markdown table row."""
     text = " ".join(str(value).split())
@@ -450,9 +501,35 @@ def verification_status_line(manifest: dict, command_ids: list[int], verified_at
             f"requested by {requests}.")
 
 
+def _risk_section(assessment: dict | None) -> list[str]:
+    if assessment is None:
+        return []
+    level = assessment["risk"]
+    policies = {
+        "low": "Auto-merge may be considered after required checks and repository rules pass.",
+        "medium": "One human approval is required before merge.",
+        "high": "Two human approvals are required before merge.",
+    }
+    files = ", ".join(f"`{path}`" for path in assessment["evidence_files"])
+    lines = [
+        "### Change risk",
+        f"**Risk:** `{level}-risk` — {assessment['explanation']}",
+        f"**Merge guidance:** {policies[level]}",
+        f"**Changed files considered:** {files}",
+    ]
+    if assessment.get("stale"):
+        lines.append(
+            "**Assessment status:** This applies to a previous revision; the risk label "
+            "should be treated as stale until a newly approved review reassesses the change."
+        )
+    lines.append(encode_risk_assessment(assessment))
+    return lines
+
+
 def render_status_review(manifest: dict, findings: list[dict], review_number: int,
                          summary: str | None = None,
-                         last_verification: str | None = None) -> str:
+                         last_verification: str | None = None,
+                         risk_assessment: dict | None = None) -> str:
     """Render the shared status-review template for standard and custom reviews."""
     pr = manifest["pr"]
     summary = summary or validate_pr_summary({}, manifest)
@@ -461,6 +538,8 @@ def render_status_review(manifest: dict, findings: list[dict], review_number: in
         "",
         summary,
         "",
+        *_risk_section(risk_assessment),
+        *([""] if risk_assessment else []),
         f"### {compact_status_line(findings)}",
         "",
         *findings_table(findings),
@@ -478,8 +557,10 @@ def render_status_review(manifest: dict, findings: list[dict], review_number: in
     return "\n".join(lines) + "\n"
 
 
-def render_review(manifest: dict, findings: list[dict], summary: str | None = None) -> str:
-    return render_status_review(manifest, findings, 1, summary)
+def render_review(manifest: dict, findings: list[dict], summary: str | None = None,
+                  risk_assessment: dict | None = None) -> str:
+    return render_status_review(manifest, findings, 1, summary,
+                                risk_assessment=risk_assessment)
 
 
 def open_entries(ledger: list[dict]) -> list[dict]:
@@ -615,10 +696,11 @@ def compact_status_line(findings: list[dict]) -> str:
 
 def render_ledger(manifest: dict, ledger: list[dict], new_findings: list[dict],
                   update_count: int, summary: str | None = None,
-                  last_verification: str | None = None) -> str:
+                  last_verification: str | None = None,
+                  risk_assessment: dict | None = None) -> str:
     """Render the updated status review with the carried finding ledger."""
     return render_status_review(manifest, ledger, update_count + 1, summary,
-                                last_verification)
+                                last_verification, risk_assessment)
 
 
 def custom_skill_results(manifest: dict, data: object) -> tuple[list[dict], list[dict]]:
@@ -677,7 +759,8 @@ def validate_format_verdict(data: object, format_skills: list[dict]) -> None:
 
 def render_custom(manifest: dict, ledger: list[dict], new_findings: list[dict],
                   update_count: int, data: object,
-                  summary: str | None = None) -> tuple[str, list[dict]]:
+                  summary: str | None = None,
+                  risk_assessment: dict | None = None) -> tuple[str, list[dict]]:
     """Validate skill-formatted inline comments and use the shared status template."""
     if not isinstance(data, dict):
         raise EvidenceError("Custom format must be an object")
@@ -736,7 +819,8 @@ def render_custom(manifest: dict, ledger: list[dict], new_findings: list[dict],
         if finding["id"] not in custom_expected:
             custom_by_id[finding["id"]] = render_inline_comments([finding])[0]
     comments = [custom_by_id[finding["id"]] for finding in new_findings]
-    body = render_status_review(manifest, ledger, update_count + 1, summary)
+    body = render_status_review(manifest, ledger, update_count + 1, summary,
+                                risk_assessment=risk_assessment)
     return body, comments
 
 
@@ -756,6 +840,8 @@ def main() -> None:
     parser.add_argument("--verification-command-id", action="append", type=int, default=[],
                         help="Top-level PR comment ID requesting verification; repeat for each request")
     parser.add_argument("--pr-summary", help="Existing one-line PR summary to preserve during verification")
+    parser.add_argument("--risk-assessment", type=Path,
+                        help="Risk assessor JSON for a full review or carried review risk during verification")
     parser.add_argument("--ledger-output", type=Path, help="Where to write the updated ledger.json")
     parser.add_argument("--inline-comments-output", type=Path,
                         help="Where to write inline comments rendered from confirmed findings")
@@ -797,6 +883,13 @@ def main() -> None:
             for comment in response_comments:
                 ensure_public_content(comment["body"], "Context response")
             args.context_response_comments_output.write_text(json.dumps(response_comments, indent=2))
+        risk_assessment = None
+        if args.risk_assessment:
+            risk_assessment = validate_risk_assessment(
+                json.loads(args.risk_assessment.read_text()), manifest,
+                allow_stale=args.verification_only,
+            )
+            args.risk_assessment.write_text(json.dumps(risk_assessment, indent=2) + "\n")
         if args.verification_only:
             if (args.ledger is None or args.verifications is None or args.verification_verdicts is None
                     or args.ledger_output is None or args.update_count is None):
@@ -848,6 +941,7 @@ def main() -> None:
                     "ledger": new_ledger, "update_count": update_count,
                     "review_number": update_count + 1, "format_skills": format_skills,
                     "skill_results": skill_results,
+                    "risk_assessment": risk_assessment,
                 }, indent=2))
                 print(json.dumps({"custom_input_file": str(args.prepare_custom),
                                   "confirmed": len(accepted), "update_count": update_count}))
@@ -857,18 +951,21 @@ def main() -> None:
             format_verdict = json.loads(args.custom_verdict.read_text())
             validate_format_verdict(format_verdict, format_skills)
             body, comments = render_custom(manifest, new_ledger, accepted, update_count,
-                                           json.loads(args.custom_format.read_text()), summary)
+                                           json.loads(args.custom_format.read_text()), summary,
+                                           risk_assessment)
         elif format_name == "standard":
             if args.custom_format or args.custom_verdict or args.prepare_custom or args.skill_results:
                 raise EvidenceError("Custom formatting options require format: custom")
             if args.verification_only:
                 body = render_ledger(manifest, new_ledger, [], update_count, summary,
-                                     last_verification)
+                                     last_verification, risk_assessment)
                 comments = []
             else:
-                body = render_review(manifest, accepted, summary) if args.ledger is None else render_ledger(
-                    manifest, new_ledger, accepted, update_count, summary
-                )
+                body = (render_review(manifest, accepted, summary, risk_assessment)
+                        if args.ledger is None else render_ledger(
+                            manifest, new_ledger, accepted, update_count, summary,
+                            risk_assessment=risk_assessment,
+                        ))
                 comments = render_inline_comments(accepted)
         else:
             raise EvidenceError("Unknown review format")

@@ -7,8 +7,9 @@ never edits, commits, pushes, approves, requests changes, or merges — it keeps
 one GitHub review summary per PR and edits it in place each cycle. It also
 posts one idempotent inline thread per actionable finding, using the same
 finding ID in the summary and inline comment. The summary has a one-sentence
-purpose statement followed by a Findings table with plain-text IDs, severity,
-dimension, resolution state, and a separate link to each inline thread.
+purpose statement, a revision-specific Change risk section, and a Findings
+table with plain-text IDs, severity, dimension, resolution state, and a
+separate link to each inline thread.
 Scenarios, evidence, and fixes stay in the inline comments. The summary ends
 with contextual-answer, re-review, and verification commands. Its hidden
 versioned ledger payload is restored from GitHub at the start of later cycles,
@@ -32,15 +33,16 @@ flowchart LR
         A["Preflight<br/>(review_queue.py)"] --> B["Context<br/>(build_context.py)"]
         B --> C["Review<br/>(Terra/Luna by dimension)"]
         C --> D["Verify<br/>(review-verifier)"]
-        D --> E["Publish<br/>(inline threads, then formatted status summary)"]
+        D --> R["Classify risk<br/>(review-risk-assessor)"]
+        R --> E["Publish<br/>(comments, summary, risk label)"]
     end
-    E --> GH2["GitHub review summary + inline threads"]
+    E --> GH2["GitHub review summary + inline threads + one risk label"]
     E -.-> Memory
 
     classDef script fill:#e2e3e5,stroke:#6c757d,color:#000;
     classDef ai fill:#f8d7da,stroke:#a94442,color:#000;
     class A,B,E script;
-    class C,T,D,M ai;
+    class C,T,D,R,M ai;
 ```
 
 Gray = deterministic script, $0, no model call. Red = an LLM reasons over
@@ -60,11 +62,13 @@ cycle so bot-authored updates alone do not start a model session.
 | Model routing | `review_skills.py` + `dimensions.yaml` | Script | Resolves each pass's model preference to the configured Terra or Luna subagent in `review_plan` |
 | Review criteria | `skills/dimensional-review/SKILL.md` | **AI** (review-terra / review-luna) | Multi-dimension review over pinned context using the configured model profile; results are deduped and consensus-scored |
 | Review workers | `.opencode/agents/review-terra.md`, `review-luna.md` | **AI** (subagents) | Read-only workers for dimensions routed to Terra or Luna |
+| Risk classifier | `.opencode/agents/review-risk-assessor.md` | **AI** (subagent) | Assesses breaking-change risk once per full review with an explanation and changed-file evidence |
 | Context questions and answers | `context_questions.py` | Script | Posts one marked question per comment and finds PR-author answers for the detector to assess |
 | Missing-context detector | `.opencode/agents/missing-context-detector.md` | **AI** (subagent) | Asks only material questions, then evaluates author answers against pinned context |
 | Explanation quality | `skills/explanatory-answer/SKILL.md` | **AI** (review-runner) | General guidance for direct answers, causal reasoning, evidence, and requested Mermaid diagrams; this workflow maps it to finding fields |
 | Verifier | `.opencode/agents/review-verifier.md` | **AI** (subagent) | Independently tries to refute every proposed finding using only pinned sources |
 | Evidence gate | `review_evidence.py` | Script | Rejects findings without real pinned locations/references; caps at seven; requires one verdict per finding; renders the status template |
+| Risk label publisher | `review_risk_label.py` | Script | Rechecks PR SHAs, applies exactly one risk label, and removes conflicting risk labels |
 | Review ledger transport | `review_ledger.py`, `review_queue.py`, `post_review.py` | Script | Embeds a public-safe ledger in the status review and restores it from GitHub before a model session |
 | Inline publisher | `post_inline_comments.py` | Script | Posts or updates one anchored comment per confirmed finding on the current PR head, deduplicated by finding ID |
 | Finding thread resolver | `resolve_review_threads.py` | Script | Resolves only bot-authored finding threads whose addressed state was confirmed by the verifier and published in the status ledger |
@@ -82,9 +86,10 @@ read-only worker: Terra uses `review-terra`, and Luna uses `review-luna`.
 `review_plan` records the resolved worker. Dimensions run in plan-ordered
 batches of at most four concurrent workers; each batch is recorded before the
 next starts.
-`review-verifier` separately checks findings on Luna. If a preferred worker
-fails, that dimension is recorded as failed instead of being silently rerun on
-another model.
+`review-verifier` separately checks findings on Luna. The risk assessor uses
+Luna at high effort once per full review; it does not run for verification or
+comment replies. If a preferred worker fails, that dimension is recorded as
+failed instead of being silently rerun on another model.
 The high preset remains the default. For a documentation-only diff, dimensions
 marked `skip_documentation_only` do not run; the current catalog selects six
 passes instead of fourteen. Mixed code and documentation changes still select
@@ -519,6 +524,14 @@ GitHub URL of the inline thread; finding IDs remain plain text):
 
 This PR aligns the documented role response with the fields returned by the handler.
 
+### Change risk
+
+**Risk:** `medium-risk` — The change updates a client-visible response contract, so existing consumers may need to adapt.
+
+**Merge guidance:** One human approval is required before merge.
+
+**Changed files considered:** `api/response.py`, `docs/api.md`
+
 ### Findings (2 total; 1 open, 1 addressed)
 
 | ID | Severity | Dimension | Status | Inline comment |
@@ -533,12 +546,14 @@ This PR aligns the documented role response with the fields returned by the hand
 - **Ask the bot:** Comment `/review-bot <question or request>` for an answer based on the pinned PR and review context.
 
 <!-- dev-review-bot:fabric-access-review:<head_sha>:<base_sha> -->
+<!-- dev-review-bot:risk-assessment:v1:<revision-bound-public-risk> -->
 <!-- dev-review-bot:review-ledger:v1:<compressed-public-ledger> -->
 ```
 
-The ledger line is hidden in the rendered comment but remains readable via the
-GitHub API. It is a transport for public review state, not an access-control
-boundary.
+The ledger and risk-assessment markers are hidden in the rendered comment but
+remain readable via the GitHub API. They are public transports for review state,
+not access-control boundaries. A risk assessment is tied to the head and base
+SHAs the classifier inspected.
 
 The linked inline comment carries the evidence needed to act:
 

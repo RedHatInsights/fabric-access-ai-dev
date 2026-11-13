@@ -224,7 +224,11 @@ organization member on an existing, unpaused review task.
      --base-sha <base_sha>
    ```
 
-   Read only the prior ledger's open findings.
+   Read only the prior ledger's open findings. If preflight supplies
+   `work.risk_assessment`, save that exact assessment in a cycle-local JSON
+   file and pass it to the evidence gate. A risk assessment tied to an older
+   head/base is shown as stale; verification does not call the risk subagent or
+   change risk labels.
 2. For every open ledger entry, compare the original claim with the current
    pinned code. Write exactly one verification using the existing
    `addressed|still_open|uncertain` schema. An `addressed` result must cite a
@@ -244,6 +248,7 @@ organization member on an existing, unpaused review task.
      --verifications <verifications.json> \
      --verification-verdicts <verification-verdicts.json> \
      --update-count <work.update_count> --pr-summary "<existing PR summary>" \
+     [--risk-assessment <prior-risk-assessment.json>] \
      --verification-command-id <id> [--verification-command-id <id> ...] \
      --publication-output <publication.json> \
      --ledger-output <verified-ledger.json> \
@@ -541,13 +546,27 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    refute every "addressed" claim among them the same way (it needs no
    verdict for "still_open"/"uncertain" claims — those assert nothing to
    refute). Save as a second verdicts file in the same shape.
+   Ask `review-risk-assessor` once per full review after dimension results and
+   verifier verdicts are ready. Give it the complete pinned diff and manifest,
+   relevant related-repository context, proposed findings, and verifier
+   results. The changed diff is primary evidence; findings are supporting
+   context, not a substitute for checking the whole change. Save exactly
+   `{"risk":"low|medium|high","explanation":"...",
+   "evidence_files":["changed/path"]}` as `risk-assessment.json`. Evidence
+   files must be among this PR's changed paths. If the subagent is unavailable
+   or returns invalid output, stop without publishing; do not guess the level.
+   Low risk means auto-merge may be considered after checks and repository
+   rules pass; medium risk requires one human approval; high risk requires two.
+   The bot explains and labels this guidance but does not enforce branch rules
+   or merge PRs.
 5. Write this cycle's findings, publication JSON, inline comments and output ledger in a
    cycle-specific directory under the snapshot (for example `cycles/<number>`),
    distinct from the previous ledger. This also applies to repeated reviews
    of the same SHA pair. If preflight provides no `work.ledger_path`, this is
    the first review; run:
    review_evidence.py --manifest <manifest_path> --findings <findings.json>
-   --verdicts <verdicts.json> --publication-output <publication.json>
+   --verdicts <verdicts.json> --risk-assessment <risk-assessment.json>
+   --publication-output <publication.json>
    --ledger-output <ledger.json path under this cycle's snapshot directory>
    --inline-comments-output <inline-comments.json>
    --context-questions <context-questions.json>
@@ -555,6 +574,7 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    --context-responses <context-responses.json>
    --context-response-comments-output <context-response-comments.json>
    Otherwise run the same command plus:
+   --risk-assessment <risk-assessment.json>
    --ledger <work.ledger_path> --verifications <verifications.json>
    --verification-verdicts <verification-verdicts.json>
    --update-count <work.update_count from preflight>
@@ -566,7 +586,8 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    the seven-finding limit, and one verdict per finding, and writes the
    task's ledger.json (initial ledger on the first review, merged ledger on
    later reviews). The ledger form also validates re-checks. It renders the
-   review body inside `publication.json` (flat, or with carried-forward status)
+   review body inside `publication.json`, including a Change risk section and
+   revision-bound risk marker (flat, or with carried-forward status)
    and reports the update_count (0 on the first review).
 
    After the verifier and evidence gate confirm the findings, route new
@@ -592,8 +613,8 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    footer use the fixed workflow template. `manifest.format == "custom"` uses
    that same status template; selected skills control only the detailed inline
    comment layout.
-   First run the same command
-   with `--skill-results <skill-results.json> --prepare-custom <verified.json>`.
+   First run the same command with `--skill-results <skill-results.json>
+   --risk-assessment <risk-assessment.json> --prepare-custom <verified.json>`.
    It writes the PR summary, confirmed findings, updated ledger, review
    number, recorded formatting-skill results, and their pinned guide paths; it
    does not write a review. Read each of those guides and results, and use each skill's requested
@@ -627,7 +648,8 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    Include exactly one verdict per formatting skill; a missing, refuted, or
    uncertain verdict blocks publication. Rerun the same evidence command without
    `--prepare-custom`, keeping `--skill-results` and adding
-   `--custom-format <custom-format.json> --custom-verdict <verdict.json>`.
+   `--custom-format <custom-format.json> --custom-verdict <verdict.json>` and
+   keep `--risk-assessment <risk-assessment.json>` in that command as well.
    It validates IDs, anchors, review number, and the formatting verdict, then
    writes the compact publication JSON and the inline comments in each skill's
    layout. Never
@@ -647,7 +669,7 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    prepared publication JSON and its exact `publication_body`, inline comments,
    context question and response comments, output ledger and manifest paths,
    the returned update_count, the
-   cycle watermark, the command IDs, and preflight's `feedback_comment_ids`
+   cycle watermark, risk-assessment JSON, the command IDs, and preflight's `feedback_comment_ids`
    processed in that window.
    Leave the task in progress. Re-read the PR head and base
    SHAs immediately before posting. If either
@@ -682,8 +704,8 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    and its review-comment list are both empty. Never approve,
    request changes, or post a second summary when a tracked review exists. Read
    `review_id` and `review_url` from its JSON output, then save them in task
-   metadata. Keep `pending_publication` until findings, context comments, and
-   summary are all published so a retry reuses the same validated payload and
+   metadata. Keep `pending_publication` until findings, context comments,
+   summary, and risk label are all published so a retry reuses the same validated payload and
    count. GitHub may create separate review records for inline comments; keep
    tracking the summary review's ID.
    Run `python3 workflows/review-only/review_comment_footer.py --repo
@@ -691,6 +713,12 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    review is published. This adds the direct status link to inline findings
    and context questions posted before the review existed. Retain
    `pending_publication` if footer sync fails; a retry uses the same payload.
+   Then run `python3 workflows/review-only/review_risk_label.py --repo
+   <owner>/<repo> --pr <number> --head-sha <head_sha> --base-sha <base_sha>
+   --assessment <risk-assessment.json>`. It rechecks the live revision,
+   creates or updates the selected label description, applies exactly one risk
+   label, and removes the other two. Keep the task in progress and retain the
+   pending publication if label application fails; retries are idempotent.
    Every published summary and inline comment must carry the hidden marker
    `<!-- dev-review-bot:... -->`. The status summary also carries one
    `dev-review-bot:review-ledger:v1` payload. It contains only resume fields

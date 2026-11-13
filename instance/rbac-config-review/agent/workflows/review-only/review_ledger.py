@@ -15,6 +15,7 @@ from public_comment_safety import ensure_public_content
 
 
 MARKER_RE = re.compile(r"<!-- dev-review-bot:review-ledger:v1:([A-Za-z0-9_-]+) -->")
+RISK_MARKER_RE = re.compile(r"<!-- dev-review-bot:risk-assessment:v1:([A-Za-z0-9_-]+) -->")
 REVISION_RE = re.compile(r"<!-- dev-review-bot:fabric-access-review:([0-9a-f]{40}):([0-9a-f]{40}) -->")
 REVIEW_NUMBER_RE = re.compile(r"(?m)^## Review ([1-9]\d*)$")
 STATUS_SUMMARY_RE = re.compile(r"(?m)^## Review [1-9]\d*\r?\n\r?\n([^\r\n]+)")
@@ -287,6 +288,79 @@ def status_summary(body: object) -> str | None:
     return summary or None
 
 
+def encode_risk_assessment(assessment: dict) -> str:
+    """Encode the public risk decision with the exact PR revision it assessed."""
+    level = assessment.get("risk")
+    if not isinstance(level, str) or level not in {"low", "medium", "high"}:
+        raise LedgerError("Risk assessment level is invalid")
+    explanation = _text(assessment.get("explanation"), "risk_assessment.explanation")
+    files = assessment.get("evidence_files")
+    if (not isinstance(files, list) or not 1 <= len(files) <= 8
+            or any(not isinstance(path, str) or not path.strip() for path in files)
+            or len(files) != len(set(files))):
+        raise LedgerError("Risk assessment evidence_files is invalid")
+    head = _sha(assessment.get("head_sha"), "risk_assessment.head_sha")
+    base = _sha(assessment.get("base_sha"), "risk_assessment.base_sha")
+    payload = {
+        "version": 1,
+        "risk": level,
+        "explanation": explanation,
+        "evidence_files": [path.strip() for path in files],
+        "head_sha": head,
+        "base_sha": base,
+    }
+    ensure_public_content(json.dumps(payload, ensure_ascii=False), "Risk assessment")
+    encoded = base64.urlsafe_b64encode(
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    return f"<!-- dev-review-bot:risk-assessment:v1:{encoded} -->"
+
+
+def risk_assessment_from_body(body: object) -> dict | None:
+    """Restore an optional revision-bound risk assessment from a status review."""
+    if not isinstance(body, str) or len(body) > 60_000:
+        raise LedgerError("Status review body is invalid for risk restoration")
+    matches = RISK_MARKER_RE.findall(body)
+    marker_prefix = "<!-- dev-review-bot:risk-assessment:v1:"
+    if body.count(marker_prefix) != len(matches):
+        raise LedgerError("Status review has a malformed risk-assessment marker")
+    if not matches:
+        return None
+    if len(matches) != 1 or len(matches[0]) > 12_000:
+        raise LedgerError("Status review has multiple or oversized risk assessments")
+    encoded = matches[0]
+    try:
+        raw = base64.b64decode(
+            encoded + "=" * ((4 - len(encoded) % 4) % 4), altchars=b"-_", validate=True,
+        )
+        payload = json.loads(raw)
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise LedgerError("Status review risk assessment is malformed") from exc
+    if (not isinstance(payload, dict)
+            or set(payload) != {"version", "risk", "explanation", "evidence_files", "head_sha", "base_sha"}
+            or type(payload.get("version")) is not int or payload.get("version") != 1
+            or not isinstance(payload.get("risk"), str)
+            or payload.get("risk") not in {"low", "medium", "high"}):
+        raise LedgerError("Status review risk assessment has an unsupported schema")
+    explanation = _text(payload.get("explanation"), "risk_assessment.explanation")
+    files = payload.get("evidence_files")
+    if (not isinstance(files, list) or not 1 <= len(files) <= 8
+            or any(not isinstance(path, str) or not path.strip() for path in files)
+            or len(files) != len(set(files))):
+        raise LedgerError("Status review risk assessment evidence_files is invalid")
+    head = _sha(payload.get("head_sha"), "risk_assessment.head_sha")
+    base = _sha(payload.get("base_sha"), "risk_assessment.base_sha")
+    restored = {
+        "risk": payload["risk"],
+        "explanation": explanation,
+        "evidence_files": [path.strip() for path in files],
+        "head_sha": head,
+        "base_sha": base,
+    }
+    ensure_public_content(json.dumps(restored, ensure_ascii=False), "Risk assessment")
+    return restored
+
+
 def restore_from_review(repo: str, pr: int, review_id: int, bot_login: str,
                         expected_head: str | None = None) -> dict:
     if (not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo)
@@ -333,6 +407,9 @@ def restore_from_review(repo: str, pr: int, review_id: int, bot_login: str,
         raise EmptyPendingReview("Tracked review is an empty pending draft; start a fresh ledger")
     payload = decode_body(review.get("body"), repo, pr)
     payload["status_summary"] = status_summary(review.get("body"))
+    risk = risk_assessment_from_body(review.get("body"))
+    if risk is not None:
+        payload["risk_assessment"] = risk
     return payload
 
 
