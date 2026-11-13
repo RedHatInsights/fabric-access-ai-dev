@@ -52,10 +52,45 @@ def key_of(issue: dict | str | None) -> str:
 
 
 def team_id(issue: dict, field_id: str) -> str:
-    team = value(issue, field_id)
-    if isinstance(team, dict):
-        return str(team.get("id") or team.get("teamId") or "")
-    return str(team) if team is not None else ""
+    """Read Jira Team IDs across the field shapes returned by Jira/MCP."""
+    def extract(raw, *, allow_scalar: bool = True) -> str:
+        if isinstance(raw, dict):
+            for key in ("id", "teamId", "team_id", "teamID"):
+                item = raw.get(key)
+                if item is not None and not isinstance(item, (dict, list)):
+                    result = str(item).strip()
+                    if result:
+                        return result
+            for key in ("team", "option", "value", "data"):
+                item = raw.get(key)
+                if isinstance(item, (dict, list)):
+                    result = extract(item, allow_scalar=False)
+                    if result:
+                        return result
+                elif isinstance(item, (int, float)) and not isinstance(item, bool):
+                    return str(item)
+                elif isinstance(item, str) and re.fullmatch(r"[A-Za-z0-9_-]+", item.strip()):
+                    return item.strip()
+            return ""
+        if isinstance(raw, list):
+            ids = {extract(item, allow_scalar=False) for item in raw}
+            ids.discard("")
+            return next(iter(ids)) if len(ids) == 1 else ""
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            return str(raw)
+        if isinstance(raw, str):
+            item = raw.strip()
+            if item.startswith(("{", "[")):
+                try:
+                    parsed = json.loads(item)
+                except json.JSONDecodeError:
+                    parsed = None
+                if isinstance(parsed, (dict, list)):
+                    return extract(parsed, allow_scalar=False)
+            return item if allow_scalar else ""
+        return ""
+
+    return extract(value(issue, field_id))
 
 
 def labels(issue: dict) -> list[str]:

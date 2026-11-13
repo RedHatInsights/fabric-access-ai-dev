@@ -91,6 +91,14 @@ def test_unphased_child_and_later_root_are_plan_gaps():
     assert result["ready"] == []
 
 
+def test_team_parser_reads_nested_list_and_json_field_shapes():
+    assert coordinator.team_id({"fields": {TEAM_FIELD: {"teamId": "42"}}}, TEAM_FIELD) == "42"
+    assert coordinator.team_id({"fields": {TEAM_FIELD: {"value": {"id": "42"}}}}, TEAM_FIELD) == "42"
+    assert coordinator.team_id({"fields": {TEAM_FIELD: [{"id": "42"}]}}, TEAM_FIELD) == "42"
+    assert coordinator.team_id({"fields": {TEAM_FIELD: '{"id":"42","name":"Access"}'}}, TEAM_FIELD) == "42"
+    assert coordinator.team_id({"fields": {TEAM_FIELD: [{"id": "42"}, {"id": "43"}]}}, TEAM_FIELD) == ""
+
+
 def test_search_walks_cloud_cursor_and_server_offset(monkeypatch):
     pages = [
         {"issues": [{"key": "RHCLOUD-1"}], "next_page_token": "next", "total": -1},
@@ -139,6 +147,11 @@ def jira_store(monkeypatch):
         if name == "jira_update_issue":
             store[args["issue_key"]]["fields"]["labels"] = json.loads(args["fields"])["labels"]
             return {"success": True}
+        if name == "jira_create_issue_link":
+            inward = args["inward_issue_key"]
+            outward = args["outward_issue_key"]
+            store[inward]["fields"].setdefault("issuelinks", []).append(relates(outward))
+            return {"success": True}
         if name == "jira_create_issue":
             created = issue("RHCLOUD-105", labels=json.loads(args["additional_fields"])["labels"], summary=args["summary"], description=args["description"])
             store["RHCLOUD-105"] = created
@@ -168,6 +181,82 @@ def test_handoff_rechecks_team(jira_store):
     with pytest.raises(ValueError, match="Plan gate failed"):
         actions.handoff({"control_key": "RHCLOUD-101", "ticket_key": "RHCLOUD-102", "repos": ["rbac-config"]}, CONFIG)
     assert len(writes) == write_count
+
+
+def test_handoff_waits_for_unassigned_ticket_and_sprint_or_backlog(jira_store):
+    store, writes = jira_store
+    child = store["RHCLOUD-102"]
+    request = {"control_key": "RHCLOUD-101", "ticket_key": "RHCLOUD-102", "repos": ["rbac-config"]}
+    child["fields"]["assignee"] = {"name": "someone"}
+    with pytest.raises(ValueError, match="not unassigned"):
+        actions.handoff(request, CONFIG)
+    child["fields"]["assignee"] = None
+    child["fields"]["customfield_10020"] = None
+    with pytest.raises(ValueError, match="outside the active sprint"):
+        actions.handoff(request, CONFIG)
+    assert not any(name == "jira_update_issue" for name, _ in writes)
+
+
+def test_approved_setup_applies_repo_phases_and_root_links(jira_store, monkeypatch):
+    store, writes = jira_store
+    control = store["RHCLOUD-101"]
+    control["fields"]["labels"] = ["dev-bot-coordinator", "dev-bot-coordinator:needs-plan"]
+    child = store["RHCLOUD-102"]
+    child["fields"]["labels"] = []
+    child["fields"]["issuelinks"] = []
+    later = issue("RHCLOUD-103", labels=[], links=[blocked_by("RHCLOUD-102")])
+    store["RHCLOUD-103"] = later
+    proposal = {
+        "repository": "insights-rbac",
+        "phase_assignments": {"phase:01": ["RHCLOUD-102"], "phase:02": ["RHCLOUD-103"]},
+        "root_tickets": ["RHCLOUD-102"],
+    }
+    control["fields"]["comment"]["comments"] = [
+        {
+            "id": "700",
+            "body": "### Coordinator update\n\nReview this setup.\n\n```coordinator-setup\n"
+            + json.dumps(proposal)
+            + "\n```",
+        },
+        {"id": "701", "body": "Approved"},
+    ]
+    monkeypatch.setattr(actions, "review_context", lambda: {
+        "review_label": "dev-bot-review",
+        "repositories": {"insights-rbac": {"dev-bot-labels": ["repo:insights-rbac", CONFIG[2]]}},
+    })
+    monkeypatch.setattr(actions, "load_project_repos", lambda: {"insights-rbac": {}})
+
+    result = actions.approve_setup(
+        {"control_key": "RHCLOUD-101", "request_comment_id": "701"},
+        CONFIG,
+    )
+    assert result["repository"] == "insights-rbac"
+    assert result["phase_labels_updated"] == ["RHCLOUD-102", "RHCLOUD-103"]
+    assert result["root_links_added"] == ["RHCLOUD-102"]
+    assert "repo:insights-rbac" in control["fields"]["labels"]
+    assert child["fields"]["labels"] == ["phase:01"]
+    assert later["fields"]["labels"] == ["phase:02"]
+    assert coordinator.key_of(control) in coordinator.linked_issues(child)[1]
+    assert any(name == "jira_create_issue_link" for name, _ in writes)
+    assert all(args["link_type"] == "Relates" for name, args in writes if name == "jira_create_issue_link")
+
+
+def test_setup_approval_requires_latest_user_feedback_to_be_in_proposal(jira_store):
+    store, writes = jira_store
+    control = store["RHCLOUD-101"]
+    proposal = {
+        "repository": "rbac-config",
+        "phase_assignments": {"phase:01": ["RHCLOUD-102"]},
+        "root_tickets": ["RHCLOUD-102"],
+    }
+    control["fields"]["comment"]["comments"] = [
+        {"id": "710", "body": "### Coordinator update\n```coordinator-setup\n" + json.dumps(proposal) + "\n```"},
+        {"id": "711", "body": "Please use insights-rbac instead."},
+        {"id": "712", "body": "Approved"},
+    ]
+    with pytest.raises(ValueError, match="stale"):
+        actions.approve_setup({"control_key": "RHCLOUD-101", "request_comment_id": "712"}, CONFIG)
+    assert writes == []
 
 
 def test_review_label_is_added_to_matching_open_prs_only(jira_store, monkeypatch):
