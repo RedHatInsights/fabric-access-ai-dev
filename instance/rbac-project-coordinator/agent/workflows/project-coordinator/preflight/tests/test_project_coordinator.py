@@ -388,3 +388,34 @@ def test_truncated_control_comments_fail_closed():
     control["fields"]["comment"] = {"total": 101, "comments": [{"id": "1", "body": "/coord status"}]}
     with pytest.raises(RuntimeError, match="only 1 of 101 comments"):
         coordinator.comments(control)
+
+
+def test_coordinator_comment_appends_dynamic_next_steps_footer(jira_store):
+    _, writes = jira_store
+    result = actions.comment_control(
+        {
+            "control_key": "RHCLOUD-101",
+            "action_id": "status-1",
+            "body": "Phase 1 has two runnable tickets.",
+            "next_steps": [
+                "Confirm the insights-rbac repo choice.",
+                "Add the missing assignee and active sprint before handoff.",
+            ],
+        },
+        CONFIG,
+    )
+    comment = next(args["comment"] for name, args in writes if name == "jira_add_comment")
+    assert result["commented"] is True
+    assert "### Possible next steps" in comment
+    assert "- Confirm the insights-rbac repo choice." in comment
+    assert "- Add the missing assignee and active sprint before handoff." in comment
+
+
+def test_coordinator_comment_requires_footer_suggestions(jira_store):
+    _, writes = jira_store
+    with pytest.raises(ValueError, match="next_steps"):
+        actions.comment_control(
+            {"control_key": "RHCLOUD-101", "action_id": "status-2", "body": "Status update."},
+            CONFIG,
+        )
+    assert not any(name == "jira_add_comment" for name, _ in writes)

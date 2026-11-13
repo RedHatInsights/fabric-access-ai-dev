@@ -657,12 +657,28 @@ def comment_control(request: dict, config: tuple[str, str, str]) -> dict:
     control = checked_control(request["control_key"], config, require_parent=False, require_team=False)
     action_id = str(request.get("action_id") or "")
     body = str(request.get("body") or "").strip()
+    next_steps = request.get("next_steps")
     if not action_id or not body:
         raise ValueError("action_id and body are required")
+    if not isinstance(next_steps, list) or not 1 <= len(next_steps) <= 5:
+        raise ValueError("next_steps must contain between one and five suggestions")
+    if any(
+        not isinstance(step, str)
+        or not step.strip()
+        or len(step.strip()) > 280
+        or "\n" in step
+        or "\r" in step
+        for step in next_steps
+    ):
+        raise ValueError("Each next step must be a non-empty single-line suggestion of at most 280 characters")
+    if re.search(r"(?im)^#{1,6}\s+possible next steps\s*$", body):
+        raise ValueError("Pass next_steps separately; the action adds the footer")
     marker = f"Coordinator action: {action_id}"
     if any(marker in comment_body(item) for item in comments(control)):
         return {"control_key": key_of(control), "commented": False, "action_id": action_id}
-    call_write("jira_add_comment", {"issue_key": key_of(control), "comment": f"{OWN_COMMENT_PREFIX}\n\n{body}\n\n{marker}"})
+    footer = "### Possible next steps\n" + "\n".join(f"- {step.strip()}" for step in next_steps)
+    comment = f"{OWN_COMMENT_PREFIX}\n\n{body}\n\n{footer}\n\n{marker}"
+    call_write("jira_add_comment", {"issue_key": key_of(control), "comment": comment})
     return {"control_key": key_of(control), "commented": True, "action_id": action_id}
 
 

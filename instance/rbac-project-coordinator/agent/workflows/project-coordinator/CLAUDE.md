@@ -139,7 +139,11 @@ confirms both tickets are in scope and the link will not create a cycle.
    `/coord create P-<number>`. It does not edit or close implementation tickets.
 9. After any action, post one `### Coordinator update` comment on the control
    ticket with what changed, current phase, done/active/blocked counts, next
-   runnable tickets, and questions. Use a stable `action_id` so retries do not
+   runnable tickets, and questions. Supply one to five context-specific
+   suggestions in the `next_steps` request field. The validated comment action
+   appends them under `### Possible next steps`; generate these suggestions for
+   the current project state. If the user has nothing to do, suggest waiting
+   for the next scheduled scan. Use a stable `action_id` so retries do not
    duplicate comments. Do not report a label or ticket creation until the
    action script verifies it.
 10. `task_update` the control task with `snapshot_hash` from preflight,
@@ -167,7 +171,7 @@ Actions and required request keys:
 | `label-review-prs` | `ticket_key` (implementation ticket with the bot label) |
 | `link-dependency` | `request_comment_id`, `blocking_ticket_key`, `blocked_ticket_key` |
 | `create-ticket` | `request_comment_id`, `proposal_id`, `phase`, `summary`, `description` |
-| `comment` | `action_id`, `body` |
+| `comment` | `action_id`, `body`, `next_steps` (one to five single-line suggestions) |
 
 Use a different request file per action or overwrite the temporary file only
 after the prior command completes. Inspect JSON output and nonzero exit codes.

@@ -215,6 +215,11 @@ remains the source of truth; the coordinator rereads relevant issues before
 acting. The shared Jira MCP service must expose `jira_create_issue_link` for
 setup links and requested dependencies.
 
+Every coordinator comment ends with a **Possible next steps** footer. Its
+suggestions are generated from the current ticket statuses, plan gaps, approval
+requests, and handoff prerequisites. When no user action is needed, the footer
+points to the next scheduled scan.
+
 ## Build
 
 ```bash
