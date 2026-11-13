@@ -27,7 +27,9 @@ PR queue.
 The file is at `agent/review-context.yaml`. Its top-level `review_label` is the
 GitHub label required on an open PR for it to enter the queue. A new GitHub
 event adding that label authorizes a full review; an already-present label does
-not. The current value is `dev-bot-review`. This is distinct from the deployment variable `BOT_LABEL`,
+not. The current value is `dev-bot-review`. The Fabric Access
+`dev-bot-coordinator` reads this value and applies it to implementation PRs
+after they open. This is distinct from the deployment variable `BOT_LABEL`,
 which labels the bot runner and is not used to select PRs.
 
 Each key under `repositories` should match a key in `project-repos.json`. For

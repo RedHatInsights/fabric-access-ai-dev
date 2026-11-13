@@ -31,3 +31,7 @@ ticket labels** instructions: use the per-repository `dev-bot-labels` from the
 synced review-bot context YAML, apply them automatically when phase and
 dependencies are clear, and honor explicit start/ready requests in new user
 comments on the coordinator ticket.
+
+After implementation PRs open, follow **Implementation PR review label**:
+read `review_label` from that YAML and add it to each linked open PR so the
+review bot can pick it up.

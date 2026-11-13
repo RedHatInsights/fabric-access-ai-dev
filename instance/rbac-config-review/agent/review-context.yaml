@@ -1,5 +1,6 @@
 review_label: dev-bot-review
-# dev-bot-labels are consumed by the Fabric Access dev-bot-coordinator for Jira handoff.
+# The dev-bot-coordinator applies review_label to implementation PRs and uses
+# dev-bot-labels for Jira implementation handoff.
 repositories:
   insights-rbac:
     dev-bot-labels:

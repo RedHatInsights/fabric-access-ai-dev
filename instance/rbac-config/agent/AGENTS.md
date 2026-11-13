@@ -53,6 +53,21 @@ comments by the comment content, not by author. If the config file or
 repository mapping is missing, or the target repository is ambiguous, do not
 guess or update labels. Ask for clarification in a coordinator-ticket comment.
 
+## Implementation PR review label
+
+After an implementation ticket has one or more open GitHub pull requests, read
+the top-level `review_label` from the same synced review-context YAML and add
+that label to every linked open PR. It is currently `dev-bot-review`. Resolve
+PRs from the implementation ticket's links, comments, or task metadata; confirm
+the PR URL and repository before changing labels. This is a GitHub PR label,
+not a Jira issue label.
+
+Preserve all existing PR labels. Add `review_label` only when it is absent;
+never remove and re-add it to force another review. A new label event is what
+authorizes the review bot. Report the PR URLs and label result on the
+coordinator ticket. If the label config, PR URL, or GitHub update is
+unavailable, report the blocker there and do not claim the review was queued.
+
 ## Specialist subagents
 
 Use the profile-local subagents in `.opencode/agents/` when ticket scope
