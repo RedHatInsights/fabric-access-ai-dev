@@ -147,9 +147,9 @@ legacy-state reconciliation:
    organization membership is verified. A failed creation leaves its request
    comment unseen so a later cycle can retry it. Everything else
    (already reviewed, nothing newer) is excluded. A posted review moves the
-   task to `pr_open`; lifecycle-only work marks it `done` only
-   after a live GitHub response includes `mergedAt`. Closed, unmerged PRs are
-   paused, not done; reopening them does not resume a paused task.
+   task to `pr_open`; lifecycle-only work archives it only after a live GitHub
+   response includes `mergedAt`. Closed, unmerged PRs are paused, not archived;
+   reopening them does not resume a paused task.
 3. **Picks exactly one** candidate across every repo, sorted by
    `(priority, updatedAt, repo, number)` — one PR per cycle, oldest
    highest-priority first.
@@ -361,8 +361,9 @@ sequenceDiagram
 ```
 
 Lifecycle-only work skips context generation and review publication. It
-rechecks the live PR state, then sets `done` only for a merged PR, `paused` for
-a closed unmerged PR, or `pr_open` when reconciling an open PR.
+rechecks the live PR state, then sets `archived` for a merged PR, `paused` for
+a closed unmerged PR, or `pr_open` when reconciling an open PR. Legacy `done`
+tasks remain eligible for lifecycle checks until a merged task is archived.
 
 Gray bands are script (no model call); the red band is where Terra or Luna
 reviews the selected dimensions and Luna's review-verifier tries to refute
