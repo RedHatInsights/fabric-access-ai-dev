@@ -748,8 +748,8 @@ def lifecycle_work(task: dict, repo_key: str, repo: str, number: int, pr: dict) 
         "updated_at": pr.get("updatedAt", ""),
     }
     if pr.get("state") == "MERGED" or pr.get("mergedAt"):
-        if status == "done" and meta.get("merged_at"):
-            return None
+        # Keep returning merge work until the runner stores archived. If that
+        # update fails, the next cycle retries the transition.
         return {**common, "kind": "merge_complete", "merged_at": pr.get("mergedAt")}
     if pr.get("state") == "CLOSED":
         return {**common, "kind": "closed_unmerged"}
@@ -946,9 +946,7 @@ def pick_work(repos: dict, config: dict, tasks: list[dict],
     for task in tasks:
         status = task.get("status")
         meta = _metadata(task)
-        if status not in {"pr_open", "in_progress", "pr_changes"} and not (
-            status == "done" and not meta.get("merged_at")
-        ):
+        if status not in {"pr_open", "in_progress", "pr_changes", "done"}:
             continue
         task_ref = _task_pr(task, repos)
         if task_ref is None:

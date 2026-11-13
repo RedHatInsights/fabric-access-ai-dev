@@ -48,8 +48,9 @@ bot_status_update with this instance ID at cycle start and end.
   `ledger_path` as durable state.
 - `pr_open` means the review is complete and the pull request is awaiting
   changes or merge. It is active task state, but preflight must not resume it
-  unless the PR changes or new feedback arrives. Set `done` only after GitHub
-  confirms a non-null `mergedAt` for the pull request.
+  unless the PR changes or new feedback arrives. After GitHub confirms a
+  non-null `mergedAt`, move the task to `archived` and record the merge time.
+  Do not use `done` for a merged review task.
 - `review_id` and `update_count` exist from the task's first posted review
   onward; a task with no `review_id` yet has never posted. The status review
   body is the durable ledger source. Preflight checks that review first, then
@@ -110,9 +111,10 @@ marked `paused`. Handle lifecycle work before building review context. Re-read
 the PR with
 `gh pr view <number> --repo <owner>/<repo> --json state,mergedAt,closedAt,headRefOid,baseRefOid,updatedAt`.
 
-- If `mergedAt` is non-null, set status to `done`, record
+- If `mergedAt` is non-null, set status to `archived`, record
   `metadata.pr_lifecycle="merged"` and `metadata.merged_at`, and clear any
-  `paused_reason`.
+  `paused_reason`. If the task is a legacy `done` record, keep selecting this
+  lifecycle work until the archive update succeeds.
 - If the PR state is `OPEN`, set status to `pr_open`, record
   `metadata.pr_lifecycle="open"`, and clear any `paused_reason`. Preserve the
   feedback watermark so unseen comments remain eligible for a later check.
@@ -121,11 +123,11 @@ the PR with
   `metadata.pr_lifecycle="closed_unmerged"`, `paused_sha`,
   `paused_base_sha`, and `last_seen_updated_at` from the live PR.
 
-Do not review, post comments, or mark a PR done in these lifecycle-only paths.
+Do not review or post comments in these lifecycle-only paths.
 If the GitHub lookup fails or returns an unknown state, leave the task unchanged
-and report the failure. A closed, unmerged PR remains not done. Its task is
-paused; reopening the PR does not resume it. An operator must unpause the task
-before lifecycle or review work can continue.
+and report the failure. A closed, unmerged PR remains paused, not archived;
+reopening the PR does not resume it. An operator must unpause the task before
+lifecycle or review work can continue.
 
 ## Review or resume
 
@@ -746,8 +748,8 @@ artifacts. Keep uncompleted command IDs for the new cycle.
    retaining the newest 1,000 IDs. Set `pending_publication` to null in the
    same task update. Set
    `last_addressed` to the current time, including when the review found
-   nothing actionable. The task becomes `done` only through PR lifecycle
-   handling after GitHub confirms the merge. `memory_store`/`memory_delete`
+   nothing actionable. A task is archived only through PR lifecycle handling
+   after GitHub confirms the merge. `memory_store`/`memory_delete`
    are denied for this instance (see review-runner's permissions) — do not
    attempt to store a codebase_pattern memory. The status review is the
    durable ledger; task state retains its review ID and counter, not a path to
