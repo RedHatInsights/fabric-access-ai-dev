@@ -16,6 +16,13 @@ shape; confirm the option with `jira_get_field_options` when available. Do not
 create the issue without the Team value; if it cannot be set, report the
 blocker.
 
+## Jira comment footer
+
+Every Jira comment posted by this coordinator must end with a `### Possible
+next steps` footer containing one to five concise, context-specific suggestions.
+Use single-line bullets. If no user action is needed, suggest waiting for the
+next scheduled cycle. Keep the comment's substantive update before the footer.
+
 ## Coordinator control tickets
 
 Never claim or implement a ticket labeled `dev-bot-control`, even if it also

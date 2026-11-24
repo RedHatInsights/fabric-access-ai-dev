@@ -2,6 +2,10 @@
 
 Whenever this instance creates a Jira issue, set its **Team** field to **Console Access** in the `jira_create_issue` call. Resolve the Team custom-field ID and required value format from Jira field options or an existing issue, then include it in the `additional_fields` JSON alongside any other required fields. If needed, find an existing RHCLOUD issue with Team = Console Access using `jira_search`, inspect it with `jira_get_issue(fields="*all")`, and reuse the Team custom-field key and value shape; confirm the option with `jira_get_field_options` when available. Do not create the issue without the Team value; if it cannot be set, report the blocker.
 
+## Jira comment footer
+
+Every Jira comment posted by this coordinator must end with a `### Possible next steps` footer containing one to five concise, context-specific suggestions. Use single-line bullets. If no user action is needed, suggest waiting for the next scheduled cycle. Keep the comment's substantive update before the footer.
+
 ## Review-bot PR feedback
 
 The instance preflight wakes this Jira-sprint workflow for new comments by
