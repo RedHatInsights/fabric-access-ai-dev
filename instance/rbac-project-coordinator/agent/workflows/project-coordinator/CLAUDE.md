@@ -27,11 +27,35 @@ only conversation and status surface. Implementations stay with the existing
 ## Plan comments
 
 Whenever creating or revising a plan, analyze and list every same-Team
-implementation ticket on the control ticket: key, summary, status, current and
-suggested phase, dependencies from existing Jira links, parallel group, and repo
-suggestion. Explain the proposed order and any gaps. Phase suggestions remain
-advisory until the user approves the setup proposal. The coordinator never
-creates or changes Jira issue links.
+implementation ticket on the control ticket. Use the same compact structure
+for initial plans and later status or plan updates. Start the body with a short
+status summary, followed by this table:
+
+```markdown
+<One short status summary with the current phase, progress counts, and key blocker or decision.>
+
+| Ticket | Summary | Current phase | Suggested phase | Existing blocking dependencies | Parallel group | Repository |
+|---|---|---|---|---|---|---|
+| RHCLOUD-123 | Short outcome | None | phase:01 | None | A | insights-rbac |
+
+**Proposed sequence:**
+- **RHCLOUD-123 → {RHCLOUD-124, RHCLOUD-125} → RHCLOUD-126**
+
+**Current state:**
+- <concise project-wide status, counts, blockers, and questions>
+```
+
+Use Jira keys for dependencies, write `None` when there are none, and use a
+clear value such as `Undecided` when phase or repository is not yet known. Bold
+the complete proposed sequence path. Keep current state bullets concise and
+project-wide. The validated comment action adds the numbered
+`Coordinator update - <type> #<N>` heading, context-specific `Possible next
+steps`, and an `Actions:` footer. Pass `comment_type` such as `Initial plan`,
+`Status update`, or `Plan revision`; numbering is assigned from prior
+coordinator comments. Suggestions should apply to the overall plan, not repeat
+the ticket table. Do not assign or move tickets to a sprint; sprint eligibility
+is read-only. Phase suggestions remain advisory until the user approves the
+setup proposal. The coordinator never creates or changes Jira issue links.
 
 ## Cycle
 
@@ -50,10 +74,9 @@ creates or changes Jira issue links.
    acceptance criteria, status, phase labels, repo scope, and existing links.
    Propose a complete plan with a suggested phase for each ticket, existing
    dependencies, and parallel groups. Do not create or change links.
-   Comment on the control ticket with a list of every same-Team implementation
-   ticket (key, summary, status, current and suggested phase, dependencies,
-   parallel group, and repo suggestion), plus rationale, gaps, questions, and
-   a readable dependency diagram. If the repo choice and setup are clear,
+   Comment on the control ticket using the plan-comment template above, listing
+   every same-Team implementation ticket. Include rationale, gaps, and
+   questions. If the repo choice and setup are clear,
    include a `coordinator-setup` JSON block containing `repository` and a complete
    `phase_assignments` mapping. Ask the user
    to correct any suggestion or reply with `approve` or `approved` to approve
@@ -133,17 +156,16 @@ creates or changes Jira issue links.
    parent, phase, repo, dependencies, and acceptance criteria. The coordinator
    creates a normal ticket only when a later new user comment explicitly uses
    `/coord create P-<number>`. It does not edit or close implementation tickets.
-9. After any action, provide update text for the control ticket: what changed,
-   current phase, done/active/blocked counts, next runnable tickets, and
-   questions. Do not include a `Coordinator update` heading; the validated
-   comment action adds it once and removes a repeated leading heading. Supply
-   one to five context-specific suggestions in the `next_steps` request field.
-   The validated comment action appends them under `### Possible next steps`,
-   then appends a `### Coordinator commands` footer listing every supported
-   command and its purpose. Generate these suggestions for the current project
-   state. If the user has nothing to do, suggest waiting for the next scheduled
-   scan. Use a stable `action_id` so retries do not duplicate comments. Do not
-   report a label or ticket creation until the action script verifies it.
+9. After any action, provide a short update summary and the plan table, proposed
+   sequence, and current-state bullets using the template above. Pass the
+   update kind in `comment_type`; do not write the numbered heading yourself.
+   Supply one to five project-wide, context-specific suggestions in the
+   `next_steps` request field. The validated comment action appends them under
+   `### Possible next steps`, then adds the divider and `Actions:` command list.
+   If no user action is needed, suggest waiting for the next scheduled scan.
+   Use a stable `action_id` so retries do not duplicate comments. Do not assign
+   or move tickets to a sprint. Do not report a label or ticket creation until
+   the action script verifies it.
 10. `task_update` the control task with `snapshot_hash` from preflight,
     `processed_comment_ids` for comments actually handled, `parent_key`,
     `team_id`, and a short summary. The next cycle may wake once on the
@@ -168,7 +190,7 @@ Actions and required request keys:
 | `handoff` | `ticket_key`, `repos` (list of repo names) |
 | `label-review-prs` | `ticket_key` (implementation ticket with the bot label) |
 | `create-ticket` | `request_comment_id`, `proposal_id`, `phase`, `summary`, `description` |
-| `comment` | `action_id`, `body`, `next_steps` (one to five single-line suggestions) |
+| `comment` | `action_id`, `comment_type`, `body`, `next_steps` (one to five single-line suggestions) |
 
 Use a different request file per action or overwrite the temporary file only
 after the prior command completes. Inspect JSON output and nonzero exit codes.

@@ -31,7 +31,7 @@ COORD_STATES = frozenset(
         "dev-bot-coordinator:complete",
     }
 )
-OWN_COMMENT_PREFIX = "### Coordinator update"
+OWN_COMMENT_PREFIX = "Coordinator update"
 PAGE_SIZE = 50
 
 
@@ -262,8 +262,9 @@ def is_own_comment(comment: dict) -> bool:
     lines = [line.strip() for line in body.splitlines() if line.strip()]
     if not lines:
         return False
-    heading = lines[0].lstrip("#").strip()
-    if heading == "Coordinator update":
+    heading = lines[0].lstrip("#").strip().casefold()
+    prefix = OWN_COMMENT_PREFIX.casefold()
+    if heading == prefix or heading.startswith(prefix + " -"):
         return True
     return any(line.startswith("Coordinator action:") for line in lines[-2:])
 

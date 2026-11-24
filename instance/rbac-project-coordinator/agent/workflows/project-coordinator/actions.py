@@ -47,7 +47,8 @@ ISSUE_KEY_RE = re.compile(r"^[A-Z][A-Z0-9]+-\d+$")
 LABEL_RE = re.compile(r"^[A-Za-z0-9:_-]+$")
 SETUP_PROPOSAL_RE = re.compile(r"```(?:[A-Za-z0-9_-]+)?\s*(.*?)\s*```", re.DOTALL)
 SETUP_APPROVAL_RE = re.compile(r"\b(?:approve|approved)\b", re.IGNORECASE)
-COMMAND_HELP_FOOTER = """### Coordinator commands
+COMMAND_HELP_FOOTER = """---
+**Actions:**
 - `approve` / `approved` (or `/coord approve setup`) — approve the latest setup proposal.
 - `/coord start` — recheck the plan and release currently runnable tickets.
 - `/coord status` — request a fresh project status.
@@ -555,14 +556,18 @@ def create_ticket(request: dict, config: tuple[str, str, str]) -> dict:
 def comment_control(request: dict, config: tuple[str, str, str]) -> dict:
     control = checked_control(request["control_key"], config, require_parent=False, require_team=False)
     action_id = str(request.get("action_id") or "")
+    comment_type = str(request.get("comment_type") or "Status update").strip()
     body = str(request.get("body") or "").strip()
     next_steps = request.get("next_steps")
     if not action_id or not body:
         raise ValueError("action_id and body are required")
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9 /-]{0,39}", comment_type):
+        raise ValueError("comment_type must be a short, single-line label")
     body_lines = body.splitlines()
     while body_lines:
-        heading = body_lines[0].strip().strip("#").strip()
-        if heading.casefold() != "coordinator update":
+        heading = body_lines[0].strip().lstrip("#").strip().casefold()
+        prefix = OWN_COMMENT_PREFIX.casefold()
+        if heading != prefix and not heading.startswith(prefix + " -"):
             break
         body_lines.pop(0)
         while body_lines and not body_lines[0].strip():
@@ -584,10 +589,13 @@ def comment_control(request: dict, config: tuple[str, str, str]) -> dict:
     if re.search(r"(?im)^#{1,6}\s+possible next steps\s*$", body):
         raise ValueError("Pass next_steps separately; the action adds the footer")
     marker = f"Coordinator action: {action_id}"
-    if any(marker in comment_body(item) for item in comments(control)):
+    existing_comments = comments(control)
+    if any(marker in comment_body(item) for item in existing_comments):
         return {"control_key": key_of(control), "commented": False, "action_id": action_id}
+    update_number = sum(1 for item in existing_comments if is_own_comment(item)) + 1
     footer = "### Possible next steps\n" + "\n".join(f"- {step.strip()}" for step in next_steps)
-    comment = f"{OWN_COMMENT_PREFIX}\n\n{body}\n\n{footer}\n\n{COMMAND_HELP_FOOTER}\n\n{marker}"
+    heading = f"### {OWN_COMMENT_PREFIX} - {comment_type} #{update_number}"
+    comment = f"{heading}\n\n{body}\n\n{footer}\n\n{COMMAND_HELP_FOOTER}\n\n{marker}"
     call_write("jira_add_comment", {"issue_key": key_of(control), "comment": comment})
     return {"control_key": key_of(control), "commented": True, "action_id": action_id}
 
