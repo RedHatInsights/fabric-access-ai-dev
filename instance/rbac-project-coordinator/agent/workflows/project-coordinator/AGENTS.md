@@ -11,7 +11,7 @@ only conversation and status surface. Implementations stay with the existing
   current phase, runnable tickets, new control comments, and a snapshot hash.
   It also supplies `ticket_changes`, the current `plan_snapshot` and
   `plan_snapshot_hash`, the last `approved_plan_snapshot_hash`, and whether a
-  plan revision is awaiting approval or current tickets differ from the approved
+  plan revision is awaiting approval or plan inputs differ from the approved
   plan.
 - Work on **one control ticket per cycle**. Read its Team ID from the configured
   `$BOT_TEAM_FIELD_ID` field, store that ID in the task metadata, and include
@@ -26,7 +26,10 @@ only conversation and status surface. Implementations stay with the existing
   fresh setup check and, when the plan gate passes, starts same-cycle handoff.
   Match those words as case-insensitive substrings; no exact command or separate
   start command is required.
-  The control ticket has exactly one state label:
+  An approved plan may assign tickets across multiple phases. Once approved,
+  the coordinator automatically advances through those phases as each phase
+  completes; phase boundaries do not need another approval. The control ticket
+  has exactly one state label:
   `dev-bot-coordinator:needs-plan`, `dev-bot-coordinator:active`,
   `dev-bot-coordinator:blocked`, or `dev-bot-coordinator:complete`.
 
@@ -53,7 +56,10 @@ status summary, followed by this table:
 
 On every status check, inspect `plan_change_required`,
 `plan_approval_pending`, and `ticket_changes`. An added or removed same-Team
-ticket, or any changed ticket field in the snapshot, requires a plan revision.
+ticket, or a changed planning input (summary, description, priority, issue
+type, Team, phase/repository/planning labels, or dependencies) requires a plan
+revision. Status, assignee, update timestamps, and coordinator/implementation
+bot labels are execution state; they do not invalidate an approved plan.
 Reassess the complete ticket set, phases, dependencies, parallel work, and
 repository choices. Publish the changed ticket keys and fields, the revised
 plan table and sequence, and a complete `coordinator-setup` block containing
@@ -69,6 +75,9 @@ Store the latest observed `plan_snapshot` and `plan_snapshot_hash` after every
 status check so the next check can identify further changes. Keep
 `approved_plan_snapshot_hash` bound to the last successfully approved plan; do
 not replace it with the latest observed hash while a revision awaits approval.
+When preflight reports `legacy_plan_snapshot_migrated=true`, save its returned
+`approved_plan_snapshot_hash`; this carries forward the same approval using
+the new plan-only snapshot format. It never clears a pending plan approval.
 A revision approval must be a new user comment after the published Plan
 revision. Call `approve-setup` without an inline `proposal`; the action reads the
 published block and rejects it if the ticket snapshot changed after
@@ -89,8 +98,11 @@ steps`, and an `Actions:` footer. Pass `comment_type` such as `Initial plan`,
 coordinator comments. Suggestions should apply to the overall plan, not repeat
 the ticket table. Do not assign or move tickets to a sprint; sprint membership
 is not read or considered. Phase suggestions remain advisory until a new user
-comment contains `approve` or `approved` and authorizes the setup. The
-coordinator never creates or changes Jira issue links.
+comment contains `approve` or `approved` and authorizes the setup. That approval
+covers every phase in the plan; later phases already included in the approved
+plan start automatically when they become the lowest incomplete phase. A new
+approval is needed only for a revised plan. The coordinator never creates or
+changes Jira issue links.
 
 ## Cycle
 
@@ -222,9 +234,11 @@ coordinator never creates or changes Jira issue links.
    This lets the review bot pick up the PR. Report newly labeled PRs and any
    failures on the control ticket; an already-labeled PR is left unchanged.
 7. If no ticket is runnable, wait for a Jira change; do not post the same
-   status repeatedly. When the current phase is complete and the next phase
-   has no plan, set `dev-bot-coordinator:needs-plan` and ask for the next
-   phase and steps.
+   status repeatedly. When the current phase is complete, automatically
+   advance to the next incomplete phase already covered by the approved plan
+   and hand off its eligible tickets without asking for another approval. If
+   the next work has no approved phase plan, publish a plan revision and wait
+   for approval before handing it off.
    Never mark the project complete merely because no more labeled tickets
    exist. Set `dev-bot-coordinator:complete` only after an explicit user
    confirmation that the same-Team project scope is finished and all planned implementation

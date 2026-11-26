@@ -51,7 +51,7 @@ SETUP_PROPOSAL_RE = re.compile(r"```(?:[A-Za-z0-9_-]+)?\s*(.*?)\s*```", re.DOTAL
 SETUP_APPROVAL_RE = re.compile(r"approv(?:e|ed)", re.IGNORECASE)
 COMMAND_HELP_FOOTER = """---
 **Actions:**
-- A new user comment containing `approve` or `approved` — approve the latest published plan, then apply repository and phase labels and hand off eligible tickets. A ticket change requires a new Plan revision and a fresh approval.
+- A new user comment containing `approve` or `approved` — approve the latest published plan, then apply repository and phase labels and hand off eligible tickets. Added/removed tickets or changed plan inputs require a new Plan revision and approval; normal status, assignee, timestamp, and bot-label changes do not.
 - `/coord plan` — reread current Jira data and publish a fresh plan without handing off tickets.
 - `/coord status` — request a fresh project status.
 - `/coord create P-<number>` — create a ticket proposed in an earlier coordinator comment.
@@ -262,7 +262,7 @@ def handoff(
         if expected_snapshot_hash is None and "dev-bot-coordinator:active" not in control_states:
             pass
         elif expected_snapshot_hash != actual_snapshot_hash:
-            raise ValueError("Tickets changed after the approved plan; publish a Plan revision and request approval")
+            raise ValueError("Plan inputs changed after approval; publish a Plan revision and request approval")
     if assessment["gaps"]:
         raise ValueError("Plan gate failed: " + "; ".join(assessment["gaps"]))
     ticket_key = request["ticket_key"]
@@ -303,7 +303,7 @@ def handoff(
             ticket_plan_snapshot(current_children, team_field_id, implementation_label)
         )
         if current_snapshot_hash != expected_snapshot_hash:
-            raise ValueError("Tickets changed during handoff validation; publish a Plan revision and request approval")
+            raise ValueError("Plan inputs changed during handoff validation; publish a Plan revision and request approval")
         child = next(item for item in current_children if key_of(item) == ticket_key)
     handoff_labels = repository_handoff_labels(selected_repos, implementation_label)
     updated = labels(child) + handoff_labels

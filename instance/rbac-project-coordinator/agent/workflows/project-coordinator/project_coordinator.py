@@ -429,15 +429,11 @@ def ticket_plan_snapshot(
         snapshot[key_of(issue)] = {
             "summary": str(value(issue, "summary") or "").strip(),
             "description": str(value(issue, "description") or ""),
-            "updated": str(value(issue, "updated") or ""),
-            "status": status_name(issue),
-            "assignee": is_assigned(value(issue, "assignee")),
             "priority": str(priority.get("name") or priority.get("id") or "")
             if isinstance(priority, dict) else str(priority),
             "issue_type": str(issue_type.get("name") or "")
             if isinstance(issue_type, dict) else str(issue_type),
             "team_id": team_id(issue, team_field_id),
-            "labels": sorted(issue_labels),
             "phase_labels": sorted(label for label in issue_labels if PHASE_RE.fullmatch(label)),
             "repo_labels": sorted(label for label in issue_labels if label.startswith("repo:")),
             "planning_labels": sorted(
@@ -445,6 +441,7 @@ def ticket_plan_snapshot(
                 if not PHASE_RE.fullmatch(label)
                 and not label.startswith("repo:")
                 and not label.startswith("dev-bot-coordinator:")
+                and label != implementation_label
             ),
             "blockers": sorted(blockers),
             "related": sorted(related),
@@ -452,8 +449,12 @@ def ticket_plan_snapshot(
     return snapshot
 
 
-def ticket_plan_changes(previous: object, current: dict[str, dict]) -> dict:
-    """Compare ticket membership and plan-relevant fields with the last scan."""
+def ticket_plan_changes(
+    previous: object,
+    current: dict[str, dict],
+    implementation_label: str,
+) -> dict:
+    """Compare membership and plan inputs, ignoring ordinary execution progress."""
     if not isinstance(previous, dict):
         return {
             "baseline_missing": True,
@@ -465,6 +466,18 @@ def ticket_plan_changes(previous: object, current: dict[str, dict]) -> dict:
     added = [{"key": key, "ticket": current[key]} for key in sorted(new_keys - old_keys)]
     removed = [{"key": key, "ticket": previous[key]} for key in sorted(old_keys - new_keys)]
     changed = []
+    plan_fields = {
+        "summary",
+        "description",
+        "priority",
+        "issue_type",
+        "team_id",
+        "phase_labels",
+        "repo_labels",
+        "planning_labels",
+        "blockers",
+        "related",
+    }
     for key in sorted(old_keys & new_keys):
         old_ticket = previous[key]
         new_ticket = current[key]
@@ -473,9 +486,24 @@ def ticket_plan_changes(previous: object, current: dict[str, dict]) -> dict:
             continue
         fields_changed = {
             field: {"before": old_ticket.get(field), "after": new_ticket.get(field)}
-            for field in sorted(set(old_ticket) | set(new_ticket))
+            for field in sorted(plan_fields)
             if old_ticket.get(field) != new_ticket.get(field)
         }
+        # Older task snapshots included bot labels in planning_labels. Ignore
+        # those during the one-time snapshot format transition.
+        old_planning_labels = old_ticket.get("planning_labels")
+        new_planning_labels = new_ticket.get("planning_labels")
+        if isinstance(old_planning_labels, list) and isinstance(new_planning_labels, list):
+            old_user_labels = sorted(
+                label for label in old_planning_labels
+                if label != implementation_label
+            )
+            new_user_labels = sorted(
+                label for label in new_planning_labels
+                if label != implementation_label
+            )
+            if old_user_labels == new_user_labels:
+                fields_changed.pop("planning_labels", None)
         if fields_changed:
             changed.append({"key": key, "fields": fields_changed})
     return {
@@ -685,14 +713,30 @@ def main() -> None:
             old_digest = metadata.get("snapshot_hash")
             plan_snapshot = ticket_plan_snapshot(children, team_field_id, implementation_label)
             plan_snapshot_hash = ticket_plan_digest(plan_snapshot)
-            ticket_changes = ticket_plan_changes(metadata.get("plan_snapshot"), plan_snapshot)
-            plan_approval_pending = bool(metadata.get("pending_plan_approval"))
-            approved_snapshot_changed = (
-                isinstance(metadata.get("approved_plan_snapshot_hash"), str)
-                and metadata["approved_plan_snapshot_hash"] != plan_snapshot_hash
+            ticket_changes = ticket_plan_changes(
+                metadata.get("plan_snapshot"), plan_snapshot, implementation_label
             )
+            plan_approval_pending = bool(metadata.get("pending_plan_approval"))
+            approved_plan_snapshot_hash = metadata.get("approved_plan_snapshot_hash")
+            legacy_snapshot_migrated = False
+            previous_plan_snapshot = metadata.get("plan_snapshot")
             has_ticket_delta = any(
                 ticket_changes[key] for key in ("added", "removed", "changed")
+            )
+            # Existing tasks hashed runtime fields too. If that legacy hash
+            # still matches the saved snapshot and its plan inputs are intact,
+            # migrate it without making users reapprove an unchanged plan.
+            if (
+                not plan_approval_pending
+                and isinstance(previous_plan_snapshot, dict)
+                and approved_plan_snapshot_hash == ticket_plan_digest(previous_plan_snapshot)
+                and not has_ticket_delta
+            ):
+                approved_plan_snapshot_hash = plan_snapshot_hash
+                legacy_snapshot_migrated = True
+            approved_snapshot_changed = (
+                isinstance(approved_plan_snapshot_hash, str)
+                and approved_plan_snapshot_hash != plan_snapshot_hash
             )
             if not old_digest or old_digest != digest or not assessment["state"] or github_pr_errors:
                 actionable.append({
@@ -703,7 +747,8 @@ def main() -> None:
                     "snapshot_hash": digest,
                     "plan_snapshot": plan_snapshot,
                     "plan_snapshot_hash": plan_snapshot_hash,
-                    "approved_plan_snapshot_hash": metadata.get("approved_plan_snapshot_hash"),
+                    "approved_plan_snapshot_hash": approved_plan_snapshot_hash,
+                    "legacy_plan_snapshot_migrated": legacy_snapshot_migrated,
                     "ticket_changes": ticket_changes,
                     "approved_plan_snapshot_changed": approved_snapshot_changed,
                     "plan_change_required": (
