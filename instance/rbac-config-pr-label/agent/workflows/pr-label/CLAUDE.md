@@ -103,7 +103,7 @@ Only tasks with `external_key` prefix `pr-label:`. For each `pr_open`/`pr_change
   1. Inline: `gh api repos/{owner}/{repo}/pulls/{n}/comments`
   2. General: `gh api repos/{owner}/{repo}/issues/{n}/comments`
 - Read FULL conversation. `last_addressed` is a soft hint only.
-- Bot's own comments (GH: `user.login`) are context, not new feedback — except self-assigned notes ("needs rebase", "will fix next cycle"). Also treat new comments from `platex-rehor-bot` as review feedback when the body contains `dev-review-bot`, `fabric-access-finding`, or `fabric-access-review`; preflight selects these for processing.
+- Bot's own comments (GH: `user.login`) are context, not new feedback — except self-assigned notes ("needs rebase", "will fix next cycle"). Treat new comments from `coderabbitai[bot]` (or the legacy `coderabbitai` login) as review feedback. Also treat new comments from `platex-rehor-bot` as findings when the body contains `dev-review-bot`, `fabric-access-finding`, or `fabric-access-review`; preflight selects these comments for processing.
 - Address supported findings from human and bot reviewers → commit → push → reply on the thread.
 - **Jira on request** (see below) if a human comment asks to file/link a ticket.
 
