@@ -140,10 +140,21 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
         if jira is not None:
             if not isinstance(jira, dict):
                 raise ReviewConfigError(f"repositories.{repo_key}.jira must be a mapping")
-            if not isinstance(jira.get("team_field"), str) or not re.fullmatch(
-                    r"customfield_[0-9]+", jira["team_field"]):
+            team_field = jira.get("team_field")
+            team_field_env = environment_variable_name(jira.get("team_field_env"))
+            if team_field is not None and (not isinstance(team_field, str) or not re.fullmatch(
+                    r"customfield_[0-9]+", team_field)):
                 raise ReviewConfigError(
                     f"repositories.{repo_key}.jira.team_field must be a Jira custom-field ID"
+                )
+            if jira.get("team_field_env") is not None and team_field_env is None:
+                raise ReviewConfigError(
+                    f"repositories.{repo_key}.jira.team_field_env "
+                    "must use a ${UPPERCASE_ENVIRONMENT_VARIABLE} reference"
+                )
+            if team_field is None and team_field_env is None:
+                raise ReviewConfigError(
+                    f"repositories.{repo_key}.jira needs a team_field literal or a team_field_env reference"
                 )
             profiles = jira.get("profiles")
             if not isinstance(profiles, dict) or not profiles:

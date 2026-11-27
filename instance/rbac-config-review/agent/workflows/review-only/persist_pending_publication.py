@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
+import sys
 from pathlib import Path
 
 from post_review import load_comment_links, resolve_finding_links
@@ -24,6 +26,9 @@ def load_json(path: Path, description: str) -> object:
 
 
 def resolve_memory_tools():
+    home = os.environ.get("HOME")
+    if home:
+        sys.path.insert(0, str(Path(home) / "app"))
     try:
         from bot.memory_mcp import memory_call, memory_cleanup
     except ImportError as exc:

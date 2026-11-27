@@ -29,9 +29,11 @@ unavailable workers, and malformed results as failed passes.
 Write the successful raw worker results to `dimension-results.json` as an
 object keyed by the dispatched dimension. An omitted entry represents a
 failed or missing pass. Run the merge command with the plan and results paths.
+Resolve `<review-workflow-dir>` as specified by the review-only workflow and
+run from `$HOME/app`.
 
 ```sh
-python3 workflows/review-only/merge_review_results.py \
+python3 "<review-workflow-dir>/merge_review_results.py" \
   --plan <review-plan.json> --results <dimension-results.json> \
   --output <merged-results.json>
 ```
