@@ -24,7 +24,9 @@ aligned during the rollback window.
 
 When a task needs repo-specific implementation guidance, read the matching
 subagent body from the sibling `rbac-config` instance at
-`/home/botuser/app/instance/rbac-config/agent/.opencode/agents/<name>.md`
+`$HOME/app/instance/rbac-config/agent/.opencode/agents/<name>.md` in a sandbox,
+or `$HOME/app/data/remote-config/instance/rbac-config/agent/.opencode/agents/<name>.md`
+in the legacy runner
 (insights-rbac → `rbac`, rbac-config → `rbac-config`, entitlements-api-go →
 `entitlements`, uhc-auth-proxy → `uhc-auth-proxy`, turnpike → `turnpike`,
 cloudwatch-aggregator → `cloudwatch-aggregator`). Ignore the YAML frontmatter

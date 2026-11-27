@@ -2,7 +2,51 @@ workflow: ./workflows/review-only
 source: scheduled
 runtime: opencode
 provider: rehor-openai
-model: gpt-6.1-terra
+model: gpt-6.1-sol
+image:
+  repository: quay.io/redhat-services-prod/hcc-accessmanagement-tenant/fabric-access-ai-dev
+  tag: latest
+env:
+  BOT_INSTANCE_ID: Prokurátor Velký Bratr
+  BOT_LABEL: fabric-access-review
+  BOT_CONFIG_PATH: instance/rbac-config-review
+  BOT_EXECUTION_ENGINE: coordinator
+# Per-repository Jira creation settings and the Team field ID, rendered from
+# the tier-2 `fabric-access-rehor` Kubernetes Secret (app-interface draft MR
+# !220723). The nonreserved FABRIC_ prefix keeps these names accepted by the
+# pinned dispatcher's sandbox.env validation. In the sandbox every FABRIC_
+# delivery is required and a missing one blocks the helper; only legacy
+# (non-sandbox) deployments fall back to the BOT_ names app-interface
+# supplies, until cutover.
+sandbox:
+  env:
+    FABRIC_TEAM_FIELD_ID: "${{ secret('fabric-access-rehor', 'bot-team-field-id') }}"
+    FABRIC_JIRA_PROJECT_INSIGHTS_RBAC: "${{ secret('fabric-access-rehor', 'bot-jira-project-insights-rbac') }}"
+    FABRIC_JIRA_TEAM_ID_INSIGHTS_RBAC: "${{ secret('fabric-access-rehor', 'bot-jira-team-id-insights-rbac') }}"
+    FABRIC_JIRA_TEAM_NAME_INSIGHTS_RBAC: "${{ secret('fabric-access-rehor', 'bot-jira-team-name-insights-rbac') }}"
+    FABRIC_JIRA_LABELS_INSIGHTS_RBAC: "${{ secret('fabric-access-rehor', 'bot-jira-labels-insights-rbac') }}"
+    FABRIC_JIRA_PROJECT_INVENTORY_API: "${{ secret('fabric-access-rehor', 'bot-jira-project-inventory-api') }}"
+    FABRIC_JIRA_TEAM_ID_INVENTORY_API: "${{ secret('fabric-access-rehor', 'bot-jira-team-id-inventory-api') }}"
+    FABRIC_JIRA_TEAM_NAME_INVENTORY_API: "${{ secret('fabric-access-rehor', 'bot-jira-team-name-inventory-api') }}"
+    FABRIC_JIRA_LABELS_INVENTORY_API: "${{ secret('fabric-access-rehor', 'bot-jira-labels-inventory-api') }}"
+    FABRIC_JIRA_PROJECT_INSIGHTS_CHROME: "${{ secret('fabric-access-rehor', 'bot-jira-project-insights-chrome') }}"
+    FABRIC_JIRA_TEAM_ID_INSIGHTS_CHROME: "${{ secret('fabric-access-rehor', 'bot-jira-team-id-insights-chrome') }}"
+    FABRIC_JIRA_TEAM_NAME_INSIGHTS_CHROME: "${{ secret('fabric-access-rehor', 'bot-jira-team-name-insights-chrome') }}"
+    FABRIC_JIRA_COMPONENT_ID_INSIGHTS_CHROME: "${{ secret('fabric-access-rehor', 'bot-jira-component-id-insights-chrome') }}"
+    FABRIC_JIRA_LABELS_INSIGHTS_CHROME: "${{ secret('fabric-access-rehor', 'bot-jira-labels-insights-chrome') }}"
+preflights:
+  - id: fabric-review-queue
+    with:
+      review_label: dev-bot-review
+      bot_login: platex-rehor-bot
+schedule:
+  triggers:
+    - timezone: Europe/Prague
+      start: "0 9 * * 1-5"
+      end: "0 23 * * 1-5"
+    - timezone: America/New_York
+      start: "0 9 * * 1-5"
+      end: "0 18 * * 1-5"
 envs: []
 cycle_timeout_seconds: 7200
 claude_md:

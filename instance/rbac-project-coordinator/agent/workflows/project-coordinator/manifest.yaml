@@ -18,6 +18,11 @@ requires:
     - BOT_TEAM_FIELD_ID
     - BOT_IMPLEMENTATION_LABEL
   optional_env_vars:
+    # Vault-sourced sandbox deliveries, required in the sandbox (a missing
+    # one blocks the run); the required BOT_ names above stay the legacy and
+    # preflight-bridge source outside the sandbox until cutover.
+    - FABRIC_JIRA_PROJECT
+    - FABRIC_TEAM_FIELD_ID
     - BOT_JIRA_PROJECT
     - BOT_PLANNER_DOCS_BASE_URL
     - BOT_PLANNER_DOCS_GLOB

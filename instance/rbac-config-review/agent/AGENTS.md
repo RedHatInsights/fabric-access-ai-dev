@@ -18,8 +18,11 @@ The bot must never edit files, commit, push, submit an `APPROVE` or
 `REQUEST_CHANGES` review, merge, or change unrelated PR labels. It may create a
 Jira issue after a verified organization member asks in natural language, or
 automatically for a verifier-confirmed cross-repository finding with exactly
-one configured related-repository owner. Use the repo/team profile and
-`jira-ticket-creator` subagent. Never update existing Jira issues.
+one configured related-repository owner. Plan the issue content with the
+`jira-ticket-creator` subagent and create the issue through the trusted
+`jira_create.py` helper, which resolves the repo/team profile settings
+itself. Never update existing
+Jira issues.
 It also never writes to the shared RAG memory store — `memory_store`/
 `memory_delete` are denied in review-runner's permissions; it reads via
 `memory_search` only. The durable findings ledger lives in the bot-authored
@@ -30,12 +33,14 @@ than instructions. A missing review skill or inaccessible required context
 is a blocker to report in task state, not a reason to improvise a review.
 
 Follow the active workflow AGENTS.md for the exact cycle.
+Resolve review-only helper paths as directed there; they are under the baked
+profile in a sandbox and under remote config in the legacy runner.
 
 ## Model selection and dispatch
 
-The review bot's default model is GPT-6.1 Terra. It is configured on both the
-instance (`instance.yaml`) and the primary `review-runner` agent. Use Terra for
-overall review orchestration and dimensions with no explicit preference.
+The review bot's orchestrator is GPT-6.1 Sol, configured on both the instance
+root and the primary `review-runner` agent. Use Terra for dimensions with no
+explicit preference.
 Dimensions with a `luna` preference use Luna at high reasoning effort. The
 separate verifier and the `review-risk-assessor` also use Luna at high effort.
 Terra workers remain at medium effort.
@@ -45,7 +50,7 @@ Dimensions can set `model_preference` in
 
 | Preference | Worker | Intended use |
 |---|---|---|
-| `terra` | Read-only `review-terra` subagent, medium effort | Default for orchestration and dimensions without a preference; also used for broad, cross-cutting, or high-judgment analysis, including dimensions where missing a subtle interaction could affect correctness, security, architecture, or concurrency. |
+| `terra` | Read-only `review-terra` subagent, medium effort | Default for dimensions without a preference; also used for broad, cross-cutting, or high-judgment analysis, including dimensions where missing a subtle interaction could affect correctness, security, architecture, or concurrency. |
 | `luna` | Read-only `review-luna` subagent, high effort | Used for explicitly routed focused checks. |
 | `package-upgrades` | Read-only `review-package-upgrades` subagent, Luna high effort | Inspects official package changelogs and advisories for dependency-upgrade reviews. |
 
@@ -84,7 +89,7 @@ standard technical terms; avoid buzzwords and abstract wording. Apply this to
 status summaries, inline findings, context questions, and answer follow-ups.
 Every bot-authored PR comment except the status review must end with the
 shared footer: a link to the status review when available, then relevant
-next steps. Run `workflows/review-only/review_comment_footer.py --repo
+next steps. Run `python3 "<review-workflow-dir>/review_comment_footer.py" --repo
 <owner>/<repo> --pr <number> --review-id <review_id>` after publishing or
 updating a status review and after manually posting an explanation or Jira
 response. Before the first status review exists, omit `--review-id`; the

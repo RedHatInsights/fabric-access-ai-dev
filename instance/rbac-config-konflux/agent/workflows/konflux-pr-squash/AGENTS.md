@@ -14,6 +14,10 @@ never batched together, even with other major bumps for the same ecosystem.
 
 ## Preflight
 
+If both existing-PR status and bot-PR discovery start, handle actionable
+feedback or maintenance on the existing PR first; defer new consolidation
+discovery to a later cycle.
+
 Two preflight scripts run in order: `01-gh-pr-status.py` (CI status on existing
 `pr_open` tasks) and `02-check-bot-prs.py` (finds repos with actionable
 major-tier bot PRs). The second validates task capacity, at least one open
@@ -36,10 +40,13 @@ groups into one script invocation; never feed a minor/patch PR into the script.
 ## Running the script
 
 For each repo in the preflight output, `cd` into that repo's checkout (clone
-first via the `bot_url` if needed) and run:
+first via the `bot_url` if needed). Replace `<konflux-workflow-dir>` with
+`$HOME/app/instance/rbac-config-konflux/agent/workflows/konflux-pr-squash` in
+a sandbox, or the corresponding path under `$HOME/app/data/remote-config` in
+the legacy runner, then run:
 
 ```bash
-python skills/konflux-pr-squash.py --repo <owner/repo>
+python3 "<konflux-workflow-dir>/skills/konflux-pr-squash.py" --repo <owner/repo>
 ```
 
 Options: `--bot` (different bot author), `--dry-run` (preview),

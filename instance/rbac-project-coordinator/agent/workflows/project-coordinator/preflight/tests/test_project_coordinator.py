@@ -496,3 +496,104 @@ def test_coordinator_comment_requires_footer_suggestions(jira_store):
             CONFIG,
         )
     assert not any(name == "jira_add_comment" for name, _ in writes)
+
+
+def test_fabric_setting_prefers_sandbox_name(monkeypatch):
+    monkeypatch.setenv("FABRIC_TEAM_FIELD_ID", TEAM_FIELD)
+    monkeypatch.setenv("BOT_TEAM_FIELD_ID", "customfield_999999")
+    assert coordinator.fabric_setting("TEAM_FIELD_ID") == TEAM_FIELD
+
+
+def test_fabric_setting_falls_back_to_legacy_bot_name(monkeypatch):
+    monkeypatch.delenv("REHOR_INPUT_SOURCE", raising=False)
+    monkeypatch.delenv("FABRIC_TEAM_FIELD_ID", raising=False)
+    monkeypatch.setenv("BOT_TEAM_FIELD_ID", TEAM_FIELD)
+    assert coordinator.fabric_setting("TEAM_FIELD_ID") == TEAM_FIELD
+
+
+def test_fabric_setting_empty_when_neither_name_is_set(monkeypatch):
+    monkeypatch.delenv("FABRIC_TEAM_FIELD_ID", raising=False)
+    monkeypatch.delenv("BOT_TEAM_FIELD_ID", raising=False)
+    assert coordinator.fabric_setting("TEAM_FIELD_ID") == ""
+
+
+def test_fabric_setting_jira_project_prefers_sandbox_name(monkeypatch):
+    monkeypatch.setenv("FABRIC_JIRA_PROJECT", "SYNTH")
+    monkeypatch.setenv("BOT_JIRA_PROJECT", "LEGACY")
+    assert coordinator.fabric_setting("JIRA_PROJECT") == "SYNTH"
+    monkeypatch.delenv("FABRIC_JIRA_PROJECT", raising=False)
+    assert coordinator.fabric_setting("JIRA_PROJECT") == "LEGACY"
+
+
+def test_require_config_reads_fabric_team_field_id(monkeypatch):
+    monkeypatch.setenv("BOT_LABEL", "dev-bot-coordinator")
+    monkeypatch.setenv("BOT_IMPLEMENTATION_LABEL", "hcc-ai-platform-accessmanagement")
+    monkeypatch.setenv("FABRIC_TEAM_FIELD_ID", TEAM_FIELD)
+    monkeypatch.delenv("BOT_TEAM_FIELD_ID", raising=False)
+    assert actions.require_config() == CONFIG
+
+
+def test_require_config_keeps_legacy_bot_team_field_id(monkeypatch):
+    monkeypatch.setenv("BOT_LABEL", "dev-bot-coordinator")
+    monkeypatch.setenv("BOT_IMPLEMENTATION_LABEL", "hcc-ai-platform-accessmanagement")
+    monkeypatch.delenv("FABRIC_TEAM_FIELD_ID", raising=False)
+    monkeypatch.setenv("BOT_TEAM_FIELD_ID", TEAM_FIELD)
+    assert actions.require_config() == CONFIG
+
+
+def test_require_config_rejects_missing_team_field(monkeypatch):
+    monkeypatch.setenv("BOT_LABEL", "dev-bot-coordinator")
+    monkeypatch.setenv("BOT_IMPLEMENTATION_LABEL", "hcc-ai-platform-accessmanagement")
+    monkeypatch.delenv("FABRIC_TEAM_FIELD_ID", raising=False)
+    monkeypatch.delenv("BOT_TEAM_FIELD_ID", raising=False)
+    with pytest.raises(ValueError, match="required"):
+        actions.require_config()
+
+
+def test_fabric_setting_sandbox_requires_fabric_name(monkeypatch):
+    monkeypatch.setenv("REHOR_INPUT_SOURCE", "sandbox")
+    monkeypatch.delenv("FABRIC_TEAM_FIELD_ID", raising=False)
+    monkeypatch.setenv("BOT_TEAM_FIELD_ID", TEAM_FIELD)
+    with pytest.raises(ValueError, match="FABRIC_TEAM_FIELD_ID"):
+        coordinator.fabric_setting("TEAM_FIELD_ID")
+
+
+def test_fabric_setting_sandbox_uses_fabric_value(monkeypatch):
+    monkeypatch.setenv("REHOR_INPUT_SOURCE", "sandbox")
+    monkeypatch.setenv("FABRIC_TEAM_FIELD_ID", TEAM_FIELD)
+    monkeypatch.setenv("BOT_TEAM_FIELD_ID", "customfield_999999")
+    assert coordinator.fabric_setting("TEAM_FIELD_ID") == TEAM_FIELD
+
+
+def test_require_config_blocks_sandbox_without_fabric_team_field(monkeypatch):
+    monkeypatch.setenv("REHOR_INPUT_SOURCE", "sandbox")
+    monkeypatch.setenv("BOT_LABEL", "dev-bot-coordinator")
+    monkeypatch.setenv("BOT_IMPLEMENTATION_LABEL", "hcc-ai-platform-accessmanagement")
+    monkeypatch.delenv("FABRIC_TEAM_FIELD_ID", raising=False)
+    monkeypatch.setenv("BOT_TEAM_FIELD_ID", TEAM_FIELD)
+    with pytest.raises(ValueError, match="FABRIC_TEAM_FIELD_ID"):
+        actions.require_config()
+
+
+def test_require_config_accepts_sandbox_fabric_team_field(monkeypatch):
+    monkeypatch.setenv("REHOR_INPUT_SOURCE", "sandbox")
+    monkeypatch.setenv("BOT_LABEL", "dev-bot-coordinator")
+    monkeypatch.setenv("BOT_IMPLEMENTATION_LABEL", "hcc-ai-platform-accessmanagement")
+    monkeypatch.setenv("FABRIC_TEAM_FIELD_ID", TEAM_FIELD)
+    monkeypatch.delenv("BOT_TEAM_FIELD_ID", raising=False)
+    assert actions.require_config() == CONFIG
+
+
+def test_main_reports_sandbox_missing_fabric_settings(monkeypatch):
+    monkeypatch.setenv("REHOR_INPUT_SOURCE", "sandbox")
+    monkeypatch.setenv("BOT_LABEL", "dev-bot-coordinator")
+    monkeypatch.setenv("BOT_IMPLEMENTATION_LABEL", "hcc-ai-platform-accessmanagement")
+    monkeypatch.setenv("BOT_JIRA_PROJECT", "RHCLOUD")
+    monkeypatch.setenv("BOT_TEAM_FIELD_ID", TEAM_FIELD)
+    monkeypatch.delenv("FABRIC_JIRA_PROJECT", raising=False)
+    monkeypatch.delenv("FABRIC_TEAM_FIELD_ID", raising=False)
+    results: list[tuple[str, str]] = []
+    monkeypatch.setattr(coordinator, "output_result", lambda kind, message: results.append((kind, message)))
+    coordinator.main()
+    assert results and results[0][0] == "error"
+    assert "FABRIC_" in results[0][1]

@@ -19,6 +19,30 @@ from pathlib import Path
 from common import INSTANCE_ID, MEMORY_URL, http_get, load_project_repos, output_result
 from jira_mcp import jira_call, jira_cleanup
 
+# Vault-sourced settings arrive under nonreserved FABRIC_ names (rendered
+# from the tier-2 `fabric-access-rehor` Secret into sandbox.env); legacy
+# deployments still supply the reserved BOT_ names through app-interface
+# parameters. In the sandbox the FABRIC_ delivery is required: a missing
+# value raises instead of silently using a legacy one. Outside the sandbox
+# the BOT_ fallback stays until cutover.
+FABRIC_PREFIX = "FABRIC_"
+LEGACY_PREFIX = "BOT_"
+
+
+def fabric_setting(suffix: str, environ: dict[str, str] | None = None) -> str:
+    """Prefer the sandbox FABRIC_ delivery of a setting; fall back to BOT_.
+
+    Sandbox mode (REHOR_INPUT_SOURCE=sandbox) requires the FABRIC_ name and
+    never falls back; legacy mode falls back to the BOT_ alias.
+    """
+    env = os.environ if environ is None else environ
+    value = env.get(FABRIC_PREFIX + suffix, "").strip()
+    if value:
+        return value
+    if env.get("REHOR_INPUT_SOURCE", "").strip() == "sandbox":
+        raise ValueError(f"Missing required sandbox setting: FABRIC_{suffix}")
+    return env.get(LEGACY_PREFIX + suffix, "").strip()
+
 PHASE_RE = re.compile(r"^phase:(\d{2})$")
 JQL_VALUE_RE = re.compile(r"^[A-Za-z0-9:_-]+$")
 COMPLETE_STATUSES = frozenset({"done", "closed", "resolved", "release pending"})
@@ -796,13 +820,19 @@ def fingerprint(parent: dict, control: dict, children: list[dict], team_field_id
 
 
 def main() -> None:
-    project = os.environ.get("BOT_JIRA_PROJECT", "RHCLOUD")
+    try:
+        project = fabric_setting("JIRA_PROJECT")
+        team_field_id = fabric_setting("TEAM_FIELD_ID")
+    except ValueError as exc:
+        # A missing sandbox delivery is a blocker, not a fallback case.
+        output_result("error", str(exc))
+        return
+    project = project or "RHCLOUD"
     control_label = os.environ.get("BOT_LABEL", "")
-    team_field_id = os.environ.get("BOT_TEAM_FIELD_ID", "")
     implementation_label = os.environ.get("BOT_IMPLEMENTATION_LABEL", "")
     required = {
         "BOT_LABEL": control_label,
-        "BOT_TEAM_FIELD_ID": team_field_id,
+        "BOT_TEAM_FIELD_ID/FABRIC_TEAM_FIELD_ID": team_field_id,
         "BOT_IMPLEMENTATION_LABEL": implementation_label,
     }
     missing = [name for name, item in required.items() if not item]

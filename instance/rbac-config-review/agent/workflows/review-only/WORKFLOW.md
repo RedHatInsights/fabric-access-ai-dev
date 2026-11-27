@@ -76,7 +76,7 @@ start a model session.
 | Documentation-only profile | `dimensions.yaml` + `review_skills.py` | Script | Routes documentation-only diffs to `documentation`, `cross-repo-dependencies`, and `architecture` instead of the full default dimension set |
 | Impact analysis | `impact_analysis.py` | Script | Deterministically (no LLM) extracts changed identifiers from the diff and `git grep`-matches them in related repos → `impact.json`'s `consumer_usages` (candidates, not confirmed breakage) |
 | PR command detection | `rereview_requests.py`, `review_bot_commands.py`, `review_queue.py` | Script | Finds exact verification/re-review commands and new `/review-bot` requests in top-level comments, inline threads, and submitted review bodies; the runner answers generic requests from pinned context after organization-membership checks |
-| Jira issue creation | `.opencode/agents/jira-ticket-creator.md`, `jira_config.py` | **AI** (subagent) + script | Handles an explicit Jira request or an authorized cross-repo follow-up using the target repository's App Interface profile and an idempotency marker |
+| Jira issue creation | `.opencode/agents/jira-ticket-creator.md`, `jira_create.py` | **AI** (content planner) + script (trusted creation) | Plans public issue content for an explicit Jira request or an authorized cross-repo follow-up, then a deterministic helper resolves the Vault-backed profile settings in-process, verifies the Team option and component, and creates or reuses the issue by an idempotency marker |
 | Model routing | `review_skills.py` + `dimensions.yaml` | Script | Resolves each pass's preference to its configured Terra, Luna, or package-upgrade worker in `review_plan` |
 | Review criteria | `skills/dimensional-review/SKILL.md` | **AI** (review-terra / review-luna / review-package-upgrades) | Multi-dimension review; package upgrades inspect official release notes and advisories |
 | Review workers | `.opencode/agents/review-terra.md`, `review-luna.md`, `review-package-upgrades.md` | **AI** (subagents) | Read-only workers; only the package-upgrade worker can search and fetch upstream sources |
@@ -102,10 +102,10 @@ required. The generated skill gets the same pinned PR, related repositories,
 docs, and impact report as the built-in passes. Recipe extensions and test
 execution are not enabled by importing a recipe. The `high` level includes
 the applicable built-in dimensions, including documentation and observability.
-Terra is the default model for the primary `review-runner` and for dimensions
-without an explicit preference. Each dimension's `model_preference` selects a
-read-only worker: Terra uses `review-terra`, Luna uses `review-luna`, and the
-`package-upgrades` preference uses `review-package-upgrades`.
+Sol is the model for the primary `review-runner`; Terra is the default for
+dimensions without an explicit preference. Each dimension's `model_preference`
+selects a read-only worker: Terra uses `review-terra`, Luna uses `review-luna`,
+and the `package-upgrades` preference uses `review-package-upgrades`.
 `review_plan` records the resolved worker. The runner gives each worker its
 dimension and the guide and manifest paths. Dimensions run in plan order in
 batches of at most four, and the runner records each batch before the next.

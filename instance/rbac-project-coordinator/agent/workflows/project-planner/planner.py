@@ -19,6 +19,7 @@ from jira_mcp import jira_call, jira_cleanup  # noqa: E402
 from project_coordinator import (  # noqa: E402
     PLANNER_RECEIPT,
     comments,
+    fabric_setting,
     key_of,
     labels,
     parent_key,
@@ -35,6 +36,50 @@ from project_coordinator import (  # noqa: E402
 )
 
 COMMENT_LIMIT = 100
+REVIEW_AGENT = Path(__file__).resolve().parents[4] / "rbac-config-review" / "agent"
+PARENT_KEY_RE = re.compile(r"[A-Z][A-Z0-9_]*-[1-9][0-9]*")
+
+
+def in_sandbox() -> bool:
+    """The private sandbox marks itself so subprocess helpers can tell."""
+    return os.environ.get("REHOR_INPUT_SOURCE", "").strip() == "sandbox"
+
+
+def request_settings(control_key: str, comment_id: str, preflight_parent: str | None) -> dict:
+    """Read the preflight handoff settings for one planner request.
+
+    Legacy preflights write data/planner-requests/<control>-<comment>.json
+    before the agent starts; outside the sandbox that file stays the only
+    source and the extra parent argument is rejected. The dispatcher
+    preflight cannot write into the sandbox, so a sandbox build carries the
+    preflight's parent_key and derives the remaining settings in memory from
+    configured environment names only; current_request then revalidates
+    request eligibility against live Jira.
+    """
+    # Validates the control key and comment ID with the shared contract; the
+    # sandbox path uses the result only for that check and never touches the
+    # file itself.
+    path = planner_request_path(control_key, comment_id)
+    if in_sandbox():
+        if preflight_parent is None:
+            raise RuntimeError(
+                f"{control_key}: sandbox planner builds must pass the preflight parent_key "
+                "as the third build argument"
+            )
+        if not PARENT_KEY_RE.fullmatch(preflight_parent):
+            raise ValueError("Invalid parent issue key for the planner handoff")
+        control_label = os.environ.get("BOT_LABEL", "").strip()
+        if not control_label:
+            raise RuntimeError("BOT_LABEL is required to build planner request settings")
+        return {
+            "control_label": control_label,
+            "parent_key": preflight_parent,
+            "docs_base": os.getenv("BOT_PLANNER_DOCS_BASE_URL", "").strip(),
+            "docs_glob": os.getenv("BOT_PLANNER_DOCS_GLOB", "").strip() or "*.md",
+        }
+    if preflight_parent is not None:
+        raise RuntimeError("The parent_key build argument is only valid in the sandbox")
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def plain_text(value: object) -> str:
@@ -100,8 +145,8 @@ def load_jira_document(key: str) -> dict:
     return {**issue_context(issue), "url": issue.get("url")}
 
 
-def current_request(control_key: str, comment_id: str) -> dict:
-    settings = json.loads(planner_request_path(control_key, comment_id).read_text(encoding="utf-8"))
+def current_request(control_key: str, comment_id: str, preflight_parent: str | None = None) -> dict:
+    settings = request_settings(control_key, comment_id, preflight_parent)
     control = get_issue(control_key, comments=True)
     parent = parent_key(control)
     if settings["control_label"] not in labels(control) or not parent or settings["parent_key"] != parent:
@@ -116,7 +161,14 @@ def current_request(control_key: str, comment_id: str) -> dict:
     parent_issue = get_issue(parent, fields="summary,description,labels,priority,issuetype,issuelinks")
     parent_context = issue_context(parent_issue)
     control_context = issue_context(control)
-    team_field_id = os.getenv("BOT_TEAM_FIELD_ID", "")
+    if in_sandbox():
+        team_field_id = fabric_setting("TEAM_FIELD_ID")
+        if not re.fullmatch(r"customfield_\d+", team_field_id):
+            raise ValueError("FABRIC_TEAM_FIELD_ID must be a customfield_ number")
+    else:
+        # Legacy parity: always the BOT_ name, even when a FABRIC_ alias is
+        # present; a malformed value keeps the historical silent skip.
+        team_field_id = os.getenv("BOT_TEAM_FIELD_ID", "")
     implementation_tickets = []
     ticket_snapshot_hash = ""
     if re.fullmatch(r"customfield_\d+", team_field_id):
@@ -169,7 +221,17 @@ def publish(manifest_path: Path) -> dict:
                     or assignment.get("repository") not in available):
                 raise ValueError(f"planner-coordination has an invalid phase or repository for {key}")
     control_key, comment_id = manifest["control_key"], manifest["comment_id"]
-    request = current_request(control_key, comment_id)
+    if in_sandbox():
+        # The sandbox handoff is file-free: rebuild the request from the
+        # manifest's parent key and the same trusted environment. The
+        # recomputed fingerprint below then catches any drift since the build.
+        manifest_parent = manifest.get("parent")
+        expected_parent = manifest_parent.get("key") if isinstance(manifest_parent, dict) else None
+        if not isinstance(expected_parent, str) or not expected_parent.strip():
+            raise ValueError(f"{control_key}: the manifest parent key is required to revalidate the request")
+        request = current_request(control_key, comment_id, expected_parent)
+    else:
+        request = current_request(control_key, comment_id)
     if manifest["request_id"] != request["request_id"]:
         raise RuntimeError(f"{control_key}: the planner inputs changed after the plan was drafted")
     warnings = manifest["warnings"]
@@ -209,6 +271,10 @@ def main() -> None:
     build = commands.add_parser("build")
     build.add_argument("control_key")
     build.add_argument("comment_id")
+    build.add_argument(
+        "parent_key", nargs="?",
+        help="preflight parent_key; required in the sandbox and rejected outside it",
+    )
     post = commands.add_parser("publish")
     post.add_argument("manifest", type=Path)
     args = parser.parse_args()
@@ -217,7 +283,8 @@ def main() -> None:
             from build_planner_context import build_context
 
             result = build_context(
-                current_request(args.control_key, args.comment_id), load_jira_document=load_jira_document,
+                current_request(args.control_key, args.comment_id, args.parent_key),
+                load_jira_document=load_jira_document,
             )
         else:
             result = publish(args.manifest)

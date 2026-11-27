@@ -4,10 +4,51 @@ source: jira
 # runtime defaults; native subagents and MCP settings apply only to OpenCode.
 runtime: opencode
 provider: rehor-openai
-model: gpt-6.1-terra
+model: gpt-6.1-sol
 envs:
   - slack
   - container-scan
   - go
 claude_md:
   strategy: append
+# Sandbox image launched by the agent dispatcher for this profile.
+image:
+  repository: quay.io/redhat-services-prod/hcc-accessmanagement-tenant/fabric-access-ai-dev
+  # Newest promoted Konflux build of main.
+  tag: latest
+# Non-secret profile settings for dispatcher wiring and the sandbox runner.
+env:
+  BOT_INSTANCE_ID: Přemysl Oráč z Nekonečné šichty
+  BOT_LABEL: hcc-ai-platform-accessmanagement
+  BOT_INCLUDE_BACKLOG: 'true'
+  BOT_CONFIG_PATH: instance/rbac-config
+  BOT_EXECUTION_ENGINE: coordinator
+sandbox:
+  env:
+    SLACK_WEBHOOK_URL: "${{ secret('fabric-access-rehor', 'slack-webhook-url') }}"
+# Declarative preflights (REHOR-231): the jira-sprint preset's set, executed
+# by the dispatcher's TS engine (@rehor/preflights) instead of the Python set.
+preflights:
+  - id: gh-pr-status
+    with:
+      review_bot_author: platex-rehor-bot
+      review_bot_markers:
+        - dev-review-bot
+        - fabric-access-finding
+        - fabric-access-review
+  - gl-mr-status
+  - id: jira-sprint
+    with:
+      label: hcc-ai-platform-accessmanagement
+      include_backlog: true
+# Legacy KEDA windows of devbot-fabric-access (deploy/template defaults): EU
+# and US working hours OR together; the dispatcher starts no sessions outside
+# them; in-flight sessions drain.
+schedule:
+  triggers:
+    - timezone: Europe/Prague
+      start: "0 9 * * 1-5"
+      end: "0 23 * * 1-5"
+    - timezone: America/New_York
+      start: "0 9 * * 1-5"
+      end: "0 18 * * 1-5"

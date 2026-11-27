@@ -1,7 +1,7 @@
 ---
 description: Coordinates one Fabric Access ticket and delegates implementation to the matching profile subagent.
 mode: primary
-model: rehor-openai/gpt-6.1-terra
+model: rehor-openai/gpt-6.1-sol
 request:
   body:
     reasoning:

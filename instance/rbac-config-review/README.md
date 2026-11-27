@@ -13,7 +13,7 @@ has no open findings; a new full review clears that label first.
 | File | Purpose |
 |---|---|
 | [`agent/instance.yaml`](agent/instance.yaml) | Selects the scheduled workflow, runtime, provider, and model. |
-| [`opencode-deployment.json`](opencode-deployment.json) | Defines the Rehor provider and available Luna and Terra models. |
+| [`opencode-deployment.json`](opencode-deployment.json) | Defines the Rehor provider and available Sol, Terra, and Luna models. |
 | [`agent/.opencode/agents/`](agent/.opencode/agents/) | Configures the runner, review workers, missing-context detector, verifier, risk assessor, models, and permissions. |
 | [`agent/project-repos.json`](agent/project-repos.json) | Allowlist of repositories whose GitHub PR queues are scanned. |
 | [`agent/review-context.yaml`](agent/review-context.yaml) | GitHub label to watch and per-repository context, required skills, and comment format. |
@@ -58,19 +58,23 @@ repositories:
         url: https://github.com/project-kessel/rbac-config/blob/master/README.md
     jira:
       team_field: customfield_10001
+      # Vault-sourced Team field (sandbox FABRIC_TEAM_FIELD_ID): required
+      # under REHOR_INPUT_SOURCE=sandbox; the literal team_field above is
+      # the non-sandbox fallback.
+      team_field_env: ${FABRIC_TEAM_FIELD_ID}
       profiles:
         current-team:
           target_repository: project-kessel/insights-rbac
-          team_name_env: ${BOT_JIRA_TEAM_NAME_INSIGHTS_RBAC}
-          project_env: ${BOT_JIRA_PROJECT_INSIGHTS_RBAC}
-          team_id_env: ${BOT_JIRA_TEAM_ID_INSIGHTS_RBAC}
-          labels_env: ${BOT_JIRA_LABELS_INSIGHTS_RBAC}
+          team_name_env: ${FABRIC_JIRA_TEAM_NAME_INSIGHTS_RBAC}
+          project_env: ${FABRIC_JIRA_PROJECT_INSIGHTS_RBAC}
+          team_id_env: ${FABRIC_JIRA_TEAM_ID_INSIGHTS_RBAC}
+          labels_env: ${FABRIC_JIRA_LABELS_INSIGHTS_RBAC}
         inventory-api:
           target_repository: project-kessel/inventory-api
-          team_name_env: ${BOT_JIRA_TEAM_NAME_INVENTORY_API}
-          project_env: ${BOT_JIRA_PROJECT_INVENTORY_API}
-          team_id_env: ${BOT_JIRA_TEAM_ID_INVENTORY_API}
-          labels_env: ${BOT_JIRA_LABELS_INVENTORY_API}
+          team_name_env: ${FABRIC_JIRA_TEAM_NAME_INVENTORY_API}
+          project_env: ${FABRIC_JIRA_PROJECT_INVENTORY_API}
+          team_id_env: ${FABRIC_JIRA_TEAM_ID_INVENTORY_API}
+          labels_env: ${FABRIC_JIRA_LABELS_INVENTORY_API}
     skills: []
     format: standard
 ```
@@ -118,9 +122,12 @@ The per-repository settings are:
   can ask in natural language for a Jira ticket for an out-of-scope change or
   finding. A verifier-confirmed cross-repo finding with exactly one configured
   related-repository owner automatically routes to that owner's team profile.
-  Current-team tickets remain request-only. The runner delegates creation to
-  `jira-ticket-creator`, which uses a deterministic marker to avoid duplicates
-  and keeps Jira keys/URLs out of public PR comments.
+  Current-team tickets remain request-only. The runner delegates content
+  planning to `jira-ticket-creator` (public summary, description, marker, and
+  target only — it has no Jira access), then creates the issue through the
+  trusted `jira_create.py` helper, which resolves the Vault-backed settings
+  in-process and never exposes them to the model. The helper's deterministic
+  marker avoids duplicates and Jira keys/URLs stay out of public PR comments.
 
 The loader validates the label, repository mappings, dimension names, unique
 IDs, and URL shapes before polling GitHub. Related repository links must be
@@ -279,7 +286,7 @@ Each item under `dimensions` describes one review pass. Common fields are:
   are `luna` → `rehor-openai/gpt-6-luna` and `terra` →
   `rehor-openai/gpt-6.1-terra` in the
   [OpenCode deployment config](https://github.com/RedHatInsights/fabric-access-ai-dev/blob/main/instance/rbac-config-review/opencode-deployment.json).
-  Terra is the default for orchestration and missing preferences. Luna remains
+  Sol orchestrates the review; Terra is the default for missing preferences. Luna remains
   assigned to focused dimensions, while Terra handles broad or high-judgment
   dimensions. The current assignments are: correctness, architecture,
   security, concurrency, database schema, and cross-repository dependencies use
@@ -297,8 +304,9 @@ patterns, and documentation-only rules. `learning-extraction` and the dynamic
 The catalog's `config` holds review-wide model routing, deduplication, and
 consensus settings. `model_routing.default` selects the worker for dimensions
 without an explicit preference, and `model_routing.agents` maps each profile
-to an OpenCode agent. Here the default is Terra, with `terra: review-terra`
-and `luna: review-luna`. `review_skills.py` records the resolved profile and
+to an OpenCode agent. Here the default is Terra, with `terra: review-terra`,
+`luna: review-luna`, and `package-upgrades: review-package-upgrades`.
+`review_skills.py` records the resolved profile and
 agent for each selected pass; an unknown profile stops plan generation instead
 of silently using another model. `consensus_threshold` is the number of
 dimensions that must agree for a consensus finding, and `dedup_jaccard` /
@@ -348,7 +356,7 @@ flowchart TD
     Queue -->|verification, reply, or resume| Context
     Context --> Snapshot["manifest.json<br/>impact.json"]
     Snapshot --> Select["3. Select review profile<br/>docs-only: 3 focused passes<br/>dependency-only: 2 focused passes<br/>otherwise: applicable dimensions<br/>AI cost: $0"]
-    Select --> Runner["Terra review-runner<br/>one orchestration session, multiple turns"]
+    Select --> Runner["Sol review-runner<br/>one orchestration session, multiple turns"]
     Runner --> Risk["Luna risk assessor<br/>first subagent on full reviews"]
     Risk --> Workers["4. Dimension AI passes<br/>3 for docs-only; 2 for package-only<br/>otherwise applicable dimensions"]
     Workers --> Results["Per-dimension JSON<br/>findings + pass status"]
@@ -383,7 +391,7 @@ bot-memory tracks task progress and review metadata.
 
 | AI stage | Calls per full review | Relative spend | What makes its context large |
 |---|---:|---|---|
-| Terra `review-runner` | One session with multiple turns | Medium to high | Workflow instructions, pinned PR snapshot, dimension plan, then accumulated worker outputs and prior findings. |
+| Sol `review-runner` | One session with multiple turns | Medium to high | Workflow instructions, pinned PR snapshot, dimension plan, then accumulated worker outputs and prior findings. |
 | Luna risk assessor | One pass before dimension review | Depends on diff size | Reads the full pinned diff and related context relevant to risk. |
 | Terra/Luna dimension workers | One per selected dimension, plus repository-required skills | **Likely highest combined spend** | Workers start with the manifest and guide paths, then read the diff and relevant pinned sources locally. |
 | Terra missing-context detector | One detection pass; another assessment when new author answers need review | Medium | Pinned snapshot plus dimension findings; answer assessment also adds the original question and author response. |
@@ -409,7 +417,7 @@ Those choices trade coverage or context breadth for lower spend.
 These are relative estimates. The bot exports USD and input/output/cache token
 counters by cycle, model, label, and workflow; it does not attribute usage to
 individual review stages or dimensions. Exact USD cost needs an observed
-cycle's usage and the proxy's rates for Terra and Luna. Cached input may reduce
+cycle's usage and the proxy's rates for Sol, Terra, and Luna. Cached input may reduce
 the repeated-context charge when the proxy reports cache hits.
 
 ### Project coordinator cost path
@@ -487,8 +495,8 @@ tokens to that agent's prompt.
    `skills` are always included; `--focus` selects its named dimensions plus
    repository skills. The result, `review-plan.json`, records each selected
    dimension, its local or generated guide, model preference, and worker
-   (`review-terra` or `review-luna`).
-3. **Run independent passes.** The Terra `review-runner` passes each worker its
+   (`review-terra`, `review-luna`, or `review-package-upgrades`).
+3. **Run independent passes.** The Sol `review-runner` passes each worker its
    dimension name and the guide and manifest paths. Each worker reads its guide
    and the relevant pinned sources for its own concern,
    such as correctness, security, API contracts, performance, or database
@@ -626,16 +634,20 @@ For a repository with `jira` profiles in `review-context.yaml`, a verified
 organization member can simply ask for a Jira issue in a PR comment. The runner
 uses the current-team profile for out-of-scope work. After verification, it
 automatically creates a ticket for a cross-repo finding only when pinned
-evidence identifies one configured owning repository unambiguously. Jira
-settings and optional labels come from App Interface
-environment variables. The request is idempotent, and the bot does not publish
+evidence identifies one configured owning repository unambiguously. The
+`jira-ticket-creator` subagent plans only public issue content; the trusted
+`jira_create.py` helper then resolves the App Interface
+environment settings in-process, verifies the configured Team option and
+component, and creates or reuses the issue. Tier-2 settings are available to the
+agent and may appear in its transcript. The request is idempotent, and the bot does not publish
 Jira keys or URLs in GitHub comments.
 
 ## Deployment settings
 
 The instance's workflow, runtime, provider, and model are configured in
 `agent/instance.yaml` (`scheduled`, `opencode`, `rehor-openai`,
-`gpt-6.1-terra`). App-interface supplies the deployment environment, including
+`gpt-6.1-sol`). The primary `review-runner` agent also selects `gpt-6.1-sol`.
+App-interface supplies the deployment environment, including
 the config path, instance identity, bot label, and execution engine. The
 review deployment settings are:
 
@@ -661,6 +673,44 @@ review deployment settings are:
 | `BOT_JIRA_TEAM_NAME_INSIGHTS_CHROME` | `Console - Framework` (set in App Interface) |
 | `BOT_JIRA_COMPONENT_ID_INSIGHTS_CHROME` | Console Framework component ID (set in App Interface) |
 | `BOT_JIRA_LABELS_INSIGHTS_CHROME` | `["platform-experience-services"]` (set in App Interface) |
+
+### Sandbox delivery (HyperShell dispatcher)
+
+Under the dispatcher, the same settings arrive as nonreserved `FABRIC_`
+environment variables rendered from the tier-2 `fabric-access-rehor`
+Kubernetes Secret (app-interface draft MR !220723) via `sandbox.env` secret
+references. In the sandbox every `FABRIC_` delivery is required — a missing
+one blocks the helper — while legacy (non-sandbox) deployments fall back to
+the `BOT_` names above, so the app-interface deployment keeps working
+until cutover. The mapping is:
+
+| Sandbox variable | Secret key |
+|---|---|
+| `FABRIC_TEAM_FIELD_ID` | `bot-team-field-id` |
+| `FABRIC_JIRA_PROJECT_INSIGHTS_RBAC` | `bot-jira-project-insights-rbac` |
+| `FABRIC_JIRA_TEAM_ID_INSIGHTS_RBAC` | `bot-jira-team-id-insights-rbac` |
+| `FABRIC_JIRA_TEAM_NAME_INSIGHTS_RBAC` | `bot-jira-team-name-insights-rbac` |
+| `FABRIC_JIRA_LABELS_INSIGHTS_RBAC` | `bot-jira-labels-insights-rbac` |
+| `FABRIC_JIRA_PROJECT_INVENTORY_API` | `bot-jira-project-inventory-api` |
+| `FABRIC_JIRA_TEAM_ID_INVENTORY_API` | `bot-jira-team-id-inventory-api` |
+| `FABRIC_JIRA_TEAM_NAME_INVENTORY_API` | `bot-jira-team-name-inventory-api` |
+| `FABRIC_JIRA_LABELS_INVENTORY_API` | `bot-jira-labels-inventory-api` |
+| `FABRIC_JIRA_PROJECT_INSIGHTS_CHROME` | `bot-jira-project-insights-chrome` |
+| `FABRIC_JIRA_TEAM_ID_INSIGHTS_CHROME` | `bot-jira-team-id-insights-chrome` |
+| `FABRIC_JIRA_TEAM_NAME_INSIGHTS_CHROME` | `bot-jira-team-name-insights-chrome` |
+| `FABRIC_JIRA_COMPONENT_ID_INSIGHTS_CHROME` | `bot-jira-component-id-insights-chrome` |
+| `FABRIC_JIRA_LABELS_INSIGHTS_CHROME` | `bot-jira-labels-insights-chrome` |
+
+These names are accepted by the pinned dispatcher's `sandbox.env`
+validation. The dev-bot pin in this branch points to rehor
+master 6a473e9, whose #691 declared-name forwarding delivers them to the
+OpenCode child in sandbox mode; the stage dispatcher image still predates
+#691/#694 and end-to-end delivery is unverified — see the readiness
+gates in `HYPERSHELL-MIGRATION.md` before relying on them. No values are stored in this repository. Under
+`REHOR_INPUT_SOURCE=sandbox` every configured `FABRIC_` delivery is
+required: a missing one is a loud configuration blocker, never a silent
+legacy `BOT_`, default, or public-literal fallback. Outside the sandbox the
+helpers fall back to the legacy `BOT_` names until cutover.
 
 `BOT_LABEL` is passed to the bot as a deployment label; it is separate from the
 GitHub PR label selected by `review-context.yaml: review_label`.
@@ -711,17 +761,19 @@ label.
 
 | Profile | Agent | Configured model | Reasoning effort |
 |---|---|---|---|
-| `terra` | `review-runner`, `review-terra` | `rehor-openai/gpt-6.1-terra` | Medium |
-| `luna` | `review-luna`, `review-verifier`, `review-risk-assessor` | `rehor-openai/gpt-6-luna` | High |
+| `sol` | `review-runner` | `rehor-openai/gpt-6.1-sol` | Medium |
+| `terra` | `review-terra` | `rehor-openai/gpt-6.1-terra` | Medium |
+| `luna` | `review-luna`, `review-package-upgrades`, `review-verifier`, `review-risk-assessor` | `rehor-openai/gpt-6-luna` | High |
 
-The primary `review-runner` uses Terra for orchestration. The risk assessor
+The primary `review-runner` uses Sol for orchestration. The risk assessor
 uses Luna at high effort as the first subagent after context is pinned.
 Dimension passes are dispatched in batches of at most four concurrent workers
-to `review-terra` or `review-luna` according to the resolved model preference.
+to `review-terra`, `review-luna`, or `review-package-upgrades` according to the resolved model preference.
 Results are recorded by dimension before the next batch. The
 `review-verifier` uses Luna to refute proposed findings. See the [runner config](agent/.opencode/agents/review-runner.md),
 [Terra reviewer config](agent/.opencode/agents/review-terra.md),
 [Luna reviewer config](agent/.opencode/agents/review-luna.md),
+[package-upgrades reviewer config](agent/.opencode/agents/review-package-upgrades.md),
 [verifier config](agent/.opencode/agents/review-verifier.md),
 [risk assessor config](agent/.opencode/agents/review-risk-assessor.md), and
 [OpenCode deployment config](opencode-deployment.json).

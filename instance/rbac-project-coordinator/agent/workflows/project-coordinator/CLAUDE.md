@@ -9,11 +9,17 @@ only conversation and status surface. Implementations stay with the existing
 
 The coordinator scan can return a top-level `planner` object with
 `control_key`, `comment_id`, and `parent_key` when a control ticket has an
-unanswered `PLANNER: /coord plan` comment. For that result, follow
+unanswered `PLANNER: /coord plan` comment. For that result, follow the
+project-planner workflow guidance —
+`$HOME/app/instance/rbac-project-coordinator/agent/workflows/project-planner/AGENTS.md`
+in the sandbox, where the baked private configuration is used, or
 `data/remote-config/instance/rbac-project-coordinator/agent/workflows/project-planner/AGENTS.md`
-and delegate the technical plan to the `project-planner` subagent. Use the
-planner script to build the parent context and publish on the control ticket.
-Finish the cycle on this route after reporting the publication or blocker.
+in the legacy runner — and delegate the technical plan to the
+`project-planner` subagent. In the sandbox, pass the preflight-observed
+`parent_key` to the planner build command; the sandbox planner handoff is
+file-free. Use the planner script
+to build the parent context and publish on the control ticket. Finish the
+cycle on this route after reporting the publication or blocker.
 
 Use the coordination steps below when preflight supplies a non-empty
 top-level `projects` list. The planner owns technical plan creation and
@@ -32,7 +38,10 @@ applies the matching phase and repository labels.
   Planner requests use `PLANNER: /coord plan`. Every bot comment starts with
   its persona marker.
 - Work on **one control ticket per cycle**. Read its Team ID from the configured
-  `$BOT_TEAM_FIELD_ID` field, store that ID in the task metadata, and include
+  Team field — `$FABRIC_TEAM_FIELD_ID` in the sandbox, where it is required:
+  if it is missing, stop and report a configuration blocker instead of
+  guessing. Legacy deployments use `$BOT_TEAM_FIELD_ID`. Store that ID in the
+  task metadata, and include
   only direct children of its parent with that same Team ID. An issue for
   another Team may be mentioned as an external blocker, never edited or counted
   as done.
@@ -331,10 +340,13 @@ changes Jira issue links.
 ## Jira writes
 
 Use only the validated actions script. Write a JSON request file with the
-Write tool, then run:
+Write tool. Run from `$HOME/app`; replace `<coordinator-workflow-dir>` with
+`$HOME/app/instance/rbac-project-coordinator/agent/workflows/project-coordinator`
+in a sandbox, or the corresponding directory under `$HOME/app/data/remote-config`
+in the legacy runner. Then run:
 
 ```
-python3 instance/rbac-project-coordinator/agent/workflows/project-coordinator/actions.py --request-file /tmp/coordinator-request.json
+python3 "<coordinator-workflow-dir>/actions.py" --request-file /tmp/coordinator-request.json
 ```
 
 Actions and required request keys:

@@ -2,7 +2,51 @@ workflow: ./workflows/project-coordinator
 source: scheduled
 runtime: opencode
 provider: rehor-openai
-model: gpt-6.1-terra
+model: gpt-6.1-sol
+image:
+  repository: quay.io/redhat-services-prod/hcc-accessmanagement-tenant/fabric-access-ai-dev
+  tag: latest
+env:
+  BOT_INSTANCE_ID: Bob a Bot
+  BOT_LABEL: dev-bot-coordinator
+  BOT_IMPLEMENTATION_LABEL: hcc-ai-platform-accessmanagement
+  BOT_JIRA_PROJECT: RHCLOUD
+  BOT_TEAM_FIELD_ID: customfield_10001
+  BOT_INCLUDE_BACKLOG: 'true'
+  BOT_CONFIG_PATH: instance/rbac-project-coordinator
+  BOT_EXECUTION_ENGINE: coordinator
+# Vault-sourced Jira project and Team field settings, rendered from the
+# tier-2 `fabric-access-rehor` Kubernetes Secret (app-interface MR
+# !220723). The dispatcher preflight consumes the same two settings
+# directly: `with.project` and `with.teamFieldId` below carry per-entry
+# secret references rendered immediately before the check runs (Rehor
+# #694). Each render reads the Secret fresh, so a rotation between the
+# preflight render and the sandbox launch is detected and the launch is
+# refused rather than silently mixing values. The public BOT_ literals
+# above remain the legacy-deployment source only: non-dispatcher runs and
+# the legacy Python preflight keep reading them, while the coordinator
+# scripts require these FABRIC_ names in the sandbox (missing blocks the
+# run) and fall back to BOT_ only in legacy deployments.
+sandbox:
+  env:
+    FABRIC_JIRA_PROJECT: "${{ secret('fabric-access-rehor', 'bot-jira-project') }}"
+    FABRIC_TEAM_FIELD_ID: "${{ secret('fabric-access-rehor', 'bot-team-field-id') }}"
+preflights:
+  - id: fabric-project-state
+    with:
+      controlLabel: dev-bot-coordinator
+      teamFieldId: "${{ secret('fabric-access-rehor', 'bot-team-field-id') }}"
+      implementationLabel: hcc-ai-platform-accessmanagement
+      project: "${{ secret('fabric-access-rehor', 'bot-jira-project') }}"
+      includeBacklog: true
+schedule:
+  triggers:
+    - timezone: Europe/Prague
+      start: "0 9 * * 1-5"
+      end: "0 23 * * 1-5"
+    - timezone: America/New_York
+      start: "0 9 * * 1-5"
+      end: "0 18 * * 1-5"
 envs: []
 claude_md:
   strategy: ignore

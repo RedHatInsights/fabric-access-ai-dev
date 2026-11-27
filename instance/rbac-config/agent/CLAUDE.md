@@ -54,7 +54,9 @@ comment on the control ticket so its coordinator can report the correction.
 
 The `dev-bot-coordinator` uses the per-repository Jira label mapping in the
 synced config repository at
-`data/remote-config/instance/rbac-config-review/agent/review-context.yaml`.
+`$HOME/app/instance/rbac-config-review/agent/review-context.yaml` in a sandbox,
+or `$HOME/app/data/remote-config/instance/rbac-config-review/agent/review-context.yaml`
+in the legacy runner.
 Match the implementation ticket's repository key to
 `repositories.<repo>.dev-bot-labels`; do not infer labels from a global label
 or from the ticket summary. The matched YAML list is authoritative; use every

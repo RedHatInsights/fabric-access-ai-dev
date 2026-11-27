@@ -21,4 +21,8 @@ requires:
   optional_env_vars:
     - BOT_PR_LABEL
     - BOT_JIRA_PROJECT
+    # Vault-sourced sandbox delivery, required in the sandbox (missing
+    # blocks Jira creation); BOT_JIRA_PROJECT stays the legacy source
+    # outside the sandbox until cutover.
+    - FABRIC_JIRA_PROJECT
     - SLACK_WEBHOOK_URL
