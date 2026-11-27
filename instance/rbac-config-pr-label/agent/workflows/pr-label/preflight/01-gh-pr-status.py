@@ -11,6 +11,7 @@ from labeled_prs import own_tasks
 _has_new_feedback = gh_pr_status.has_new_feedback
 _REVIEW_BOT_AUTHOR = "platex-rehor-bot"
 _REVIEW_BOT_MARKERS = ("dev-review-bot", "fabric-access-finding", "fabric-access-review")
+_CODERABBIT_AUTHORS = frozenset({"coderabbitai[bot]", "coderabbitai"})
 
 
 def has_new_feedback(enriched):
@@ -25,8 +26,14 @@ def has_new_feedback(enriched):
             and isinstance(body, str)
             and any(marker in body.casefold() for marker in _REVIEW_BOT_MARKERS)
         )
+        is_coderabbit_comment = (
+            isinstance(author, str)
+            and author.casefold() in _CODERABBIT_AUTHORS
+        )
         created_at = (comment.get("t") or "")[:16]
-        if is_review_bot_finding and (not last_addressed or created_at > last_addressed[:16]):
+        if (is_review_bot_finding or is_coderabbit_comment) and (
+            not last_addressed or created_at > last_addressed[:16]
+        ):
             return True
     return _has_new_feedback(enriched)
 
