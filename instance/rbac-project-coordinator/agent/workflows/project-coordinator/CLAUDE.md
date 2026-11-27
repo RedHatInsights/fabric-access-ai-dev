@@ -9,11 +9,17 @@ only conversation and status surface. Implementations stay with the existing
 
 The coordinator scan can return a top-level `planner` object with
 `control_key`, `comment_id`, and `parent_key` when a control ticket has an
-unanswered `PLANNER: /coord plan` comment. For that result, follow
+unanswered `PLANNER: /coord plan` comment. For that result, follow the
+project-planner workflow guidance —
+`$HOME/app/instance/rbac-project-coordinator/agent/workflows/project-planner/AGENTS.md`
+in the sandbox, where the baked private configuration is used, or
 `data/remote-config/instance/rbac-project-coordinator/agent/workflows/project-planner/AGENTS.md`
-and delegate the technical plan to the `project-planner` subagent. Use the
-planner script to build the parent context and publish on the control ticket.
-Finish the cycle on this route after reporting the publication or blocker.
+in the legacy runner — and delegate the technical plan to the
+`project-planner` subagent. In the sandbox, pass the preflight-observed
+`parent_key` to the planner build command; the sandbox planner handoff is
+file-free. Use the planner script
+to build the parent context and publish on the control ticket. Finish the
+cycle on this route after reporting the publication or blocker.
 
 Use the coordination steps below when preflight supplies a non-empty
 top-level `projects` list. The planner owns technical plan creation and
