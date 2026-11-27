@@ -30,6 +30,7 @@ from project_coordinator import (  # noqa: E402
     comments,
     comment_body,
     evaluate,
+    fabric_setting,
     get_issue,
     implementation_children,
     is_coordination_feedback,
@@ -75,7 +76,7 @@ Start every control-ticket request with `PLANNER:` or `COORDINATOR:` on its firs
 
 def require_config() -> tuple[str, str, str]:
     control_label = os.environ.get("BOT_LABEL", "")
-    team_field_id = os.environ.get("BOT_TEAM_FIELD_ID", "")
+    team_field_id = fabric_setting("TEAM_FIELD_ID")
     implementation_label = os.environ.get("BOT_IMPLEMENTATION_LABEL", "")
     if not all((control_label, team_field_id, implementation_label)):
         raise ValueError("BOT_LABEL, BOT_TEAM_FIELD_ID, and BOT_IMPLEMENTATION_LABEL are required")

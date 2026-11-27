@@ -32,7 +32,10 @@ applies the matching phase and repository labels.
   Planner requests use `PLANNER: /coord plan`. Every bot comment starts with
   its persona marker.
 - Work on **one control ticket per cycle**. Read its Team ID from the configured
-  `$BOT_TEAM_FIELD_ID` field, store that ID in the task metadata, and include
+  Team field — `$FABRIC_TEAM_FIELD_ID` in the sandbox, where it is required:
+  if it is missing, stop and report a configuration blocker instead of
+  guessing. Legacy deployments use `$BOT_TEAM_FIELD_ID`. Store that ID in the
+  task metadata, and include
   only direct children of its parent with that same Team ID. An issue for
   another Team may be mentioned as an external blocker, never edited or counted
   as done.
@@ -331,10 +334,13 @@ changes Jira issue links.
 ## Jira writes
 
 Use only the validated actions script. Write a JSON request file with the
-Write tool, then run:
+Write tool. Run from `$HOME/app`; replace `<coordinator-workflow-dir>` with
+`$HOME/app/instance/rbac-project-coordinator/agent/workflows/project-coordinator`
+in a sandbox, or the corresponding directory under `$HOME/app/data/remote-config`
+in the legacy runner. Then run:
 
 ```
-python3 instance/rbac-project-coordinator/agent/workflows/project-coordinator/actions.py --request-file /tmp/coordinator-request.json
+python3 "<coordinator-workflow-dir>/actions.py" --request-file /tmp/coordinator-request.json
 ```
 
 Actions and required request keys:
