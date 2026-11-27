@@ -26,10 +26,7 @@ env:
 # above remain the legacy-deployment source only: non-dispatcher runs and
 # the legacy Python preflight keep reading them, while the coordinator
 # scripts require these FABRIC_ names in the sandbox (missing blocks the
-# run) and fall back to BOT_ only in legacy deployments. The dev-bot pin
-# is advanced locally to rehor master 6a473e9 (contains #691/#694); the
-# stage dispatcher image still predates #694 — see
-# HYPERSHELL-MIGRATION.md item 11.
+# run) and fall back to BOT_ only in legacy deployments.
 sandbox:
   env:
     FABRIC_JIRA_PROJECT: "${{ secret('fabric-access-rehor', 'bot-jira-project') }}"
