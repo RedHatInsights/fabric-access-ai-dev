@@ -100,6 +100,9 @@ parameters:
   value: "0 9 * * 1-5"
 - name: KEDA_CRON_US_END
   value: "0 18 * * 1-5"
+- name: KEDA_ANNOTATIONS
+  description: JSON object of annotations set on the ScaledObject. Default {} sets none. Pass {"autoscaling.keda.sh/paused-replicas":"0"} to pause the scaler and force the target to zero replicas.
+  value: "{}"
 objects:
 
 # Bot-only workload for the fabric-access rbac-config runner instance.
@@ -519,6 +522,7 @@ objects:
   kind: ScaledObject
   metadata:
     name: ${BOT_NAME}-cron-scaler
+    annotations: ${{KEDA_ANNOTATIONS}}
     labels:
       app.kubernetes.io/name: ${BOT_NAME}
       app.kubernetes.io/part-of: devbot
