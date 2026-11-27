@@ -4,9 +4,9 @@
 # Default checkout: ./repos/insights-rbac (or the current directory when run
 # from the root of an insights-rbac checkout).
 #
-# Handles: postgres/redis sidecar health checks, dependencies, migrations,
+# Handles: on-demand sandbox services (or legacy sidecars), dependencies, migrations,
 # Celery worker (background daemon). Default mode configures .env; --no-env
-# passes the local sidecar configuration through process environment only.
+# passes the local database configuration through process environment only.
 # Ends with a validation summary so failures are immediately visible in output.
 # Safe to run multiple times (skips steps already done).
 
@@ -55,34 +55,17 @@ ok()   { echo "  [OK]   $*"; PASS=$((PASS+1)); }
 warn() { echo "  [WARN] $*"; WARN=$((WARN+1)); }
 fail() { echo "  [FAIL] $*"; FAIL=$((FAIL+1)); }
 
-# ─── 1. Wait for postgres sidecar (up to 60s) ─────────────────────────────────
+# ─── 1. Start the baked-in postgres/redis services (no sidecars) ──────────────
 
 echo ""
-echo "[rbac-setup] Waiting for PostgreSQL sidecar at localhost:15432..."
-for i in $(seq 1 30); do
-    if pg_isready -h localhost -p 15432 -U postgres -q 2>/dev/null; then
-        break
-    fi
-    if [ "$i" -eq 30 ]; then
-        echo "[rbac-setup] ERROR: PostgreSQL sidecar not ready after 60s. Aborting." >&2
-        exit 1
-    fi
-    sleep 2
-done
-
-# ─── 2. Wait for redis sidecar (up to 30s) ────────────────────────────────────
-
-echo "[rbac-setup] Waiting for Redis sidecar at localhost:6379..."
-for i in $(seq 1 15); do
-    if python3 -c "import socket; s=socket.create_connection(('localhost',6379),1); s.close()" 2>/dev/null; then
-        break
-    fi
-    if [ "$i" -eq 15 ]; then
-        echo "[rbac-setup] ERROR: Redis sidecar not ready after 30s. Aborting." >&2
-        exit 1
-    fi
-    sleep 2
-done
+if [[ "${REHOR_INPUT_SOURCE:-}" == sandbox ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    "$SCRIPT_DIR/start-rbac-services.sh"
+else
+    echo '[rbac-setup] Waiting for legacy PostgreSQL and Redis sidecars...'
+    timeout 60 bash -c 'until pg_isready -q -h localhost -p 15432 -U postgres; do sleep 2; done'
+    timeout 30 bash -c 'until python3 -c '\''import socket; socket.create_connection(("localhost", 6379), 1).close()'\'' 2>/dev/null; do sleep 2; done'
+fi
 
 # ─── 3. Configure database access ────────────────────────────────────────────
 

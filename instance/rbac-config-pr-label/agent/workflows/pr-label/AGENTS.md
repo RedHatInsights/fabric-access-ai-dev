@@ -7,8 +7,9 @@ Autonomous PR bot. Pick GitHub PRs labeled `$BOT_PR_LABEL` (default
 `dev-bot`) → implement on that PR → address review comments. This workflow
 does **not** poll Jira for new work. Repo-specific guidance: read the matching
 subagent body from the sibling rbac-config instance
-(`/home/botuser/app/instance/rbac-config/agent/.opencode/agents/<name>.md` —
-see the instance AGENTS.md for the name mapping); this profile has no persona
+(`$HOME/app/instance/rbac-config/agent/.opencode/agents/<name>.md` in a sandbox,
+or `$HOME/app/data/remote-config/instance/rbac-config/agent/.opencode/agents/<name>.md`
+in the legacy runner — see the instance AGENTS.md for the name mapping); this profile has no persona
 directory. A repo's own `CLAUDE.md`/`AGENTS.md` overrides that guidance. When
 guidance says "comment on Jira" for routine progress, post on the GitHub PR
 instead — unless the title/merge policy or a human request requires Jira.
@@ -23,7 +24,10 @@ in its title (e.g. `[RHCLOUD-12345] feat: add new feature`, matching
   `jira_key`. If the key is not the title prefix, move it to the prefix with
   `gh pr edit` before implementing.
 - No key → create one Jira Task reflecting the PR's actual changes, using
-  `$BOT_JIRA_PROJECT` when set, otherwise `RHCLOUD`. Include the PR URL,
+  `$FABRIC_JIRA_PROJECT` — in the sandbox it is required: if it is missing,
+  stop and report a configuration blocker instead of guessing. Legacy
+  deployments may use `$BOT_JIRA_PROJECT` when set, otherwise `RHCLOUD`.
+  Include the PR URL,
   original title/body, changed files, and an implementation summary. Set the
   **Team** field to **Console Access** in `jira_create_issue` (resolve the
   custom-field ID and value shape from field options or an existing issue via
@@ -83,8 +87,10 @@ it. This instance only tracks tasks whose `external_key` starts with
 ## Workflow loop
 
 ONE item per cycle. Priority: existing-PR maintenance and feedback first,
-then new labeled PRs. Use `bot_status_update`: `working` at cycle start,
-`idle` ("Cycle complete"/"No work found") at cycle end, `error` on failure.
+then new labeled PRs. If both status and discovery preflights start, handle
+actionable existing-PR feedback or maintenance before claiming a discovered
+PR. Use `bot_status_update`: `working` at cycle start, `idle` ("Cycle
+complete"/"No work found") at cycle end, `error` on failure.
 Include `external_key` + `repo` + `instance_id` when picking a task. Skills
 write `data/cycle-sleep.json` for sleep signaling — the agent does not manage
 sleep; no signal file means 300s. Use input-prompt data (task statuses, PR

@@ -28,10 +28,14 @@ If preflight reports no groups, output `skip` is expected even when a repo has o
 
 ## How to Run
 
-For each repo in the preflight's `repos` array, `cd` into that repo's checkout and run:
+For each repo in the preflight's `repos` array, `cd` into that repo's checkout.
+Replace `<konflux-workflow-dir>` with
+`$HOME/app/instance/rbac-config-konflux/agent/workflows/konflux-pr-squash` in
+a sandbox, or the corresponding path under `$HOME/app/data/remote-config` in
+the legacy runner, then run:
 
 ```bash
-python skills/konflux-pr-squash.py --repo <owner/repo>
+python3 "<konflux-workflow-dir>/skills/konflux-pr-squash.py" --repo <owner/repo>
 ```
 
 ### Common Options

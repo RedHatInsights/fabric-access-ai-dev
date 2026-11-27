@@ -9,3 +9,51 @@ envs:
   - go
 claude_md:
   strategy: ignore
+# Sandbox image launched by the agent dispatcher for this profile.
+image:
+  repository: quay.io/redhat-services-prod/hcc-accessmanagement-tenant/fabric-access-ai-dev
+  # Newest promoted Konflux build of main.
+  tag: latest
+# Non-secret profile settings for dispatcher wiring and the sandbox runner.
+# BOT_PR_LABEL is the GitHub label this workflow watches (BOT_LABEL stays the
+# Jira ticket label of the sibling instances and is ignored here); it must
+# stay distinct from the Jira and Konflux bots' BOT_INSTANCE_ID.
+env:
+  BOT_INSTANCE_ID: Nejvyšší Zemský Dotahovač
+  BOT_LABEL: hcc-ai-pr-label-platform-accessmanagement
+  BOT_CONFIG_PATH: instance/rbac-config-pr-label
+  BOT_PR_LABEL: dev-bot
+  BOT_EXECUTION_ENGINE: coordinator
+sandbox:
+  env:
+    SLACK_WEBHOOK_URL: "${{ secret('fabric-access-rehor', 'slack-webhook-url') }}"
+    # Jira project for task creation, Vault-sourced like the coordinator's
+    # FABRIC_JIRA_PROJECT. In the sandbox it is required: missing means the
+    # guidance stops and reports a blocker. Only legacy deployments may use
+    # BOT_JIRA_PROJECT and then the instance default, until cutover.
+    FABRIC_JIRA_PROJECT: "${{ secret('fabric-access-rehor', 'bot-jira-project') }}"
+# Declarative preflights (REHOR-231): the stock gh-pr-status (scoped to this
+# workflow's pr-label:* tasks, with this instance's review-bot marked
+# comments counted as feedback) plus the labeled-PR discovery, both ported to
+# the dispatcher's TS engine (@rehor/preflights) instead of the Python set.
+preflights:
+  - id: gh-pr-status
+    with:
+      task_key_prefix: "pr-label:"
+      review_bot_author: platex-rehor-bot
+      review_bot_markers:
+        - dev-review-bot
+        - fabric-access-finding
+        - fabric-access-review
+  - fabric-pr-label
+# Legacy KEDA windows of devbot-fabric-access-pr-label (deploy/template
+# defaults): EU and US working hours OR together; the dispatcher starts no
+# sessions outside them; in-flight sessions drain.
+schedule:
+  triggers:
+    - timezone: Europe/Prague
+      start: "0 9 * * 1-5"
+      end: "0 23 * * 1-5"
+    - timezone: America/New_York
+      start: "0 9 * * 1-5"
+      end: "0 18 * * 1-5"

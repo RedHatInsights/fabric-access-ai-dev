@@ -17,7 +17,9 @@ console.redhat.com. Python 3.12, PostgreSQL 16, Redis, Celery.
 
 - Before changes, run the setup script in `--no-env` mode (sidecar health check,
   dependencies, migrations; safe to re-run and does not read or write `.env`):
-  `/home/botuser/app/instance/rbac-config/agent/scripts/setup-rbac-env.sh --no-env ./repos/insights-rbac`.
+  `"$HOME/app/instance/rbac-config/agent/scripts/setup-rbac-env.sh" --no-env ./repos/insights-rbac`
+  in a sandbox; in the legacy runner use the corresponding script under
+  `$HOME/app/data/remote-config/instance/rbac-config/agent/scripts/`.
   Non-zero exit → STOP, post the error output to Jira, do not proceed.
 - Multi-tenancy: all business models inherit `TenantAwareModel`; always filter
   by `request.tenant`; never return cross-tenant data.
